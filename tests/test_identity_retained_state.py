@@ -89,6 +89,30 @@ class RetainedStateGuards(unittest.TestCase):
                 bad=copy.deepcopy(snapshot);mutate(bad)
                 with self.assertRaises(ValueError):R.validate_cleanup_drift(bad)
 
+    def test_status_field_digests_distinguish_changes_without_raw_values(self):
+        obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver'},'status':{}}
+        baseline=R.pvc_state(obj)
+        for field in (*R.PVC_STATUS_FIELDS,'PRIVATE_UNKNOWN_KEY'):
+            changed=copy.deepcopy(obj);changed['status'][field]='PRIVATE_STATUS_VALUE'
+            state=R.pvc_state(changed)
+            self.assertNotEqual(state['statusSHA256'],baseline['statusSHA256'])
+            fields=state['statusFieldsSHA256'];before=baseline['statusFieldsSHA256']
+            self.assertEqual([key for key in fields if fields[key]!=before[key]],
+                             [field if field in R.PVC_STATUS_FIELDS else 'other'])
+            self.assertNotIn('PRIVATE_',json.dumps(state))
+        explicit_null=copy.deepcopy(obj);explicit_null['status']['phase']=None
+        self.assertNotEqual(R.pvc_state(explicit_null)['statusFieldsSHA256']['phase'],
+                            baseline['statusFieldsSHA256']['phase'])
+        legacy=copy.deepcopy(baseline);del legacy['statusFieldsSHA256']
+        self.assertEqual(R.validate_pvc_state(legacy),legacy)
+        for mutation in ('extra','missing','raw','wrong-type'):
+            bad=copy.deepcopy(baseline)
+            if mutation=='extra':bad['statusFieldsSHA256']['PRIVATE_KEY']='a'*64
+            elif mutation=='missing':del bad['statusFieldsSHA256']['phase']
+            elif mutation=='raw':bad['statusFieldsSHA256']['phase']='PRIVATE_VALUE'
+            else:bad['statusFieldsSHA256']=[]
+            with self.assertRaises(ValueError):R.validate_pvc_state(bad)
+
     def setup_fixture(self):
         hook={'apiVersion':'batch/v1','kind':'Job','metadata':{'name':'takserver-db-setup',
             'labels':{'app.kubernetes.io/instance':'takserver','app.kubernetes.io/managed-by':'Helm'},

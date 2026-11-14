@@ -428,12 +428,25 @@ def consumers_gone(driver):
 
 CLEANUP_IDENTITY_FIELDS=('kind','name','namespace','uid','resourceVersion','metadataSHA256')
 
+# Fixed API field names only: unknown status keys/values are represented by one
+# aggregate digest. Presence is hashed too, so missing and explicit null differ.
+PVC_STATUS_FIELDS=('phase','accessModes','capacity','conditions','allocatedResources',
+                   'resizeStatus','allocatedResourceStatuses',
+                   'currentVolumeAttributesClassName','modifyVolumeStatus')
+PVC_STATUS_DIGEST_KEYS=set(PVC_STATUS_FIELDS)|{'other'}
+
 def validate_pvc_state(value):
-    require(isinstance(value,dict) and set(value)=={'specSHA256','statusSHA256','finalizersSHA256','pvcProtection','otherFinalizerCount'},'PVC state schema differs')
+    require(isinstance(value,dict) and set(value) in ({'specSHA256','statusSHA256','finalizersSHA256','pvcProtection','otherFinalizerCount'},
+            {'specSHA256','statusSHA256','finalizersSHA256','pvcProtection','otherFinalizerCount','statusFieldsSHA256'}),'PVC state schema differs')
     for key in ('specSHA256','statusSHA256','finalizersSHA256'):
         require(isinstance(value[key],str) and re.fullmatch('[0-9a-f]{64}',value[key]),'PVC state digest differs')
     require(type(value['pvcProtection']) is bool and type(value['otherFinalizerCount']) is int and
             0<=value['otherFinalizerCount']<=32,'PVC finalizer facts differ')
+    if 'statusFieldsSHA256' in value:
+        fields=value['statusFieldsSHA256']
+        require(isinstance(fields,dict) and set(fields)==PVC_STATUS_DIGEST_KEYS,'PVC status field schema differs')
+        require(all(isinstance(digest,str) and re.fullmatch('[0-9a-f]{64}',digest)
+                    for digest in fields.values()),'PVC status field digest differs')
     return value
 
 def pvc_state(obj):
@@ -442,7 +455,11 @@ def pvc_state(obj):
     require(isinstance(finalizers,list) and len(finalizers)<=32 and all(isinstance(value,str) and
             re.fullmatch('[A-Za-z0-9./_-]{1,253}',value) for value in finalizers),'PVC finalizer input differs')
     require(len(json.dumps({'spec':obj.get('spec',{}),'status':obj.get('status',{})}).encode())<=64*1024,'PVC diagnostic input bound')
-    return validate_pvc_state({'specSHA256':sha(obj.get('spec',{})),'statusSHA256':sha(obj.get('status',{})),
+    status=obj.get('status',{})
+    require(isinstance(status,dict),'PVC status input differs')
+    fields={key:sha({'present':key in status,'value':status.get(key)}) for key in PVC_STATUS_FIELDS}
+    fields['other']=sha({key:value for key,value in status.items() if key not in PVC_STATUS_FIELDS})
+    return validate_pvc_state({'statusFieldsSHA256':fields,'specSHA256':sha(obj.get('spec',{})),'statusSHA256':sha(obj.get('status',{})),
         'finalizersSHA256':sha(sorted(finalizers)),'pvcProtection':'kubernetes.io/pvc-protection' in finalizers,
         'otherFinalizerCount':sum(value!='kubernetes.io/pvc-protection' for value in finalizers)})
 

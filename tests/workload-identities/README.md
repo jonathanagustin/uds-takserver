@@ -365,3 +365,11 @@ conditional deletion. This distinguishes possible state changes without
 assuming that finalizers caused them. Invalid or unavailable extra state falls
 back to the existing basic identity diagnostic. None of these fingerprints
 refreshes resourceVersion, changes deletion preconditions or authorizes cleanup.
+
+The optional PVC status detail uses a fixed map of SHA-256 digests for phase,
+access modes, capacity, conditions, allocated resources, resize status, allocated
+resource statuses, current volume attributes class and modify-volume status.
+Each digest includes field presence; unknown fields contribute only to a single
+`other` digest. Neither unknown field names nor any status values are emitted.
+Legacy aggregate-only snapshots remain valid. These encrypted diagnostics do
+not authorize deletion after resource-version drift or establish its controller.
