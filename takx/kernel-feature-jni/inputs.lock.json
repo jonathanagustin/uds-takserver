@@ -33,7 +33,8 @@
   },
   "patch_sha256": "a3b95207a96fad6b88785ab44dcaf3b80ed53f8a4511ca2ced51ffc7a45e9172",
   "owned_controls": {
-    "tests/ContourDrawProbe.java": "bb062c063b37c3b62c568b8e1f994dfbf12530fbeacd2f03b6dc7432675d971d"
+    "tests/ContourDrawProbe.java": "bb062c063b37c3b62c568b8e1f994dfbf12530fbeacd2f03b6dc7432675d971d",
+    "tests/LayerConstructorFault.java": "209fa9c9d87c60a5011458a9de6bedfb34804e2302bcb5ab9a9bcc79a9e0448d"
   },
   "native_builder_integration": false,
   "strict_callback_accepted": false,

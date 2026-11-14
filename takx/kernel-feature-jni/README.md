@@ -71,3 +71,13 @@ published partial peer or cache reference, and then prove fresh successful
 marshal/recovery under strict JNI. Equivalent listener-registration and GL
 subject failures need controls before expanding the patch. Positive rendering
 warning removal does not qualify these failure paths.
+
+The first owned constructor-fault replay now reproduces two strict-JNI
+exception-pending warnings from the real `NativeLayer.wrap` entrypoint when
+`Layer.getName` throws. Primary Java exception identity survives and a fresh
+healthy wrapper completes afterward, but partial-peer/cache cleanup is not
+qualified. The retained diagnostic receipt is
+`8ed7e088ea4d2483719c42e0b589490447f3058a32d312f1d5c7694ed5b644bb`.
+`tests/LayerConstructorFault.java` is owned and source-locked for this negative
+control; default verification and source preparation do not execute it. The
+six-source causal candidate remains unchanged and is not strict-fault accepted.
