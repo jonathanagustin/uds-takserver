@@ -142,3 +142,73 @@
          if(styleCoding == com_atakmap_map_layer_feature_FeatureDefinition_STYLE_OGR) {
              Java::JNILocalRef result(*env,  (jstring)env->CallObjectMethod(impl, FeatureDefinition_class.getRawStyle));
              if(env->ExceptionCheck())
+--- a/takkernel/engine/src/main/jni/interop/InterfaceMarshalContext.h
++++ b/takkernel/engine/src/main/jni/interop/InterfaceMarshalContext.h
+@@ -42,6 +42,20 @@
+             template<class WrapperType>
+             TAK::Engine::Util::TAKErr marshal(Java::JNILocalRef &value, JNIEnv &env, std::unique_ptr<T, void(*)(const T *)> &&obj) NOTHROWS;
+         private :
++            // Destruction may invoke Java callbacks. Run it with a clear JNI
++            // state and restore the constructor's primary exception afterward.
++            template<class Peer>
++            static void discardFailedPeer(JNIEnv &env, Peer &peer) NOTHROWS
++            {
++                jthrowable primary = env.ExceptionOccurred();
++                if(primary) env.ExceptionClear();
++                peer.reset();
++                if(primary) {
++                    if(env.ExceptionCheck()) env.ExceptionClear();
++                    env.Throw(primary);
++                    env.DeleteLocalRef(primary);
++                }
++            }
+             template<class Ti>
+             static void onShutdown(JNIEnv &env, void *opaque) NOTHROWS
+             {
+@@ -115,6 +129,7 @@
+         template<class WrapperType>
+         inline TAK::Engine::Util::TAKErr InterfaceMarshalContext<T>::marshal(std::shared_ptr<T> &value, JNIEnv &env, jobject obj) NOTHROWS
+         {
++            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
+             TAK::Engine::Util::TAKErr code(TAK::Engine::Util::TE_Ok);
+             if(!obj)
+                 return TAK::Engine::Util::TE_InvalidArg;
+@@ -150,8 +165,19 @@
+                 }
+             }
+ 
+-            value = std::unique_ptr<T, void(*)(const T *)>(new WrapperType(env, obj), TAK::Engine::Util::Memory_deleter_const<T, WrapperType>);
+-            managedImplToNativeWrapper[env.NewWeakGlobalRef(obj)] = value;
++            std::shared_ptr<T> candidate = std::unique_ptr<T, void(*)(const T *)>(new WrapperType(env, obj), TAK::Engine::Util::Memory_deleter_const<T, WrapperType>);
++            if(env.ExceptionCheck()) {
++                discardFailedPeer(env, candidate);
++                return TAK::Engine::Util::TE_Err;
++            }
++            jweak reference = env.NewWeakGlobalRef(obj);
++            if(!reference || env.ExceptionCheck()) {
++                if(reference) env.DeleteWeakGlobalRef(reference);
++                discardFailedPeer(env, candidate);
++                return env.ExceptionCheck() ? TAK::Engine::Util::TE_Err : TAK::Engine::Util::TE_OutOfMemory;
++            }
++            managedImplToNativeWrapper[reference] = candidate;
++            value = std::move(candidate);
+ 
+             return code;
+         }
+@@ -224,9 +250,15 @@
+         template<class WrapperType>
+         TAK::Engine::Util::TAKErr InterfaceMarshalContext<T>::marshal(std::unique_ptr<T, void(*)(const T *)> &value, JNIEnv &env, jobject obj) NOTHROWS
+         {
++            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
+             if(!obj)
+                 return TAK::Engine::Util::TE_InvalidArg;
+-            value = std::unique_ptr<T, void(*)(const T *)>(new WrapperType(env, obj), TAK::Engine::Util::Memory_deleter_const<T, WrapperType>);
++            std::unique_ptr<T, void(*)(const T *)> candidate(new WrapperType(env, obj), TAK::Engine::Util::Memory_deleter_const<T, WrapperType>);
++            if(env.ExceptionCheck()) {
++                discardFailedPeer(env, candidate);
++                return TAK::Engine::Util::TE_Err;
++            }
++            value = std::move(candidate);
+             return TAK::Engine::Util::TE_Ok;
+         }
+         template<class T>

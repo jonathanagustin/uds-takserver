@@ -1,13 +1,12 @@
 # Checked feature-renderer callback source profile
 
-This opt-in source profile adds entry and post-callback JNI checks in six exact
-files from the frozen full Native07 public Kernel composition. It targets the
-native warning stacks observed when a real feature datastore/layer renders
-project contours. It changes no generic JNI primitive helper, production header,
-Java class overlay, JNI entry point or private SDK version alias.
+Version 2 stages entry/post-callback JNI checks in six exact C++ files and
+constructor-publication guards in the shared `InterfaceMarshalContext.h` from
+the frozen full Native07 Kernel composition. It targets the observed renderer
+warning stacks and the reproduced layer constructor-fault path.
 
 The parent is the reviewed complete 815-unit composition, not a pristine upstream
-checkout. Its receipt and all six source preimages must match the closed lock.
+checkout. Its receipt and all seven source preimages must match the closed lock.
 Actual Kernel version remains 8.30.5. This profile prepares sources only; it does
 not build a native library, start a JVM/display, download anything or grant SDK,
 client, checked-callback or rendered-layer acceptance.
@@ -62,7 +61,7 @@ Its shared-pointer marshal path assigns `new WrapperType(env, obj)` to the outpu
 and immediately calls `NewWeakGlobalRef` without checking for a constructor's
 pending Java exception (lines 153–156). The unique-pointer path also assigns the
 new wrapper and returns success without a post-constructor exception check
-(lines 225–231). The six-source patch leaves that shared header unchanged.
+(lines 225–231). The earlier version 1 six-source patch left that shared header unchanged.
 
 This is a source-level hazard, not a reproduced fault result. The next control
 must throw an identity-tagged Java exception from `Layer.getName` through the
@@ -81,3 +80,33 @@ qualified. The retained diagnostic receipt is
 `tests/LayerConstructorFault.java` is owned and source-locked for this negative
 control; default verification and source preparation do not execute it. The
 six-source causal candidate remains unchanged and is not strict-fault accepted.
+
+## Version 2 constructor publication candidate
+
+The current preparer stages the six C++ changes plus an exact shared-header
+change in `InterfaceMarshalContext.h`. Shared and unique marshal paths construct
+a temporary peer, check for a pending constructor exception before publication,
+and discard failed peers with the primary exception saved and restored around
+cleanup. Shared cache insertion also waits for successful weak-reference
+creation. Entry with an existing pending exception refuses without JNI work.
+
+Because the header affects every wrapper instantiation, candidate03 recompiles
+all 159 JNI translation units; it retains the Native07 core and other providers.
+Its receipt is
+`f9abca4a9d017efe1f9c5b5c938f070cb78642c857b0d5fb111f51992a2da226`.
+The identical real `NativeLayer.wrap` constructor-fault fixture now records zero
+strict-JNI diagnostics, preserved primary exception identity and fresh recovery.
+Its receipt is `c943992d12938c96625daead33178909449d6f597bdf47e348efb3dfdf16a428`.
+
+This qualifies only that narrow failure/recovery control. Partial-peer/cache
+cleanup, listener-registration failures, GL subject failures, all other wrapper
+instantiations, the actual renderer replay and a complete fresh native producer
+still need qualification. No broader acceptance flag changes. The earlier
+six-source warning-bearing constructor replay remains retained unchanged.
+
+Renderer replay06 reached both visible colors and zero post-hide pixels, but
+independent log review found an uncaught AWT lock-wait exception. Replay07
+failed post-hide again (major 814/minor 268). Both have zero strict-JNI warnings,
+but neither establishes clean renderer acceptance. The owned probe now records
+uncaught thread failures in its shared failure channel. The source-only
+preflight failure in replay05 and all runtime failures remain retained.

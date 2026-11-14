@@ -85,6 +85,7 @@ public final class ContourDrawProbe implements GLEventListener {
         throw new AssertionError("actual layer pixel condition absent visible="+visible+" major="+probe.major+" minor="+probe.minor);
     }
     public static void main(String[] args)throws Exception{
+        Thread.setDefaultUncaughtExceptionHandler((thread,error)->failure.compareAndSet(null,error));
         HeadedAdmission.checkOrigins();HeadedAdmission.verifyMaps("before-contour-load",false);
         for(String line:Files.readAllLines(Path.of(args[0])))if(!line.isBlank())System.load(line);
         System.load(args[1]);EngineLibrary.initialize();Threading.disableSingleThreading();

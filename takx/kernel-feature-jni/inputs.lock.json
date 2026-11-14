@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "profile": "native07-checked-feature-callbacks-v1",
+  "profile": "native07-checked-feature-callbacks-v2",
   "actual_kernel_version": "8.30.5",
   "official_revision": "9f6893dd657feacc35ec5de03dad721c2e44170e",
   "parent_native_sha256": "54630be999ac532f4724e0c62a5197e42f16f3244e1063022d6121e09cd8990e",
@@ -29,11 +29,15 @@
     "takkernel/engine/src/main/jni/interop/feature/ManagedFeatureDefinition.cpp": {
       "before": "9ddd786da03c9aaf3fc4396215b9878bc47796013c08a51c172adecaaa030a7f",
       "after": "83a55df8a2dcd80f521523f3b5c3f9591d099e1b22a74a1c81ec2937c1e332f2"
+    },
+    "takkernel/engine/src/main/jni/interop/InterfaceMarshalContext.h": {
+      "before": "c8c17f62f18bf771794b114f3826e22f612354121f6eff3340f90dc1992ed35c",
+      "after": "d2596a08e1388d542471824d9c35d6367862d3c820dbb16c516139faf4a26d67"
     }
   },
-  "patch_sha256": "a3b95207a96fad6b88785ab44dcaf3b80ed53f8a4511ca2ced51ffc7a45e9172",
+  "patch_sha256": "5f89da0a7965f417f2b3de11bc49e409e69905c13300abe20c700af974072a85",
   "owned_controls": {
-    "tests/ContourDrawProbe.java": "bb062c063b37c3b62c568b8e1f994dfbf12530fbeacd2f03b6dc7432675d971d",
+    "tests/ContourDrawProbe.java": "3cf86613bd0bb13b0e1278f62e86ae330ee7d82ab25543bafe89d95f6278b45e",
     "tests/LayerConstructorFault.java": "209fa9c9d87c60a5011458a9de6bedfb34804e2302bcb5ab9a9bcc79a9e0448d"
   },
   "native_builder_integration": false,
