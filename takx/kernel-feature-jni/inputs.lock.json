@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "profile": "native07-checked-feature-callbacks-v1",
+  "actual_kernel_version": "8.30.5",
+  "official_revision": "9f6893dd657feacc35ec5de03dad721c2e44170e",
+  "parent_native_sha256": "54630be999ac532f4724e0c62a5197e42f16f3244e1063022d6121e09cd8990e",
+  "scope": "source preparation over exact full Native07 layout; six-source causal renderer replay only, no fresh producer/fault-path/rendering/client acceptance",
+  "files": {
+    "takkernel/engine/src/main/jni/interop/core/ManagedLayer.cpp": {
+      "before": "144a76c46acd31dd48feeeff096e7189ac3361a13b56718bf563972ea7e3b465",
+      "after": "78cd3a0bc3bd70a5828c3c166cc5838456817afb82ad151a31f7509bda452dff"
+    },
+    "takkernel/engine/src/main/jni/interop/renderer/core/ManagedGLLayerSpi2.cpp": {
+      "before": "96bd80f0913a7352c67ab6c5e26c8657001fc6be3e1e0c8ba89dc2d2637bc61d",
+      "after": "6a9808a036c0851869417523113fb4f1e062e801f0e7dcc7a8472468dc4e0496"
+    },
+    "takkernel/engine/src/main/jni/interop/renderer/core/ManagedGLLayer2.cpp": {
+      "before": "f00018444dd35884ade9acbe7297a2875d074c07c6ac939530bb1fe830be4345",
+      "after": "025f26b0c73010879992a34866ceaeb0e3f77e1384e397310a7c80bd0b446c7f"
+    },
+    "takkernel/engine/src/main/jni/interop/feature/ManagedFeatureDataStore2.cpp": {
+      "before": "5f038fa811e86f97074a916c3417d5bf1c6b28b92a70ebeed5f90944f0773902",
+      "after": "d0bba76704adda99b95ab5053bd7035825034ddc40b1fe0e8b8c1f15a89912e3"
+    },
+    "takkernel/engine/src/main/jni/interop/feature/Interop.cpp": {
+      "before": "50bab2559f86d4c26cf2e155b245e1ca6015d1cffc3c1afaeedb2ee340a71150",
+      "after": "2843930808fd35d98a60ae7fe4bac9c2a38df23091f45eadcda72f80264b71b5"
+    },
+    "takkernel/engine/src/main/jni/interop/feature/ManagedFeatureDefinition.cpp": {
+      "before": "9ddd786da03c9aaf3fc4396215b9878bc47796013c08a51c172adecaaa030a7f",
+      "after": "83a55df8a2dcd80f521523f3b5c3f9591d099e1b22a74a1c81ec2937c1e332f2"
+    }
+  },
+  "patch_sha256": "a3b95207a96fad6b88785ab44dcaf3b80ed53f8a4511ca2ced51ffc7a45e9172",
+  "owned_controls": {
+    "tests/ContourDrawProbe.java": "bb062c063b37c3b62c568b8e1f994dfbf12530fbeacd2f03b6dc7432675d971d"
+  },
+  "native_builder_integration": false,
+  "strict_callback_accepted": false,
+  "rendered_layer_accepted": false,
+  "full_sdk_accepted": false,
+  "full_client_accepted": false
+}

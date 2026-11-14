@@ -1,0 +1,144 @@
+--- a/takkernel/engine/src/main/jni/interop/core/ManagedLayer.cpp
++++ b/takkernel/engine/src/main/jni/interop/core/ManagedLayer.cpp
+@@ -32,11 +32,14 @@
+ }
+ 
+ ManagedLayer::ManagedLayer(JNIEnv &env_, jobject impl_) NOTHROWS :
+-    impl(env_.NewGlobalRef(impl_)),
++    impl(env_.ExceptionCheck() ? nullptr : env_.NewGlobalRef(impl_)),
+     mutex(TEMT_Recursive)
+ {
++    if(env_.ExceptionCheck() || !impl) return;
+     static bool clinit = Layer_class_init(env_);
++    if(env_.ExceptionCheck() || !clinit) return;
+     Java::JNILocalRef mname(env_, env_.CallObjectMethod(impl, Layer_class.getName));
++    if(env_.ExceptionCheck()) return;
+     JNIStringUTF_get(name, env_, (jstring)mname);
+ 
+ }
+@@ -78,7 +81,10 @@
+ bool ManagedLayer::isVisible () const
+ {
+     LocalJNIEnv env;
+-    return env->CallBooleanMethod(impl, Layer_class.isVisible);
++    if(env->ExceptionCheck()) return false;
++    const bool value = env->CallBooleanMethod(impl, Layer_class.isVisible);
++    if(env->ExceptionCheck()) return false;
++    return value;
+ }
+ void ManagedLayer::removeVisibilityListener (atakmap::core::Layer::VisibilityListener *clistener)
+ {
+--- a/takkernel/engine/src/main/jni/interop/renderer/core/ManagedGLLayerSpi2.cpp
++++ b/takkernel/engine/src/main/jni/interop/renderer/core/ManagedGLLayerSpi2.cpp
+@@ -49,6 +49,7 @@
+     code = LegacyAdapters_adapt(subject, subject2Ptr);
+     TE_CHECKRETURN_CODE(code);
+     LocalJNIEnv env;
++    if(env->ExceptionCheck()) return TE_Err;
+     JNILocalRef msubject(*env, NULL);
+     code = TAKEngineJNI::Interop::Core::Interop_marshal(msubject, *env, subject);
+     TE_CHECKRETURN_CODE(code);
+@@ -56,9 +57,12 @@
+     code = TAKEngineJNI::Interop::Renderer::Core::Interop_marshal(mview, *env, renderer);
+     TE_CHECKRETURN_CODE(code);
+     JNILocalRef marg(*env, NULL);
++    if(env->ExceptionCheck()) return TE_Err;
+     code = JNIPair_create(marg, *env, mview, msubject);
+     TE_CHECKRETURN_CODE(code);
++    if(env->ExceptionCheck()) return TE_Err;
+     JNILocalRef mretval(*env, env->CallObjectMethod(impl, GLLayerSpi2_class.create, marg.get()));
++    if(env->ExceptionCheck()) return TE_Err;
+     if(!mretval)
+         return TE_InvalidArg;
+     return TAKEngineJNI::Interop::Renderer::Core::Interop_marshal(value, *env, mretval);
+--- a/takkernel/engine/src/main/jni/interop/renderer/core/ManagedGLLayer2.cpp
++++ b/takkernel/engine/src/main/jni/interop/renderer/core/ManagedGLLayer2.cpp
+@@ -41,13 +41,17 @@
+ 
+ ManagedGLLayer2::ManagedGLLayer2(JNIEnv &env_, jobject impl_) NOTHROWS :
+     renderable(env_, impl_, true),
+-    impl(renderable.impl)
++    impl(renderable.impl),
++    gllayer3(false)
+ {
++    if(env_.ExceptionCheck() || !impl) return;
+     static bool clinit = ManagedGLLayer2_class_init(env_);
++    if(env_.ExceptionCheck() || !clinit) return;
+     std::shared_ptr<atakmap::core::Layer> csub;
+     Java::JNILocalRef msub(env_, env_.CallObjectMethod(impl, GLLayer3_class.getSubject));
+-    TAKEngineJNI::Interop::Core::Interop_marshal(csub, env_, msub);
+-    TAK::Engine::Core::LegacyAdapters_adapt(csubject, csub);
++    if(env_.ExceptionCheck()) return;
++    if(TAKEngineJNI::Interop::Core::Interop_marshal(csub, env_, msub) != TAK::Engine::Util::TE_Ok || env_.ExceptionCheck()) return;
++    if(TAK::Engine::Core::LegacyAdapters_adapt(csubject, csub) != TAK::Engine::Util::TE_Ok) return;
+ 
+     gllayer3 = env_.IsInstanceOf(impl, GLLayer3_class.id);
+ }
+--- a/takkernel/engine/src/main/jni/interop/feature/ManagedFeatureDataStore2.cpp
++++ b/takkernel/engine/src/main/jni/interop/feature/ManagedFeatureDataStore2.cpp
+@@ -95,10 +95,12 @@
+ }
+ 
+ ManagedFeatureDataStore2::ManagedFeatureDataStore2(JNIEnv &env_, jobject impl_) NOTHROWS :
+-    impl(env_.NewGlobalRef(impl_)),
++    impl(env_.ExceptionCheck() ? nullptr : env_.NewGlobalRef(impl_)),
+     version(2u)
+ {
++    if(env_.ExceptionCheck() || !impl) return;
+     static bool clinit = FeatureDataStore2_init(env_);
++    if(env_.ExceptionCheck() || !clinit) return;
+     if(env_.IsInstanceOf(impl, FeatureDataStore2_class.v4.id))
+         version = 4u;
+     std::unique_ptr<FeatureDataStore2::OnDataStoreContentChangedListener, void(*)(const FeatureDataStore2::OnDataStoreContentChangedListener *)> ccb(new CallbackForwarder(callbackForwarder.listeners, callbackForwarder.mutex), Memory_deleter_const<FeatureDataStore2::OnDataStoreContentChangedListener, CallbackForwarder>);
+@@ -112,6 +114,7 @@
+                                 nullptr,
+                                 INTPTR_TO_JLONG(static_cast<FeatureDataStore2 *>(this))));
+     env_.CallVoidMethod(impl, FeatureDataStore2_class.addOnDataStoreContentChangedListener, mcb.get());
++    if(env_.ExceptionCheck()) return;
+     callbackForwarder.managed = env_.NewWeakGlobalRef(mcb);
+ }
+ ManagedFeatureDataStore2::~ManagedFeatureDataStore2() NOTHROWS
+--- a/takkernel/engine/src/main/jni/interop/feature/Interop.cpp
++++ b/takkernel/engine/src/main/jni/interop/feature/Interop.cpp
+@@ -305,6 +305,7 @@
+     jmethodID Interop_createGeometry = env.GetStaticMethodID(Interop_class, "createGeometry", "(Lcom/atakmap/interop/Pointer;Ljava/lang/Object;)Lcom/atakmap/map/layer/feature/geometry/Geometry;");
+     Java::JNILocalRef mgeomPointer(env, NewPointer(&env, std::move(cgeom)));
+     mgeom = Java::JNILocalRef(env, env.CallStaticObjectMethod(Interop_class, Interop_createGeometry, mgeomPointer.get(), NULL));
++    if(env.ExceptionCheck()) return TE_Err;
+     return TE_Ok;
+ }
+ jobject TAKEngineJNI::Interop::Feature::Interop_create(JNIEnv *env, const Style &cstyle) NOTHROWS
+@@ -320,6 +321,7 @@
+     TAK::Engine::Feature::StylePtr retval(cstyle.clone(), Style::destructStyle);
+     Java::JNILocalRef mstylePtr(env, NewPointer(&env, std::move(retval)));
+     mstyle = Java::JNILocalRef(env, env.CallStaticObjectMethod(Interop_class, Interop_createStyle, mstylePtr.get(), NULL));
++    if(env.ExceptionCheck()) return TE_Err;
+     return TE_Ok;
+ }
+ jobject TAKEngineJNI::Interop::Feature::Interop_create(JNIEnv *env, const AttributeSet &cattr) NOTHROWS
+@@ -590,6 +592,7 @@
+         Geometry2Ptr cspatialFilter(nullptr, nullptr);
+         LegacyAdapters_adapt(cspatialFilter, *cparams.spatialFilter);
+         Java::JNILocalRef mspatialFilter(env, Interop_create(&env, *cspatialFilter));
++        if(env.ExceptionCheck()) return TE_Err;
+         env.SetObjectField(mparams, FeatureQueryParameters_class.spatialFilter, mspatialFilter);
+     }
+ 
+--- a/takkernel/engine/src/main/jni/interop/feature/ManagedFeatureDefinition.cpp
++++ b/takkernel/engine/src/main/jni/interop/feature/ManagedFeatureDefinition.cpp
+@@ -123,6 +123,7 @@
+         if(env->ExceptionCheck())
+             return TE_Err;
+         jint geomCoding = env->CallIntMethod(impl, FeatureDefinition_class.getGeomCoding);
++        if(env->ExceptionCheck()) return TE_Err;
+         if(geomCoding == com_atakmap_map_layer_feature_FeatureDefinition_GEOM_WKT) {
+             Java::JNILocalRef result(*env, (jstring)env->CallObjectMethod(impl, FeatureDefinition_class.getRawGeom));
+             if(env->ExceptionCheck())
+@@ -261,6 +262,7 @@
+         if(env->ExceptionCheck())
+             return TE_Err;
+         jint styleCoding = env->CallIntMethod(impl, FeatureDefinition_class.getStyleCoding);
++        if(env->ExceptionCheck()) return TE_Err;
+         if(styleCoding == com_atakmap_map_layer_feature_FeatureDefinition_STYLE_OGR) {
+             Java::JNILocalRef result(*env,  (jstring)env->CallObjectMethod(impl, FeatureDefinition_class.getRawStyle));
+             if(env->ExceptionCheck())
