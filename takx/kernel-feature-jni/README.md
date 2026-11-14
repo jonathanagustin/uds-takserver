@@ -54,3 +54,20 @@ producer and all required consumers must then pass. The earlier compilation
 failure, original warning traces, unmodified full native parent, previous failed
 rendering experiments and causal objects remain retained; none is relabeled as a
 full SDK/client pass. All broad acceptance flags stay false.
+
+Source review also identifies a concrete constructor-failure gate in the frozen
+parent's `interop/InterfaceMarshalContext.h` (SHA-256
+`c8c17f62f18bf771794b114f3826e22f612354121f6eff3340f90dc1992ed35c`).
+Its shared-pointer marshal path assigns `new WrapperType(env, obj)` to the output
+and immediately calls `NewWeakGlobalRef` without checking for a constructor's
+pending Java exception (lines 153–156). The unique-pointer path also assigns the
+new wrapper and returns success without a post-constructor exception check
+(lines 225–231). The six-source patch leaves that shared header unchanged.
+
+This is a source-level hazard, not a reproduced fault result. The next control
+must throw an identity-tagged Java exception from `Layer.getName` through the
+real marshal path, check that the primary exception survives, require no
+published partial peer or cache reference, and then prove fresh successful
+marshal/recovery under strict JNI. Equivalent listener-registration and GL
+subject failures need controls before expanding the patch. Positive rendering
+warning removal does not qualify these failure paths.
