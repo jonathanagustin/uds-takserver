@@ -129,6 +129,12 @@ This is a failed pixel acceptance result, not an established SDK root cause.
 Its receipt is
 `4e19f0e80c92bcbd4b98c727b38ab72c84c87aec618c533931d3d80ccbf4978a`.
 
+An instrumented observer replay14 reports Java/native visibility false, three
+listener events on each side and zero hidden pixels, but is rejected for three
+strict-JNI warnings in native layer listener registration and repeated wrapping.
+The additional observer changes lifetime/timing; it does not establish why the
+uninstrumented replay13 kept pixels. Both failures remain retained.
+
 ## Remaining gates
 
 Allocation/class-initialization failures, complete cache/peer cleanup,
