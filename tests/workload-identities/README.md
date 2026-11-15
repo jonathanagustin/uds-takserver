@@ -377,8 +377,9 @@ not authorize deletion after resource-version drift or establish its controller.
 When PVC status drift is confined to `conditions`, the optional encrypted
 descriptor also reports absent/null/list/other shape, a count capped at 32,
 known Kubernetes PVC condition types and fixed True/False/Unknown/Other statuses.
-The six known types follow Kubernetes API v0.35.3 constants; unknown types are
-counted without emitting their names. Reasons, messages, timestamps and arbitrary
+The six original types follow Kubernetes API v0.35.3 constants; the built-in
+`Unused` type is added from v0.37.1. Unknown types are counted without emitting
+their names. Reasons, messages, timestamps and arbitrary
 condition values are never emitted. Invalid or oversized detail falls back to
 the existing fingerprints without changing the retained baseline. The snapshot
 keeps its 4 KiB bound and resource-version drift still forbids deletion.
@@ -402,3 +403,43 @@ controller identities or permission to delete. Missing/malformed hints leave
 existing fingerprints intact. Under the 4 KiB snapshot cap, optional condition
 digests drop first, then manager hints, then condition facts. The retained
 baseline and exact resource-version deletion refusal remain unchanged.
+
+### PVC usage boundary before conditional cleanup
+
+Kubernetes 1.37 enables `PersistentVolumeClaimUnusedSinceTime` by default. Its
+[PVC protection controller](https://github.com/kubernetes/kubernetes/blob/v1.37.1/pkg/controller/volume/pvcprotection/pvc_protection_controller.go)
+updates the built-in `Unused` condition when the last non-terminal Pod stops
+referencing a claim. Core 1.16.0 declares K3s 1.37.1 as its default. A cleanup
+snapshot taken before package removal can therefore become stale even though
+the PVC UID, spec and finalizers remain unchanged. Protected digests from the
+previous failure match this published condition transition; manager hints alone
+do not establish writer identity.
+
+The pre-removal data/sentinel verification remains in place. PVC UID and PV/claim
+parent identity are checked again when recording cleanup authorization. Only an
+exact published in-use condition can create a separate usage barrier. It hashes
+the complete PVC except resourceVersion, non-authoritative managedFields and that
+one recognized condition. This proof is separate from optional diagnostics.
+
+After package removal and the existing consumer-absence checks, the helper waits
+up to 60 seconds for the exact published unused condition. Identity, ownership,
+spec, finalizers, every other status field and all other object fields must still
+match the original proof. Unknown conditions, extra fields, changed metadata or
+data-plane identity, malformed timestamps and timeouts fail closed. Field-manager
+strings cannot authorize this transition. The helper consumes the barrier and
+creates one final cleanup record; it does not mutate the original snapshot.
+
+The delete path still compares the complete cleanup identity including the final
+resourceVersion, rechecks consumer/PV ownership, and sends both UID and
+resourceVersion as Kubernetes DELETE preconditions. Changes after the final
+snapshot still refuse deletion. There is no refresh or retry after a deletion
+refusal. Claims without the exact recognized in-use condition retain the original
+strict snapshot behavior.
+
+An isolated, owned K3s 1.37.1 server reproduces the transition on removal of a
+Pending Pod. The actual snapshot reducer accepts only the expected transition;
+the old-version DELETE is rejected and the final UID/version DELETE succeeds.
+The owned container is removed afterward. Receipt SHA-256:
+`c1261ad78b2bb7325225e22b1816dc876a4258ec8fd68571aba36cb9c1352e4d`.
+This is scoped controller/API evidence. A fresh-strict package trial remains
+required before claiming full migration acceptance.
