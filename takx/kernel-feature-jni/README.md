@@ -84,6 +84,13 @@ Sixteen test classes/probe libraries reproduce byte for byte from the recorded
 compiler commands. These scoped controls do not qualify all elevation paths or
 listener concurrency.
 
+A separate Native09 elevation matrix passes 112 listener/bounds checks and 231
+chunk checks with zero strict-JNI warnings and exclusive Native09 Core/JNI
+mapping. Its receipt is
+`be4bd428d5685a0d98d07ab6c40e788e57c40123e3751770dfed6c661f68656b`.
+Nine test classes/probe libraries reproduce byte for byte. These controls do
+not establish general asynchronous listener safety.
+
 Two separate animator-owned software pixel controls pass drawing, post-hide
 checks and cleanup without JNI or uncaught runtime failures. These experiments
 use the intermediate nine-file JNI candidate with retained Native07 core,
@@ -95,7 +102,7 @@ The animator harness is still separate from the owned historical draw probe.
 
 ## Remaining gates
 
-The remaining elevation fault/listener/chunk and headed lifecycle consumers need
+The remaining elevation fault and headed lifecycle consumers need
 qualification against Native09. Allocation/class-initialization failures, complete cache/peer cleanup,
 asynchronous listener concurrency and retained-listener use after disposal need
 qualification. The profile is not integrated into the portable native builder.
