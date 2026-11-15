@@ -339,3 +339,35 @@
      return NewPointer(env, std::move(cdatastore));
  }
  JNIEXPORT void JNICALL Java_com_atakmap_map_layer_feature_NativeFeatureDataStore4_destruct
+--- a/takkernel/engine/src/main/jni/jnativelayer.cpp
++++ b/takkernel/engine/src/main/jni/jnativelayer.cpp
+@@ -96,6 +96,7 @@
+ JNIEXPORT jobject JNICALL Java_com_atakmap_map_layer_NativeLayer_addOnLayerVisibleChangedListener
+   (JNIEnv *env, jclass jclazz, jlong ptr, jobject mlistener)
+ {
++    if(env->ExceptionCheck()) return NULL;
+     TAKErr code(TE_Ok);
+     atakmap::core::Layer *clayer = JLONG_TO_INTPTR(atakmap::core::Layer, ptr);
+     if(!clayer) {
+@@ -104,9 +105,21 @@
+     }
+     std::shared_ptr<atakmap::core::Layer::VisibilityListener> clistener;
+     code = Core::Interop_marshal(clistener, *env, mlistener);
++    if(env->ExceptionCheck()) return NULL;
+     if(ATAKMapEngineJNI_checkOrThrow(env, code))
+         return NULL;
+     clayer->addVisibilityListener(clistener.get());
++    if(env->ExceptionCheck()) {
++        // Registration may have mutated Java before throwing. Attempt removal
++        // without the primary pending, then restore that exact throwable.
++        jthrowable first = env->ExceptionOccurred();
++        env->ExceptionClear();
++        clayer->removeVisibilityListener(clistener.get());
++        if(env->ExceptionCheck()) env->ExceptionClear();
++        env->Throw(first);
++        env->DeleteLocalRef(first);
++        return NULL;
++    }
+     return NewPointer(env, clistener);
+ }
+ JNIEXPORT void JNICALL Java_com_atakmap_map_layer_NativeLayer_removeOnLayerVisibleChangedListener

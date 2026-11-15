@@ -1,6 +1,6 @@
 # Checked feature-renderer JNI source profile
 
-Version 4 stages seven exact C++ files and two interop headers from the frozen
+Version 5 stages eight exact C++ files and two interop headers from the frozen
 Native07 Kernel composition. It adds checked callback boundaries, prevents
 publication of a failed wrapper, rolls back failed datastore listener registration, and
 preserves the first Java exception while clearing a disposed native pointer.
@@ -8,7 +8,7 @@ Actual Kernel version is 8.30.5; the composed parent is not pristine upstream.
 
 The exact parent receipt is
 `54630be999ac532f4724e0c62a5197e42f16f3244e1063022d6121e09cd8990e`.
-All nine pre/postimages, patch bytes and seven owned diagnostic sources must match
+All ten pre/postimages, patch bytes and eight owned diagnostic sources must match
 the closed lock. Source preparation grants no runtime or SDK acceptance.
 
 ## Use
@@ -51,13 +51,39 @@ ordinary disposal and disposal entered with a pending primary remain JNI-clean.
 
 Version 4 also compares wrapper class identity with JNI `IsSameObject`, using a
 scoped class reference and preserving a lookup exception before cache work.
-Visibility-listener registration checks the Java callback result. These changes
-cover the ordinary cached/listener path; asynchronous cleanup and throwing
-visibility registration remain unqualified.
+Visibility-listener registration checks the Java callback result. Those version-4 changes cover the ordinary cached/listener path.
+Version 5 additionally checks the native visibility-registration entrypoint after
+Java registration. On a Java failure it attempts listener removal with the pending
+exception cleared, then restores the exact original throwable even if removal
+throws. It returns without publishing a native Pointer. A Java removal callback
+that throws before removing its own listener is still outside the proven scope;
+this is a cleanup attempt, not a guarantee about arbitrary Java implementations.
+
+## Visibility registration failure controls
+
+The identical owned fixture rejects Native10 in three isolated JVMs: registration
+throws before adding a listener, throws after adding it, or throws after adding
+and then encounters a secondary removal error. Each baseline fails because no
+rollback removal is attempted. Baseline receipt:
+`5da6bb7e0445c224e0feaf73cb8d039f69e87ff56a8f1b403a8093be518cc009`.
+
+A candidate with 159 freshly compiled JNI units and retained Native10 Core,
+providers and producer-own Java passes all three cases (27 checks), with zero
+strict JNI diagnostics and exclusive expected Core/JNI mappings. The tests check
+original exception identity, attempted removal, no retained listener or published
+peer in these cases, fresh registration/callback/removal, and pointer retirement.
+The fixture class bytes match the rejected baseline exactly. Candidate receipt:
+`e9a80714499cc3a98c27c78f238afe1f4cd7f47f92a1622afbbcfe05961b70ed`;
+controls receipt:
+`08684f081d8142917095b84d7f4eb624173a9e25bbf8fe5b2a673551b47116fd`.
+Independent review verifies all input/source/object/class/log hashes, exactly one
+changed source relative to Native10 (`jnativelayer.cpp`), and identical exported
+symbol and required-library inventories. This candidate is not a fresh complete
+native graph; earlier Native10 proofs continue to describe version 4 only.
 
 ## Scoped evidence
 
-The current version-4 Native10 producer freshly compiles all 815 units (483 core,
+The preceding version-4 Native10 producer freshly compiles all 815 units (483 core,
 159 JNI, 173 Cesium). Independent review verifies every object's freshness and
 hash, all source and recipe snapshots, 48 graph recipe files, and 119 unchanged
 JNI headers. Its own 2701 Java classes are byte-identical to Native09. No causal
