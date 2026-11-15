@@ -55,7 +55,7 @@
              template<class Ti>
              static void onShutdown(JNIEnv &env, void *opaque) NOTHROWS
              {
-@@ -107,20 +155,26 @@
+@@ -107,25 +155,44 @@
          template<class T>
          inline bool InterfaceMarshalContext<T>::isWrapper(JNIEnv &env, jobject obj) NOTHROWS
          {
@@ -83,9 +83,31 @@
 +            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
 +            if(wrapper) {
                  do {
-                     jobject msourcePtr = env.GetObjectField(obj, javaWrapperPointerField);
-                     if(!Pointer_makeShared<T>(&env, msourcePtr))
-@@ -150,8 +204,19 @@
+-                    jobject msourcePtr = env.GetObjectField(obj, javaWrapperPointerField);
+-                    if(!Pointer_makeShared<T>(&env, msourcePtr))
+-                        break;
+-                    value = *JLONG_TO_INTPTR(std::shared_ptr<T>, env.GetLongField(msourcePtr, Pointer_class.value));
++                    Java::JNILocalRef pointer(env, env.GetObjectField(obj, javaWrapperPointerField));
++                    if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                    if(!pointer) return TAK::Engine::Util::TE_InvalidArg;
++                    T *raw = Pointer_get<T>(env, pointer.get());
++                    if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                    // Disposal leaves the Pointer type intact but clears its
++                    // raw/value fields. Never dereference its retired holder.
++                    if(!raw) return TAK::Engine::Util::TE_InvalidArg;
++                    const bool shared = Pointer_makeShared<T>(&env, pointer.get());
++                    if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                    if(!shared) break;
++                    jlong holder = env.GetLongField(pointer.get(), Pointer_class.value);
++                    if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                    if(!holder) return TAK::Engine::Util::TE_InvalidArg;
++                    std::shared_ptr<T> candidate = *JLONG_TO_INTPTR(std::shared_ptr<T>, holder);
++                    if(candidate.get() != raw) return TAK::Engine::Util::TE_InvalidArg;
++                    value = std::move(candidate);
+                     return TAK::Engine::Util::TE_Ok;
+                 } while(false);
+             }
+@@ -150,8 +217,19 @@
                  }
              }
  
@@ -107,7 +129,7 @@
  
              return code;
          }
-@@ -159,84 +224,104 @@
+@@ -159,84 +237,104 @@
          template<class WrapperType>
          inline TAK::Engine::Util::TAKErr InterfaceMarshalContext<T>::marshal(Java::JNILocalRef &value, JNIEnv &env, const std::shared_ptr<T> &obj) NOTHROWS
          {

@@ -1,6 +1,6 @@
 # Checked feature-renderer JNI source profile
 
-Version 7 stages eight exact C++ files and two interop headers from the frozen
+Version 8 stages eight exact C++ files and two interop headers from the frozen
 Native07 Kernel composition. It adds checked callback boundaries, prevents
 publication of a failed wrapper, rolls back failed datastore listener registration, and
 preserves the first Java exception while clearing a disposed native pointer.
@@ -8,7 +8,7 @@ Actual Kernel version is 8.30.5; the composed parent is not pristine upstream.
 
 The exact parent receipt is
 `54630be999ac532f4724e0c62a5197e42f16f3244e1063022d6121e09cd8990e`.
-All ten pre/postimages, patch bytes and eleven owned diagnostic sources must match
+All ten pre/postimages, patch bytes and thirteen owned diagnostic sources must match
 the closed lock. Source preparation grants no runtime or SDK acceptance.
 
 ## Use
@@ -58,6 +58,39 @@ exception cleared, then restores the exact original throwable even if removal
 throws. It returns without publishing a native Pointer. A Java removal callback
 that throws before removing its own listener is still outside the proven scope;
 this is a cleanup attempt, not a guarantee about arbitrary Java implementations.
+
+## Reject disposed Java wrappers before inbound ownership access
+
+Version 8 checks the real Java wrapper's native Pointer before attempting shared
+ownership conversion. Disposal clears its raw/value fields while retaining the
+Pointer type. Previously a disposed shared wrapper dereferenced a null shared
+holder and crashed the JVM; a disposed unique wrapper returned success with an
+empty native output. The guarded path returns invalid argument, keeps the caller's
+previous output owner unchanged, checks JNI errors before subsequent operations,
+and scopes the temporary Pointer reference. It retains the live raw address across
+promotion and verifies the candidate before publication. Concurrent disposal is
+still outside the sequential proof.
+
+The unchanged Native13 baseline has four positive controls (live shared, live
+unique, pending-exception identity and 1,024 conversions in one native call) and
+two disposed-wrapper negatives. Core dumps are disabled. The first classification
+attempt incorrectly expected the loop to warn; its unchanged successful log is
+retained and the corrected review classifies it as a positive. No reproduced
+local-reference leak is claimed. Adjudicated baseline receipt:
+`131a14f4605087adbd9d7937b8a34fe392351b1273ad3c5ffc2a517f60dc07c9`.
+
+The exact same compiled fixture class and probe pass all six cases on 159 fresh
+JNI units with retained Native13 Core/providers/own Java, zero checked-JNI
+diagnostics, and exclusive expected Core/JNI mappings. Candidate receipt:
+`41bdd71178ff01f4d17b3a0f0db671623ff257b518e22367efd59ff64a84fc6c`;
+control receipt:
+`fac74b7daa8cfafcdb6c5efa4a7926019ab20378d868b7f41e51cbd91137b01d`.
+Independent review verifies all source/object/input/fixture/log hashes and
+preserved existing exports and required libraries; eight added exports are weak
+template helpers. Fresh Native14 full-graph/consumer qualification is pending.
+This context-level guard does not qualify every direct Pointer helper or
+concurrent mutation of pointer fields. Previous Native13 evidence below remains
+bound to its version-7 inputs.
 
 ## Outbound wrapper construction and live cache entries
 
