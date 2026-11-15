@@ -2,7 +2,7 @@
 
 Version 4 stages seven exact C++ files and two interop headers from the frozen
 Native07 Kernel composition. It adds checked callback boundaries, prevents
-publication of a failed wrapper, rolls back failed listener registration, and
+publication of a failed wrapper, rolls back failed datastore listener registration, and
 preserves the first Java exception while clearing a disposed native pointer.
 Actual Kernel version is 8.30.5; the composed parent is not pristine upstream.
 
@@ -56,6 +56,49 @@ cover the ordinary cached/listener path; asynchronous cleanup and throwing
 visibility registration remain unqualified.
 
 ## Scoped evidence
+
+The current version-4 Native10 producer freshly compiles all 815 units (483 core,
+159 JNI, 173 Cesium). Independent review verifies every object's freshness and
+hash, all source and recipe snapshots, 48 graph recipe files, and 119 unchanged
+JNI headers. Its own 2701 Java classes are byte-identical to Native09. No causal
+objects or libraries were adopted.
+
+Native10 consumers pass constructor/disposal faults and 16 cache/listener
+assertions; 166 elevation checks; 62 feature bindings and typed options/envelope
+controls; 22 managed callback fault operations; both surface construction orders
+and 100 concurrent calls; 112 elevation listener/bounds and 231 chunk checks;
+13 cursor/bulk fault cases (97 assertions); and six scalar fault cases (34
+assertions). Every consumer checks exclusive Native10 Core/JNI mapping and has
+zero strict-JNI warnings.
+
+The scoped headed lifecycle consumer also passes three context recreation
+cycles with two live views, old-worker retirement and three terminal renderer
+collections. Its isolated Xvfb/software GL/private font03 scope remains explicit.
+Across these consumers and lifecycle controls, 58 test classes/probe libraries
+reproduce byte for byte from recorded compiler commands.
+
+| Current receipt | SHA-256 |
+| --- | --- |
+| Fresh Native10 producer | `986054e2e8c412b57ccc1d2d7bfb64302db55fccc7939dae768ab1b59812d7c4` |
+| Constructor/disposal/cache | `f0734b72f7d4b128a05f83b4cae31312600e5420b8522a5abb3ad9c6ede28b8a` |
+| Elevation/feature/callback/surface | `5f1a28a799a4cc08a6a2d9cd1c88693856b1847eace1565aa67bb1e249c20249` |
+| Elevation listener/chunk | `f3d15c1cf57a4c9e5fa39f0d9b72b669f03a2e9f6866ca80e3a548b2914cca12` |
+| Cursor/bulk faults | `6f8c9ed8ebeff1007ce1866c363def82afc493d71b9af82a258d0a5cbdc8d9f7` |
+| Scalar faults | `1c2cd2563782b749a352189b5ecdd28b24de0212c27d94229327ca1a6a15cb42` |
+| Scoped headed lifecycle | `178bd6ba84352156ddaaaa715c790c00ef2894041e937398be1c7439b8345c9a` |
+
+Native10 contour replay17 passes 597 CPU controls and draws visible pixels, but
+fails the post-hide check with 416 major/231 minor pixels remaining. Bound input
+hashes and exclusive Native10 Core/JNI mapping verify; JNI warnings remain zero.
+Its failed receipt is
+`4d7fd2622fa1c2efa47f5c2e0965892bf303bf5f02e3503001c9d8e0d05f2e11`.
+This remains a failed pixel result, not an established SDK root cause.
+A two-phase GL-state diagnostic (replay19) records zero colored pixels after
+clearing every frame, expected read/draw bindings, then colored pixels after
+rendering on 121 hidden-layer frames. It remains rejected; it narrows that run
+beyond a stale framebuffer read without establishing the SDK cause.
+
+Earlier scoped receipts remain below to preserve the causal and failed evidence.
 
 The two-boundary causal candidate freshly compiles all 159 JNI units against
 retained Native09 Core and its own Java classes. Review verifies exactly two
