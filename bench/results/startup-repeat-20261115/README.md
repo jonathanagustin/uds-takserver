@@ -5,8 +5,10 @@ One additional AMD64 application-start pair passed in
 source `254c30c4142dae05ee3e18b54dc7c991b924fda8`.
 The AMD64 job completed the native-architecture, clean-daemon, Core restore,
 disposable-cluster, package acquisition, cold deployment and warm restart steps.
-Its artifact ZIP SHA-256 matches GitHub metadata; all six original JSON files and
-four exact collector/workflow source snapshots are retained here. The source
+Its original artifact ZIP is retained and its SHA-256 matches GitHub metadata.
+The verifier compares its six members byte-for-byte with the raw JSON records.
+Four exact collector/workflow source snapshots are retained alongside the
+source/run/job bindings. The source
 pair validator replay agrees with the original accepted pair, and `check.py`
 independently recomputes phase timestamps and verifies the source/run bindings.
 

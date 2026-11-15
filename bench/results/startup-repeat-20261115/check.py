@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import math
+import io
+import stat
+import zipfile
 from pathlib import Path
 import sys
 
@@ -97,6 +100,21 @@ def phase_row(arch, mode, app, phase):
             expected['jvm_to_log_s'], expected['log_to_ready_s']]
 
 
+def verify_original_archive(root, dataset):
+    raw=read(root/'artifact.zip',dataset['archive_sha256'])
+    require(len(raw)==dataset['archive_bytes'],'archive byte count differs')
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        entries=archive.infolist()
+        require(len(entries)==len(FILES) and {entry.filename for entry in entries}==FILES,
+                'archive inventory differs')
+        for entry in entries:
+            require(not entry.is_dir() and not entry.flag_bits & 1 and entry.file_size<=1024*1024 and
+                    stat.S_IFMT(entry.external_attr>>16) in (0,stat.S_IFREG),'archive entry differs')
+            original=archive.read(entry)
+            require(sha(original)==dataset['files'][entry.filename] and
+                    original==read(root/'records/amd64'/entry.filename),'original record bytes differ')
+
+
 def prior_records():
     import importlib.util
     prior = ROOT.parent/'startup-pairs-20261114'
@@ -167,6 +185,7 @@ def verify(root=ROOT):
                 dataset['run_id']==job['run_id'] and dataset['attempt']==job['run_attempt'] and
                 dataset['job_id']==job['job_id'] and dataset['source_commit']==job['head_sha'] and
                 dataset['workflow_id']==417819272, 'published archive metadata differs')
+        verify_original_archive(root,dataset)
         arch = dataset['architecture']
         require(set(dataset['files']) == FILES and dataset['workflow_snapshot'] == 'source/'+arch+'-startup.yaml.txt', 'payload inventory differs')
         records = {name: decode(read(root/'records'/arch/name, checksum)) for name, checksum in dataset['files'].items()}

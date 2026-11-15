@@ -75,9 +75,9 @@ class StartupRepeatEvidenceTests(unittest.TestCase):
                 else:cold['phases']['takserver-api']['jvm_observation']['jvm_start_time_unix_ms']=old['phases']['takserver-api']['jvm_observation']['jvm_start_time_unix_ms']
                 with self.assertRaises(ValueError):REPEAT.verify_independent(cold,warm)
 
-    def test_skipped_execution_step_and_changed_archive_metadata_are_rejected(self):
+    def test_changed_execution_or_original_artifact_bytes_are_rejected(self):
         import hashlib,json,shutil,tempfile
-        for mode in ('step','archive'):
+        for mode in ('step','archive','record','zip'):
             with self.subTest(mode=mode),tempfile.TemporaryDirectory() as directory:
                 target=Path(directory)/'evidence';shutil.copytree(REPEAT_ROOT,target)
                 manifest=REPEAT.decode(REPEAT.read(target/'sources.json'))
@@ -86,7 +86,12 @@ class StartupRepeatEvidenceTests(unittest.TestCase):
                     next(step for step in job['steps'] if step['name']=='Acquire only the matching published application package')['conclusion']='skipped'
                     raw=json.dumps(job).encode();(target/'job.json').write_bytes(raw)
                     manifest['job_metadata_sha256']=hashlib.sha256(raw).hexdigest()
-                else:manifest['datasets'][0]['archive_sha256']='0'*64
+                elif mode=='archive':manifest['datasets'][0]['archive_sha256']='0'*64
+                elif mode=='record':
+                    record=target/'records/amd64/cold.json';raw=record.read_bytes()+b'\n';record.write_bytes(raw)
+                    manifest['datasets'][0]['files']['cold.json']=hashlib.sha256(raw).hexdigest()
+                else:
+                    archive=target/'artifact.zip';archive.write_bytes(archive.read_bytes()+b'changed')
                 (target/'sources.json').write_text(json.dumps(manifest))
                 with self.assertRaises(ValueError):REPEAT.verify(target)
 
