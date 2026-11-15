@@ -1,6 +1,6 @@
 # Checked feature-renderer JNI source profile
 
-Version 6 stages eight exact C++ files and two interop headers from the frozen
+Version 7 stages eight exact C++ files and two interop headers from the frozen
 Native07 Kernel composition. It adds checked callback boundaries, prevents
 publication of a failed wrapper, rolls back failed datastore listener registration, and
 preserves the first Java exception while clearing a disposed native pointer.
@@ -8,7 +8,7 @@ Actual Kernel version is 8.30.5; the composed parent is not pristine upstream.
 
 The exact parent receipt is
 `54630be999ac532f4724e0c62a5197e42f16f3244e1063022d6121e09cd8990e`.
-All ten pre/postimages, patch bytes and nine owned diagnostic sources must match
+All ten pre/postimages, patch bytes and eleven owned diagnostic sources must match
 the closed lock. Source preparation grants no runtime or SDK acceptance.
 
 ## Use
@@ -58,6 +58,41 @@ exception cleared, then restores the exact original throwable even if removal
 throws. It returns without publishing a native Pointer. A Java removal callback
 that throws before removing its own listener is still outside the proven scope;
 this is a cleanup attempt, not a guarantee about arbitrary Java implementations.
+
+## Outbound wrapper construction and live cache entries
+
+Version 7 checks native-to-Java construction before publishing the result or a
+weak cache entry. It allocates the Java object separately and keeps a strong local
+reference while invoking its real constructor and, on failure, clearing its native
+Pointer. Cleanup runs after releasing the context mutex and preserves the original
+Java exception over a secondary cleanup exception. Cache lookups verify that the
+wrapper still has the expected nonzero native pointer. Successful uniquely owned
+wrappers also enter the weak cache, allowing real visibility callbacks and
+const-reference lookup to recover their Java peer.
+
+An owned class loader fails one dependency while the unchanged real SDK
+NativePeerManager initializes. The Native12 baseline passes the shared-wrapper
+positive case and rejects six cases covering shared/unique initialization failure,
+secondary cleanup failure, recycled native addresses, disposed const-reference
+lookup and missing uniquely owned visibility callbacks. Baseline receipt:
+`facd68f01d665295aa3372e44a63a814eac57250bc2fc4356ddf06ff57e788bb`.
+The candidate compiles all 159 JNI units against retained Native12 Core/providers
+and its own Java classes. The exact same three fixture classes and native probe
+pass all seven cases with zero checked-JNI diagnostics and exclusive expected
+Core/JNI mappings. Candidate receipt:
+`5c99e0293eb382db496855c2876e7312de3e4a57cfed986c277c3e29a4e971e7`;
+control receipt:
+`ba060a1a84fea58024a1b12d63bd6423b84daaea631770781c3c0db382733950`.
+Independent review rechecks all input, source, object, fixture and log digests.
+Every JNI entry point and required-library inventory is preserved. Eleven weak
+context template exports disappear and 27 template/helper exports appear; the
+entire C++ export inventory is therefore not identical.
+
+Fresh Native13 qualification is pending. The candidate does not grant complete
+changed-graph, renderer, SDK or client acceptance. Pointer allocation failure,
+C++ allocation failure, arbitrary constructor reentry and concurrent disposal/cache
+lookup remain outside these sequential controls. Existing scoped Native12 evidence
+below remains bound to its version-6 inputs.
 
 ## Null listener removal and fresh version-6 Native12
 

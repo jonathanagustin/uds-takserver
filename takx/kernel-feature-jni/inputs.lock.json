@@ -1,14 +1,14 @@
 {
   "schema": 1,
-  "profile": "native07-checked-feature-callbacks-v6",
+  "profile": "native07-checked-feature-callbacks-v7",
   "actual_kernel_version": "8.30.5",
   "official_revision": "9f6893dd657feacc35ec5de03dad721c2e44170e",
   "parent_native_sha256": "54630be999ac532f4724e0c62a5197e42f16f3244e1063022d6121e09cd8990e",
-  "scope": "ten-file source preparation over exact full Native07 layout; checked callback/constructor/disposal/cache and failed-registration cleanup boundaries; null listener removal is a no-op; source preparation grants no runtime, complete graph, renderer, SDK or client acceptance",
+  "scope": "ten-file source preparation; checked outbound wrapper construction rollback, live-pointer cache validation and unique-wrapper callback interning; no runtime or full SDK/client acceptance",
   "files": {
     "takkernel/engine/src/main/jni/interop/InterfaceMarshalContext.h": {
       "before": "c8c17f62f18bf771794b114f3826e22f612354121f6eff3340f90dc1992ed35c",
-      "after": "8b1930068a1df9478be774103349e344bcd22cd470823b38ae53bfc524a730d4"
+      "after": "81e2f9c02d2cc1dee03ffb3d87958da9c61e8fb718cc90b7715a334023a293d0"
     },
     "takkernel/engine/src/main/jni/interop/Pointer.h": {
       "before": "cfdc92703ec3cf4e6d241408c59f790f008805e23bd08e2bd49477ea6f041134",
@@ -47,7 +47,7 @@
       "after": "5bcdde1a6caaae6cef1c7ac49a7d3aa23c75dedee1531589ca936073dd338fed"
     }
   },
-  "patch_sha256": "d75a8665bf040e0bd49f9d983fd38bbbb2ab0de8e6c870f4b8e5cbe88265d83b",
+  "patch_sha256": "54cecb2c3181e3f94ee891097ce1e6c8684b120b7e0668d916f8f9923f5c4fb5",
   "owned_controls": {
     "tests/ContourDrawProbe.java": "3cf86613bd0bb13b0e1278f62e86ae330ee7d82ab25543bafe89d95f6278b45e",
     "tests/LayerConstructorFault.java": "209fa9c9d87c60a5011458a9de6bedfb34804e2302bcb5ab9a9bcc79a9e0448d",
@@ -57,7 +57,9 @@
     "tests/GLSubjectFault.cpp": "7ea28039b03e692b9a32ad7cc27bc83e17f57ac31dd10139d8df157aff84fde2",
     "tests/LayerVisibilityControls.java": "7d2b3a8edbdc4aa2e7996bc00b309237bb99aa5d92c1d8d7a8718a4ea96a2acd",
     "tests/LayerRegistrationFault.java": "e44bdb453595efe9e5b671416c9a9fd8d65261e982cb678987eb9f74a70408ea",
-    "tests/LayerRemovalControls.java": "8ca4dec7982c90820cb9f3b979e97ceb9a8312bdca5e7d9b651a6db20081163a"
+    "tests/LayerRemovalControls.java": "8ca4dec7982c90820cb9f3b979e97ceb9a8312bdca5e7d9b651a6db20081163a",
+    "tests/LayerClassInitControls.java": "37b4c95188a6684eb6f864e3cffd00135a033e145506a4b857f1221081d96f71",
+    "tests/LayerClassInitControls.cpp": "b853823f03419ca2553e49e003d1ef619d537436c178ad2c2d2bcb26a9011bb1"
   },
   "native_builder_integration": false,
   "strict_callback_accepted": false,

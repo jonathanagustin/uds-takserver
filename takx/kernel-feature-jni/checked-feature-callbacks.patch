@@ -1,6 +1,6 @@
 --- a/takkernel/engine/src/main/jni/interop/InterfaceMarshalContext.h
 +++ b/takkernel/engine/src/main/jni/interop/InterfaceMarshalContext.h
-@@ -42,6 +42,20 @@
+@@ -42,6 +42,54 @@
              template<class WrapperType>
              TAK::Engine::Util::TAKErr marshal(Java::JNILocalRef &value, JNIEnv &env, std::unique_ptr<T, void(*)(const T *)> &&obj) NOTHROWS;
          private :
@@ -18,10 +18,44 @@
 +                    env.DeleteLocalRef(primary);
 +                }
 +            }
++            // Retain the allocated Java peer until rollback has cleared its Pointer.
++            // Its constructor may register a cleaner before throwing.
++            TAK::Engine::Util::TAKErr constructWrapper(Java::JNILocalRef &peer, jweak &reference,
++                                                     JNIEnv &env, jobject pointer) NOTHROWS
++            {
++                peer = Java::JNILocalRef(env, env.AllocObject(javaWrapperType));
++                if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                if(!peer) return TAK::Engine::Util::TE_OutOfMemory;
++                env.CallNonvirtualVoidMethod(peer.get(), javaWrapperType, javaWrapperCtor, pointer, NULL);
++                if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                reference = env.NewWeakGlobalRef(peer.get());
++                if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                return reference ? TAK::Engine::Util::TE_Ok : TAK::Engine::Util::TE_OutOfMemory;
++            }
++            TAK::Engine::Util::TAKErr cachedWrapper(Java::JNILocalRef &peer, JNIEnv &env, const T *native) NOTHROWS
++            {
++                auto entry = nativeImplToManagedWrapper.find(native);
++                if(entry == nativeImplToManagedWrapper.end()) return TAK::Engine::Util::TE_InvalidArg;
++                Java::JNILocalRef candidate(env, env.NewLocalRef(entry->second));
++                if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                if(candidate) {
++                    Java::JNILocalRef pointer(env, env.GetObjectField(candidate.get(), javaWrapperPointerField));
++                    if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                    T *raw = pointer ? Pointer_get<T>(env, pointer.get()) : NULL;
++                    if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                    if(raw && raw == native) {
++                        peer = std::move(candidate);
++                        return TAK::Engine::Util::TE_Ok;
++                    }
++                }
++                env.DeleteWeakGlobalRef(entry->second);
++                nativeImplToManagedWrapper.erase(entry);
++                return TAK::Engine::Util::TE_InvalidArg;
++            }
              template<class Ti>
              static void onShutdown(JNIEnv &env, void *opaque) NOTHROWS
              {
-@@ -107,20 +121,26 @@
+@@ -107,20 +155,26 @@
          template<class T>
          inline bool InterfaceMarshalContext<T>::isWrapper(JNIEnv &env, jobject obj) NOTHROWS
          {
@@ -51,7 +85,7 @@
                  do {
                      jobject msourcePtr = env.GetObjectField(obj, javaWrapperPointerField);
                      if(!Pointer_makeShared<T>(&env, msourcePtr))
-@@ -150,8 +170,19 @@
+@@ -150,8 +204,19 @@
                  }
              }
  
@@ -73,7 +107,111 @@
  
              return code;
          }
-@@ -224,9 +255,15 @@
+@@ -159,84 +224,104 @@
+         template<class WrapperType>
+         inline TAK::Engine::Util::TAKErr InterfaceMarshalContext<T>::marshal(Java::JNILocalRef &value, JNIEnv &env, const std::shared_ptr<T> &obj) NOTHROWS
+         {
+-            TAK::Engine::Util::TAKErr  code(TAK::Engine::Util::TE_Ok);
++            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++            if(!obj) return TAK::Engine::Util::TE_InvalidArg;
+             const WrapperType *impl = dynamic_cast<const WrapperType *>(obj.get());
+             if(impl) {
+-                // unwrap
+-                value = Java::JNILocalRef(env, env.NewLocalRef(impl->impl));
++                Java::JNILocalRef candidate(env, env.NewLocalRef(impl->impl));
++                if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                if(!candidate) return TAK::Engine::Util::TE_InvalidArg;
++                value = std::move(candidate);
+                 return TAK::Engine::Util::TE_Ok;
+             }
+-
+             TAK::Engine::Thread::LockPtr lock(NULL, NULL);
+-            code = TAK::Engine::Thread::Lock_create(lock, mutex);
++            auto code = TAK::Engine::Thread::Lock_create(lock, mutex);
+             TE_CHECKRETURN_CODE(code);
+-
+-            // look up in intern
+-            do {
+-                auto entry = nativeImplToManagedWrapper.find(obj.get());
+-                if(entry == nativeImplToManagedWrapper.end())
+-                    break;
+-                value = Java::JNILocalRef(env, env.NewLocalRef(entry->second));
+-                if(value)
+-                    return code;
+-                // weak ref was cleared
+-                env.DeleteWeakGlobalRef(entry->second);
+-                nativeImplToManagedWrapper.erase(entry);
+-            } while(false);
+-
+-            Java::JNILocalRef mpointer(env, NewPointer(&env, obj));
+-            value = Java::JNILocalRef(env, env.NewObject(javaWrapperType, javaWrapperCtor, mpointer.get(), NULL));
+-            nativeImplToManagedWrapper[obj.get()] = env.NewWeakGlobalRef(value);
++            Java::JNILocalRef candidate(env, NULL);
++            code = cachedWrapper(candidate, env, obj.get());
++            if(code == TAK::Engine::Util::TE_Ok) {
++                value = std::move(candidate);
++                return code;
++            }
++            if(code != TAK::Engine::Util::TE_InvalidArg) return code;
++            Java::JNILocalRef pointer(env, NewPointer(&env, obj));
++            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++            if(!pointer) return TAK::Engine::Util::TE_OutOfMemory;
++            jweak reference = NULL;
++            code = constructWrapper(candidate, reference, env, pointer.get());
++            if(code != TAK::Engine::Util::TE_Ok) {
++                if(reference) env.DeleteWeakGlobalRef(reference);
++                lock.reset();
++                Pointer_destruct<T>(&env, pointer.get());
++                return code;
++            }
++            nativeImplToManagedWrapper[obj.get()] = reference;
++            value = std::move(candidate);
+             return TAK::Engine::Util::TE_Ok;
+         }
+         template<class T>
+         template<class WrapperType>
+         inline TAK::Engine::Util::TAKErr InterfaceMarshalContext<T>::marshal(Java::JNILocalRef &value, JNIEnv &env, const T &obj) NOTHROWS
+         {
+-            TAK::Engine::Util::TAKErr  code(TAK::Engine::Util::TE_Ok);
++            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
+             const WrapperType *impl = dynamic_cast<const WrapperType *>(&obj);
+             if(impl) {
+-                // unwrap
+-                value = Java::JNILocalRef(env, env.NewLocalRef(impl->impl));
++                Java::JNILocalRef candidate(env, env.NewLocalRef(impl->impl));
++                if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                if(!candidate) return TAK::Engine::Util::TE_InvalidArg;
++                value = std::move(candidate);
+                 return TAK::Engine::Util::TE_Ok;
+             }
+-
+-            // look up in intern
+-            do {
+-                TAK::Engine::Thread::LockPtr lock(NULL, NULL);
+-                code = TAK::Engine::Thread::Lock_create(lock, mutex);
+-                TE_CHECKBREAK_CODE(code);
+-
+-                auto entry = nativeImplToManagedWrapper.find(&obj);
+-                if(entry == nativeImplToManagedWrapper.end())
+-                    break;
+-                value = Java::JNILocalRef(env, env.NewLocalRef(entry->second));
+-                if(value)
+-                    return code;
+-                // weak ref was cleared
+-                env.DeleteWeakGlobalRef(entry->second);
+-                nativeImplToManagedWrapper.erase(entry);
+-            } while(false);
+-            return TAK::Engine::Util::TE_InvalidArg;
++            TAK::Engine::Thread::LockPtr lock(NULL, NULL);
++            auto code = TAK::Engine::Thread::Lock_create(lock, mutex);
++            TE_CHECKRETURN_CODE(code);
++            Java::JNILocalRef candidate(env, NULL);
++            code = cachedWrapper(candidate, env, &obj);
++            if(code == TAK::Engine::Util::TE_Ok) value = std::move(candidate);
++            return code;
+         }
+ 
+         template<class T>
          template<class WrapperType>
          TAK::Engine::Util::TAKErr InterfaceMarshalContext<T>::marshal(std::unique_ptr<T, void(*)(const T *)> &value, JNIEnv &env, jobject obj) NOTHROWS
          {
@@ -90,6 +228,38 @@
              return TAK::Engine::Util::TE_Ok;
          }
          template<class T>
+         template<class WrapperType>
+         TAK::Engine::Util::TAKErr InterfaceMarshalContext<T>::marshal(Java::JNILocalRef &value, JNIEnv &env, std::unique_ptr<T, void(*)(const T *)> &&obj) NOTHROWS
+         {
+-            if(!obj.get())
+-                return TAK::Engine::Util::TE_InvalidArg;
+-            Java::JNILocalRef mpointer(env, NewPointer<T>(&env, std::move(obj)));
+-            value = Java::JNILocalRef(env, env.NewObject(javaWrapperType, javaWrapperCtor, mpointer.get(), NULL));
++            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++            if(!obj.get()) return TAK::Engine::Util::TE_InvalidArg;
++            const T *raw = obj.get();
++            TAK::Engine::Thread::LockPtr lock(NULL, NULL);
++            auto code = TAK::Engine::Thread::Lock_create(lock, mutex);
++            TE_CHECKRETURN_CODE(code);
++            Java::JNILocalRef pointer(env, NewPointer<T>(&env, std::move(obj)));
++            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++            if(!pointer) return TAK::Engine::Util::TE_OutOfMemory;
++            Java::JNILocalRef candidate(env, NULL);
++            jweak reference = NULL;
++            code = constructWrapper(candidate, reference, env, pointer.get());
++            if(code != TAK::Engine::Util::TE_Ok) {
++                if(reference) env.DeleteWeakGlobalRef(reference);
++                lock.reset();
++                Pointer_destruct<T>(&env, pointer.get());
++                return code;
++            }
++            auto old = nativeImplToManagedWrapper.find(raw);
++            if(old != nativeImplToManagedWrapper.end()) env.DeleteWeakGlobalRef(old->second);
++            nativeImplToManagedWrapper[raw] = reference;
++            value = std::move(candidate);
+             return TAK::Engine::Util::TE_Ok;
+         }
+     }
 --- a/takkernel/engine/src/main/jni/interop/Pointer.h
 +++ b/takkernel/engine/src/main/jni/interop/Pointer.h
 @@ -51,6 +51,24 @@
