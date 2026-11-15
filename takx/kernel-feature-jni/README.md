@@ -101,6 +101,16 @@ exclusive Native09 Core/JNI mapping. Their receipt is
 `c245309f3fc30d1cb2637c5dc6368fd9895cb052b12b231945aa22d6befcbe4d`.
 The cursor/bulk and scalar test classes reproduce byte for byte.
 
+The scoped headed lifecycle consumer also passes with Native09's own Java and
+Core/JNI: three context recreation cycles with two live views, fresh identities,
+retained text/shaders, old-worker retirement and three terminal renderer
+collections. It reports zero strict-JNI warnings; review verifies exclusive
+Native09 Core/JNI mapping, eight byte-reproducible test artifacts and owned
+display/auth cleanup. Its receipt is
+`c2ae9ad7544198be7aaf242c1f38bf8f20817390a79ad2778e5d143ec7909c0e`.
+This uses isolated Xvfb/software GL and private font03; it does not establish
+stock-JDK, hardware, full renderer or general concurrent cleanup acceptance.
+
 Two separate animator-owned software pixel controls pass drawing, post-hide
 checks and cleanup without JNI or uncaught runtime failures. These experiments
 use the intermediate nine-file JNI candidate with retained Native07 core,
@@ -112,7 +122,7 @@ The animator harness is still separate from the owned historical draw probe.
 
 ## Remaining gates
 
-The remaining headed lifecycle consumers need qualification against Native09. Allocation/class-initialization failures, complete cache/peer cleanup,
+Allocation/class-initialization failures, complete cache/peer cleanup,
 asynchronous listener concurrency and retained-listener use after disposal need
 qualification. The profile is not integrated into the portable native builder.
 
