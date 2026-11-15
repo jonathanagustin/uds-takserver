@@ -51,36 +51,42 @@ ordinary disposal and disposal entered with a pending primary remain JNI-clean.
 
 ## Scoped evidence
 
-Native08 freshly compiled all 815 units (483 core, 159 JNI, 173 Cesium), retained
-119 byte-identical JNI headers, and passed its generic CPU checks. Its receipt is
-`4dd4b843249c921de25491de16f4f90befc3ffeaae99ff9a6aebbdb884ac09e0`.
-That producer covers the earlier seven-file version 2, which still fails the
-later listener/disposal controls. It is not adopted as a producer for version 3.
+Native09 freshly compiled all 815 units (483 core, 159 JNI, 173 Cesium) with all
+nine version-3 files. Independent review verifies object freshness, all source
+hashes, recipe snapshots and 119 byte-identical JNI headers. Its receipt is
+`942142207e50c6336c949fea35292a9d3ebf8ea633a7474f12e295557ca1360f`.
+The earlier seven-file Native08 producer remains retained separately.
 
-The nine-file candidate freshly recompiles all 159 JNI units while retaining the
-Native07 core/providers. Its receipt is
-`372d0cbe743230e91ec5d8bf1702e0106e665c820e5d3bcf94be0b039c3254bc`.
-The following owned controls pass with zero strict-JNI warnings, preserved
+The controlled consumers use Native09's own 2701 Java classes and newly built
+Core/JNI libraries. They pass with zero strict-JNI warnings, preserved primary
 exception identity and fresh recovery:
 
-- Real `NativeLayer.wrap` with a throwing `getName`, receipt
-  `06a50057d6924d05fc89a0b619c03c7eb04113570efd9caca18a19e72cb076a8`.
-- Real `NativeFeatureDataStore4.wrap`, side-effecting registration failure,
-  secondary removal failure, ordinary disposal failure, and disposal with a
-  pending primary. Pointer clearing and removal are checked; only the candidate
-  JNI library is mapped. Receipt:
-  `bc1f1240d1f1f805a715bd981e3db0fdd9d493263ed8a52aa63edc036b16bc5a`.
-- Production GLLayer2 marshal with subject failure, nested layer-name failure and
-  pending-exception entry. Failed output peers remain unpublished. Receipt:
-  `91f70f78760aeae64bac2c286acfe24c27589df949c9ab2b9c2617e611c8713d`.
+- Real `NativeLayer.wrap` with a throwing `getName`.
+- Real `NativeFeatureDataStore4.wrap` with side-effecting registration failure,
+  secondary removal failure, ordinary disposal failure and disposal entered
+  with a pending primary. Removal and pointer clearing are checked.
+- Production GLLayer2 marshal with subject failure, nested layer-name failure
+  and pending-exception entry. Failed output peers remain unpublished.
 
-Earlier warning-bearing and failed controls remain retained. The GL subject
-control is a CPU constructor test and does not establish rendered behavior.
+Every consumer verifies that only Native09 Core/JNI images are mapped. Twelve
+runtime classes/probe ELFs were independently reproduced byte for byte from the
+recorded compiler commands. The controlled-consumer receipt is
+`8d4ece7b77b3312c52f914bd71f6e8e9221374615b924d050e67568212a3b531`.
+This does not qualify every wrapper, allocator or concurrent cleanup path.
+
+Two separate animator-owned software pixel controls pass drawing, post-hide
+checks and cleanup without JNI or uncaught runtime failures. These experiments
+use the intermediate nine-file JNI candidate with retained Native07 core,
+canonical Java and private font03; they are not Native09 renderer acceptance.
+Their receipts are
+`d18fb064aa03cc221899ca9a2552461ab735c9819b4d371a8db1d5e7d9aae4a6`
+and `8a94bb25b5beef34a4e42424d1a2476563209ba9987e8ce9749aedfa2aa7daa9`.
+The animator harness is still separate from the owned historical draw probe.
 
 ## Remaining gates
 
-A complete fresh producer for all nine version-3 files and required consumers
-must pass. Allocation/class-initialization failures, complete cache/peer cleanup,
+The remaining typed/elevation/surface/lifecycle consumers need qualification
+against Native09. Allocation/class-initialization failures, complete cache/peer cleanup,
 asynchronous listener concurrency and retained-listener use after disposal need
 qualification. The profile is not integrated into the portable native builder.
 
