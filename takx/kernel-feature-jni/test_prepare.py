@@ -63,10 +63,11 @@ class SourceGuards(unittest.TestCase):
                 P.prepare(source, root / 'parent/output', root / 'parent/receipt.json')
 
     def test_owned_diagnostic_tamper_refuses(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / 'profile'
-            shutil.copytree(HERE, root)
-            path = root / 'tests/ContourDrawProbe.java'
-            path.write_bytes(path.read_bytes() + b'\n// changed\n')
-            with patch.object(P, 'HERE', root), self.assertRaisesRegex(ValueError, 'control source'):
-                P.contract()
+        for name in sorted(P.CONTROLS):
+            with self.subTest(control=name),tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / 'profile'
+                shutil.copytree(HERE, root)
+                path = root / name
+                path.write_bytes(path.read_bytes() + b'\n// changed\n')
+                with patch.object(P, 'HERE', root), self.assertRaisesRegex(ValueError, 'control source'):
+                    P.contract()
