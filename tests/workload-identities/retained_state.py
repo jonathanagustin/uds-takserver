@@ -387,6 +387,61 @@ def cleanup_snapshot(driver,proof):
             result.append(item)
     return result
 
+CLEAN_INVENTORY_KINDS={'deployments':'Deployment','statefulsets':'StatefulSet','jobs':'Job','pods':'Pod',
+    'persistentvolumeclaims':'PersistentVolumeClaim','secrets':'Secret','configmaps':'ConfigMap','services':'Service',
+    'serviceaccounts':'ServiceAccount','roles':'Role','rolebindings':'RoleBinding','packages.uds.dev':'Package'}
+CLEAN_INVENTORY_LIMIT=16
+
+def validate_clean_inventory_failure(snapshot):
+    require(isinstance(snapshot,dict) and set(snapshot)=={'schema','namespace','kind','reason','totalCount',
+            'truncated','inventorySHA256','objects'} and type(snapshot['schema']) is int and snapshot['schema']==1,
+            'clean inventory schema differs')
+    ns,kind=snapshot['namespace'],snapshot['kind']
+    require(ns in (*APP_RELEASES,'pepr-system') and kind in CLEAN_INVENTORY_KINDS and
+            (ns!='pepr-system' or kind in ('deployments','secrets')),'clean inventory scope differs')
+    require(snapshot['reason'] in ('unexpected-objects','preserved-trust-changed') and
+            (snapshot['reason']!='preserved-trust-changed' or ns in APP_RELEASES and kind=='configmaps'),
+            'clean inventory reason differs')
+    total=snapshot['totalCount'];objects=snapshot['objects']
+    require(type(total) is int and 1<=total<=4096 and isinstance(objects,list) and
+            len(objects)==min(total,CLEAN_INVENTORY_LIMIT) and type(snapshot['truncated']) is bool and
+            snapshot['truncated']==(total>CLEAN_INVENTORY_LIMIT),'clean inventory count differs')
+    require(isinstance(snapshot['inventorySHA256'],str) and re.fullmatch('[a-f0-9]{64}',snapshot['inventorySHA256']),
+            'clean inventory digest differs')
+    names=[]
+    for obj in objects:
+        require(isinstance(obj,dict) and set(obj)=={'name','uid','resourceVersion','deleting','objectSHA256'},
+                'clean inventory object differs')
+        for key in ('name','uid','resourceVersion'):
+            require(isinstance(obj[key],str) and re.fullmatch('[A-Za-z0-9._-]{1,253}',obj[key]),
+                    'clean inventory identity differs')
+        require(type(obj['deleting']) is bool and isinstance(obj['objectSHA256'],str) and
+                re.fullmatch('[a-f0-9]{64}',obj['objectSHA256']),'clean inventory object state differs')
+        if snapshot['reason']=='preserved-trust-changed':
+            require(obj['name'] in ('kube-root-ca.crt','istio-ca-root-cert','uds-trust-bundle'),
+                    'clean inventory trust name differs')
+        names.append(obj['name'])
+    require(names==sorted(set(names)),'clean inventory ordering or duplicate differs')
+    if not snapshot['truncated']:require(sha(objects)==snapshot['inventorySHA256'],'clean inventory digest mismatch')
+    require(len(json.dumps(snapshot).encode())<=SOURCE_FAILURE_LIMIT,'clean inventory byte bound')
+    return snapshot
+
+def clean_inventory_failure(namespace,kind,objects,reason='unexpected-objects'):
+    require(kind in CLEAN_INVENTORY_KINDS and isinstance(objects,list) and 1<=len(objects)<=4096,
+            'clean inventory query bound differs')
+    records=[]
+    for obj in objects:
+        meta=obj['metadata']
+        require(obj.get('kind')==CLEAN_INVENTORY_KINDS[kind] and meta.get('namespace')==namespace,
+                'clean inventory query scope differs')
+        records.append({'name':meta['name'],'uid':meta['uid'],'resourceVersion':meta['resourceVersion'],
+            'deleting':bool(meta.get('deletionTimestamp')),'objectSHA256':sha(obj)})
+    records.sort(key=lambda item:item['name'])
+    require(len({item['name'] for item in records})==len(records),'duplicate clean inventory query object')
+    return validate_clean_inventory_failure({'schema':1,'namespace':namespace,'kind':kind,'reason':reason,
+        'totalCount':len(records),'truncated':len(records)>CLEAN_INVENTORY_LIMIT,
+        'inventorySHA256':sha(records),'objects':records[:CLEAN_INVENTORY_LIMIT]})
+
 def validate_consumer_failure(snapshot):
     require(isinstance(snapshot,dict) and set(snapshot)=={'schema','consumers'} and
             type(snapshot['schema']) is int and snapshot['schema']==1,'consumer failure schema differs')

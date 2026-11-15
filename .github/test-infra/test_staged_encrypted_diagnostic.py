@@ -294,6 +294,33 @@ class EncryptedDiagnosticGuards(unittest.TestCase):
                     else:
                         with self.assertRaises(ValueError):AGE.package_input(root)
 
+    def test_clean_inventory_is_source_bound_closed_and_sealed(self):
+        for mutation in ('valid','body','scope','kind','count','digest','source','alias'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary);folder,_out,env,payload,journal,_owner=validation_fixture(root)
+                objects=[{'name':'remaining','uid':'bound-uid','resourceVersion':'123','deleting':False,'objectSHA256':'a'*64}]
+                payload['kind']='cleanup-clean-inventory'
+                payload['snapshot']={'schema':1,'namespace':'cloudtak','kind':'secrets','reason':'unexpected-objects',
+                    'totalCount':1,'truncated':False,'objects':objects,
+                    'inventorySHA256':AGE.digest(json.dumps(objects,sort_keys=True,separators=(',',':')).encode())}
+                if mutation=='body':objects[0]['data']={'private':'PRIVATE_SENTINEL'}
+                elif mutation=='scope':payload['snapshot']['namespace']='istio-system'
+                elif mutation=='kind':payload['snapshot']['kind']='Secret'
+                elif mutation=='count':payload['snapshot']['totalCount']=True
+                elif mutation=='digest':payload['snapshot']['inventorySHA256']='0'*64
+                elif mutation=='source':payload['retainedSourceSHA256']=journal['retainedSourceSHA256']='0'*64
+                elif mutation=='alias':payload['kind']='cleanup-consumers'
+                save_validation(folder,payload,journal)
+                with patch.dict(os.environ,env,clear=True),patch.object(AGE,'reviewed_source_hash',side_effect=lambda name:AGE.digest((AGE.ROOT/name).read_bytes())):
+                    if mutation=='valid':
+                        descriptor=AGE.package_input(root)
+                        try:
+                            self.assertEqual(os.read(descriptor,AGE.VALIDATION_INPUT_LIMIT+1),(folder/AGE.VALIDATION_NAME).read_bytes())
+                            with self.assertRaises(OSError):os.write(descriptor,b'foreign')
+                        finally:os.close(descriptor)
+                    else:
+                        with self.assertRaises(ValueError):AGE.package_input(root)
+
     def test_application_check_binding_selection_and_private_schema(self):
         for mutation in ('valid','task','phase','binding','hash','stage','earlier','missing-first','link','mode'):
             with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as temporary:

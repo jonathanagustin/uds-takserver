@@ -181,11 +181,14 @@ def cli_preflight(command):
         missing=[flag for flag in flags if flag not in available]
         D.require(not missing,'pinned Zarf '+operation+' CLI lacks required flags: '+', '.join(missing))
 
-def require_clean_objects(namespace,kind,objects):
+def clean_objects(namespace,kind,objects):
     if namespace=='pepr-system':
         objects=[x for x in objects if x['metadata']['name'] in D.PEPR or x['metadata'].get('labels',{}).get('name')=='takserver-oidc']
     if kind=='serviceaccounts':objects=[x for x in objects if x['metadata']['name']!='default']
-    D.require(not objects,'retained application state prevents clean strict install: '+kind)
+    return objects
+
+def require_clean_objects(namespace,kind,objects):
+    D.require(not clean_objects(namespace,kind,objects),'retained application state prevents clean strict install: '+kind)
 
 PACKAGE_FAILURE='PRIVATE-package-command-failure.json'
 APPLICATION_FAILURE='PRIVATE-application-check-failure.json'
@@ -491,9 +494,10 @@ class PackageTrial(D.Driver):
         # First private failure wins; later cleanup failures cannot replace it.
         if 'firstPrivateFailure' in self.state or 'packageCommandFailure' in self.state:return
         D.require(phase in D.PHASES, 'unknown retained validation phase')
-        D.require(kind in ('stored-hooks-drift','core-inventory-drift','cleanup-consumers','cleanup-resource-drift'),'unknown retained validation kind')
+        D.require(kind in ('stored-hooks-drift','core-inventory-drift','cleanup-consumers','cleanup-resource-drift','cleanup-clean-inventory'),'unknown retained validation kind')
         {'stored-hooks-drift':R.validate_source_failure,'core-inventory-drift':R.validate_core_failure,
-         'cleanup-consumers':R.validate_consumer_failure,'cleanup-resource-drift':R.validate_cleanup_drift}[kind](snapshot)
+         'cleanup-consumers':R.validate_consumer_failure,'cleanup-resource-drift':R.validate_cleanup_drift,
+         'cleanup-clean-inventory':R.validate_clean_inventory_failure}[kind](snapshot)
         hashes={'packageDriverSHA256':digest(Path(__file__)), 'driverSHA256':digest(HERE/'drive.py'),
                 'retainedSourceSHA256':digest(HERE/'retained_state.py')}
         payload={'schema':1,'type':'retained-source-validation','kind':kind,
@@ -653,6 +657,8 @@ class PackageTrial(D.Driver):
         self.observe('shared')
 
     def clean_application_state(self):
+        # Retain only the last rejected probe, never a later re-query or object body.
+        self._clean_application_inventory_failure=None
         for ns,kinds in [(D.NS,('deployments','statefulsets','jobs','pods','persistentvolumeclaims','secrets','configmaps','services','serviceaccounts','roles','rolebindings','packages.uds.dev')),
                          ('cloudtak',('deployments','statefulsets','jobs','pods','persistentvolumeclaims','secrets','configmaps','services','serviceaccounts','roles','rolebindings','packages.uds.dev')),
                          ('pepr-system',('deployments','secrets'))]:
@@ -664,11 +670,34 @@ class PackageTrial(D.Driver):
                     retained=[]
                     for obj in objects:
                         if obj['metadata']['name'] in ('kube-root-ca.crt','istio-ca-root-cert','uds-trust-bundle'):
-                            R.preserved_trust(self,obj,self.state['preservedTrustMaps'])
+                            try:R.preserved_trust(self,obj,self.state['preservedTrustMaps'])
+                            except ValueError:
+                                try:self._clean_application_inventory_failure=R.clean_inventory_failure(ns,kind,[obj],'preserved-trust-changed')
+                                except Exception:pass  # Optional diagnostics cannot waive the original guard.
+                                raise
                         else:retained.append(obj)
                     objects=retained
+                remaining=clean_objects(ns,kind,objects)
+                if remaining:
+                    try:self._clean_application_inventory_failure=R.clean_inventory_failure(ns,kind,remaining)
+                    except Exception:pass  # Preserve the original clean-state rejection.
                 require_clean_objects(ns,kind,objects)
         return {'clean':True}
+
+    def wait_clean_application_state(self):
+        self._clean_application_inventory_failure=None
+        try:self.wait(self.clean_application_state,300)
+        except ValueError as failure:
+            snapshot=self._clean_application_inventory_failure
+            # This prefix belongs to the reviewed Driver.wait implementation;
+            # no error message is persisted, and guard failures are not relabeled.
+            if str(failure).startswith('convergence timeout: ') and snapshot is not None:
+                try:self.capture_retained_validation(snapshot,'rollback',kind='cleanup-clean-inventory')
+                except Exception as error:
+                    self.capture_retained_diagnostic_callsite(error)
+                    try:self.journal('retained-source-diagnostic-unavailable',phase='rollback')
+                    except Exception:pass
+            raise
 
     def fresh_strict(self):
         self.guard();self.core_unchanged();self.inputs_unchanged()
@@ -709,7 +738,7 @@ class PackageTrial(D.Driver):
                 except Exception as error:self.capture_retained_diagnostic_callsite(error)
                 raise
             self.journal('retained-object-conditionally-removed',kind=record['kind'],name=record['name'],uid=record['uid'])
-        self.wait(self.clean_application_state,300)
+        self.wait_clean_application_state()
         # New install has new Deployment/Package UIDs; retain old observations in journal.
         self.state['previousInstall']={k:self.state[k] for k in ('packageUID','deploymentUIDs','peprUIDs','backendTargets')}
         self.run_package(deploy_command(self.bound,'strict'),1500)

@@ -443,3 +443,30 @@ The owned container is removed afterward. Receipt SHA-256:
 `c1261ad78b2bb7325225e22b1816dc876a4258ec8fd68571aba36cb9c1352e4d`.
 This is scoped controller/API evidence. A fresh-strict package trial remains
 required before claiming full migration acceptance.
+
+### Last rejected clean-install inventory
+
+After the exact retained-object deletions, fresh strict still requires three
+stable clean-application-state probes. Run 43751141729 on source
+`a5c0cc414a4de737423d81ff62900c5aad69d435` completed all nine conditional retained
+deletions, then failed this final convergence gate. Published proof/callsite hashes
+were verified; no encrypted inventory existed, so the leftover kind and identity
+remain unknown. This is not fresh-strict acceptance and does not authorize ARM.
+
+A convergence timeout can now preserve the last rejected clean-state probe as
+`cleanup-clean-inventory` in the existing encrypted first-private-failure channel.
+The snapshot fixes namespace/resource scope, rejection reason, count and a digest
+of the full projected inventory. It carries at most sixteen sorted identities,
+resource versions, deletion flags and complete-object digests, with explicit
+truncation. No object bodies, secret values, arbitrary labels, annotations or
+error messages are copied. Preserved trust-map drift uses the same bounded shape
+and a fixed reason. The existing default-account, unrelated Core/Pepr and verified
+trust-map exemptions stay unchanged.
+
+This optional diagnostic never authorizes deletion or a fresh install. The
+original refusal propagates even if capture fails. A successful subsequent probe
+clears the prior snapshot; query/guard failures do not invent inventory, and no
+later re-query replaces the last rejected observation. Source/run/attempt hashes,
+closed schema validation, private mode0600, sealed encryption input and the
+first-failure rule apply before ciphertext publication. No unchanged pilot retry
+is justified by the earlier failure alone.
