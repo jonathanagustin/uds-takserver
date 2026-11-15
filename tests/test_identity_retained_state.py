@@ -117,6 +117,7 @@ class RetainedStateGuards(unittest.TestCase):
         for status,shape in (({},'absent'),({'conditions':None},'null'),
                              ({'conditions':[]},'list'),({'conditions':'PRIVATE_VALUE'},'other')):
             facts=R.condition_facts(status)
+            facts.pop('fieldsSHA256',None)
             self.assertEqual(facts,{'shape':shape,'count':0,'knownTypes':{},'otherTypeCount':0})
             self.assertNotIn('PRIVATE',json.dumps(facts))
         for conditions in ([{}]*33,['PRIVATE_VALUE']):
@@ -132,6 +133,7 @@ class RetainedStateGuards(unittest.TestCase):
             {'type':'Resizing','status':'PRIVATE_STATUS'},
             {'type':'PRIVATE_TYPE','status':'True'},
             {'type':{'PRIVATE_KEY':1},'status':'True'}]})
+        self.assertEqual(set(facts.pop('fieldsSHA256')),R.PVC_CONDITION_DIGEST_KEYS)
         self.assertEqual(facts,{'shape':'list','count':4,'knownTypes':{'Resizing':['Other','True']},'otherTypeCount':2})
         self.assertNotIn('PRIVATE',json.dumps(facts))
         for mutate in (lambda v:v.update(extra='private'),lambda v:v.update(count=True),
@@ -142,6 +144,32 @@ class RetainedStateGuards(unittest.TestCase):
                        lambda v:v.update(otherTypeCount=1),lambda v:v.update(shape='absent')):
             bad=copy.deepcopy(facts);mutate(bad)
             with self.assertRaises(ValueError):R.validate_condition_facts(bad)
+
+    def test_condition_field_digests_distinguish_changes_without_values(self):
+        original={'conditions':[{'type':'PRIVATE_TYPE','status':'PRIVATE_STATUS',
+            'reason':'PRIVATE_REASON','message':'PRIVATE_MESSAGE','lastProbeTime':'PRIVATE_TIME',
+            'lastTransitionTime':'PRIVATE_TRANSITION','PRIVATE_KEY':'PRIVATE_VALUE'}]}
+        baseline=R.condition_facts(original)
+        self.assertNotIn('PRIVATE',json.dumps(baseline))
+        for field,group in (('type','type'),('status','status'),('reason','detail'),
+                            ('message','detail'),('lastProbeTime','timestamps'),
+                            ('lastTransitionTime','timestamps'),('PRIVATE_KEY','other')):
+            changed=copy.deepcopy(original);changed['conditions'][0][field]='OTHER_PRIVATE_VALUE'
+            facts=R.condition_facts(changed)
+            self.assertEqual([key for key in baseline['fieldsSHA256'] if
+                baseline['fieldsSHA256'][key]!=facts['fieldsSHA256'][key]],[group])
+            self.assertNotIn('PRIVATE',json.dumps(facts))
+        absent=R.condition_facts({'conditions':[{}]})
+        null=R.condition_facts({'conditions':[{'lastProbeTime':None}]})
+        self.assertNotEqual(absent['fieldsSHA256']['timestamps'],null['fieldsSHA256']['timestamps'])
+        for mutate in (lambda v:v['fieldsSHA256'].update(PRIVATE_KEY='a'*64),
+                       lambda v:v['fieldsSHA256'].pop('type'),
+                       lambda v:v['fieldsSHA256'].update(type='PRIVATE_VALUE'),
+                       lambda v:v.update(fieldsSHA256=[]),lambda v:v.update(shape='absent',count=0,otherTypeCount=0)):
+            bad=copy.deepcopy(baseline);mutate(bad)
+            with self.assertRaises(ValueError):R.validate_condition_facts(bad)
+        legacy=copy.deepcopy(baseline);del legacy['fieldsSHA256']
+        self.assertEqual(R.validate_condition_facts(legacy),legacy)
 
     def test_oversized_condition_detail_preserves_fingerprints_and_delete_refusal(self):
         conditions=[{'type':sorted(R.PVC_CONDITION_TYPES)[i%6],'status':'Unknown','message':'PRIVATE_MESSAGE'} for i in range(32)]
@@ -160,6 +188,26 @@ class RetainedStateGuards(unittest.TestCase):
         for value in snapshot['pvcState'].values():
             self.assertIn('statusFieldsSHA256',value)
             self.assertNotIn('conditionFacts',value)
+        self.assertEqual(R.validate_cleanup_drift(snapshot),snapshot)
+
+    def test_condition_digest_overflow_preserves_small_facts_and_baseline(self):
+        conditions=[{'type':'PRIVATE_TYPE','status':'True','message':'PRIVATE_MESSAGE'}]
+        obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver','name':'x'*100,
+             'uid':'u'*100,'resourceVersion':'1'*253},'spec':{},'status':{'conditions':conditions}}
+        rec=self.record(obj);rec['parent']={'volumeName':'bound-volume','volumeUID':'bound-pv'}
+        rec['pvcState']=R.pvc_state(obj);original=copy.deepcopy(rec['pvcState'])
+        obj['metadata']['resourceVersion']='2'*253;obj['status']['conditions'][0]['status']='False'
+        driver=self.driver(obj)
+        with patch.object(R,'delete_record') as delete:
+            with self.assertRaisesRegex(ValueError,'identity/metadata changed'):R.conditional_delete(driver,rec)
+            delete.assert_not_called()
+        snapshot=driver._retained_cleanup_drift
+        self.assertEqual(rec['pvcState'],original)
+        self.assertLessEqual(len(json.dumps(snapshot).encode()),4096)
+        for value in snapshot['pvcState'].values():
+            self.assertIn('statusFieldsSHA256',value)
+            self.assertIn('conditionFacts',value)
+            self.assertNotIn('fieldsSHA256',value['conditionFacts'])
         self.assertEqual(R.validate_cleanup_drift(snapshot),snapshot)
 
     def setup_fixture(self):

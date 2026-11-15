@@ -382,3 +382,12 @@ counted without emitting their names. Reasons, messages, timestamps and arbitrar
 condition values are never emitted. Invalid or oversized detail falls back to
 the existing fingerprints without changing the retained baseline. The snapshot
 keeps its 4 KiB bound and resource-version drift still forbids deletion.
+
+For a bounded condition list, optional `fieldsSHA256` groups digest type, status,
+reason/message detail, probe/transition timestamps and all other fields. Only
+these five fixed group names and digests are emitted, including for unknown
+condition types. Presence and list ordering remain significant. This can narrow
+a changed condition fingerprint without exposing raw keys or values; it does
+not establish controller causality. If the snapshot exceeds 4 KiB, these extra
+digests are dropped first, then condition facts if needed, preserving existing
+fingerprints and the immutable baseline. Legacy condition facts remain valid.

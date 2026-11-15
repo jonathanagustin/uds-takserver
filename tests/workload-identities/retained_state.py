@@ -437,9 +437,13 @@ PVC_STATUS_DIGEST_KEYS=set(PVC_STATUS_FIELDS)|{'other'}
 PVC_CONDITION_TYPES={'Resizing','FileSystemResizePending','ControllerResizeError',
                      'NodeResizeError','ModifyVolumeError','ModifyingVolume'}
 PVC_CONDITION_STATUSES={'True','False','Unknown','Other'}
+PVC_CONDITION_FIELD_GROUPS={'type':('type',),'status':('status',),
+    'detail':('reason','message'),'timestamps':('lastProbeTime','lastTransitionTime')}
+PVC_CONDITION_DIGEST_KEYS=set(PVC_CONDITION_FIELD_GROUPS)|{'other'}
 
 def validate_condition_facts(value):
-    require(isinstance(value,dict) and set(value)=={'shape','count','knownTypes','otherTypeCount'},'PVC condition facts schema differs')
+    require(isinstance(value,dict) and set(value) in ({'shape','count','knownTypes','otherTypeCount'},
+            {'shape','count','knownTypes','otherTypeCount','fieldsSHA256'}),'PVC condition facts schema differs')
     require(value['shape'] in ('absent','null','list','other') and type(value['count']) is int and
             0<=value['count']<=32 and type(value['otherTypeCount']) is int and
             0<=value['otherTypeCount']<=value['count'],'PVC condition facts bound differs')
@@ -451,6 +455,12 @@ def validate_condition_facts(value):
                 statuses==sorted(statuses),'PVC condition status differs')
     require(sum(map(len,known.values()))+value['otherTypeCount']==value['count'],'PVC condition count differs')
     require(value['shape']=='list' or value['count']==0,'PVC condition shape differs')
+    if 'fieldsSHA256' in value:
+        fields=value['fieldsSHA256']
+        require(value['shape']=='list' and isinstance(fields,dict) and
+                set(fields)==PVC_CONDITION_DIGEST_KEYS,'PVC condition field schema differs')
+        require(all(isinstance(digest,str) and re.fullmatch('[0-9a-f]{64}',digest)
+                    for digest in fields.values()),'PVC condition field digest differs')
     return value
 
 def condition_facts(status):
@@ -469,6 +479,13 @@ def condition_facts(status):
             if not isinstance(state,str) or state not in PVC_CONDITION_STATUSES:state='Other'
             result['knownTypes'].setdefault(kind,[]).append(state)
         for statuses in result['knownTypes'].values():statuses.sort()
+        # Fixed group names and digests only; arbitrary condition values/keys
+        # never leave the input object. Preserve missing/null and list ordering.
+        result['fieldsSHA256']={group:sha([{key:{'present':key in item,'value':item.get(key)}
+            for key in keys} for item in value]) for group,keys in PVC_CONDITION_FIELD_GROUPS.items()}
+        known_fields={key for keys in PVC_CONDITION_FIELD_GROUPS.values() for key in keys}
+        result['fieldsSHA256']['other']=sha([{key:entry for key,entry in item.items()
+            if key not in known_fields} for item in value])
     return validate_condition_facts(result)
 
 def validate_pvc_state(value):
@@ -544,6 +561,8 @@ def conditional_delete(driver,rec):
                 try:
                     baseline=copy.deepcopy(validate_pvc_state(rec['pvcState']));current_state=pvc_state(current)
                     snapshot['pvcState']={'expected':baseline,'observed':current_state}
+                    if len(json.dumps(snapshot).encode())>4096:
+                        for state in snapshot['pvcState'].values():state.get('conditionFacts',{}).pop('fieldsSHA256',None)
                     if len(json.dumps(snapshot).encode())>4096:
                         for state in snapshot['pvcState'].values():state.pop('conditionFacts',None)
                 except Exception:pass  # Keep the basic identity diagnostic if extra capture fails.
