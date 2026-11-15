@@ -26,6 +26,7 @@
       "workflow_snapshot": "source/amd64-startup.yaml.txt"
     }
   ],
+  "final_status_sha256": "5f60a286960199ceef227d8f53b7d1577d34358f71e6952e25af2a956c2df31a",
   "incomplete_qualifications": [
     {
       "accepted_pair": false,

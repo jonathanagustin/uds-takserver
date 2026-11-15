@@ -40,8 +40,10 @@ the checker. The existing within-pair platform/configuration/identity guards sta
 intact. Across-install configuration fingerprints include resource identities and
 are not proof of byte-identical settings or secret equivalence.
 
-ARM64 failed the Core-restore step before the cold boundary. Its observed step
-metadata is retained in `arm-status.json`; no ARM64 phase or accepted pair is
+The overall workflow ended cancelled: AMD64 succeeded and ARM64 ended cancelled
+after failing the Core-restore step before the cold boundary. Its observed step
+metadata is retained in `arm-status.json`, and the final run/job state in
+`final-status.json`; no ARM64 phase or accepted pair is
 reported from this run. This does not replace the earlier successful ARM64 pair
 or explain the restore failure. Post-failure upload/cleanup status is separate
 from application qualification.

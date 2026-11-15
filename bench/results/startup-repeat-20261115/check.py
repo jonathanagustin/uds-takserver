@@ -176,6 +176,12 @@ def verify(root=ROOT):
         steps=[step for step in arm['steps'] if step['name']==name]
         require(len(steps)==1 and steps[0]['status']=='completed' and steps[0]['conclusion']=='skipped',
                 'unexpected ARM application measurement')
+    final = decode(read(root/'final-status.json',manifest['final_status_sha256']))
+    require(final['run']['id']==43766367603 and final['run']['run_attempt']==1 and
+            final['run']['head_sha']==job['head_sha'] and final['run']['status']=='completed' and
+            final['run']['conclusion']=='cancelled' and final['arm_job']['id']==132972283122 and
+            final['arm_job']['status']=='completed' and final['arm_job']['conclusion']=='cancelled',
+            'final partial-run status differs')
     datasets = manifest['datasets']
     require(len(datasets) == 1 and {row['architecture'] for row in datasets} == {'amd64'}, 'cohort inventory differs')
     rows, spans, clusters = [], [], set()
