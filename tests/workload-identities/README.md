@@ -391,3 +391,14 @@ a changed condition fingerprint without exposing raw keys or values; it does
 not establish controller causality. If the snapshot exceeds 4 KiB, these extra
 digests are dropped first, then condition facts if needed, preserving existing
 fingerprints and the immutable baseline. Legacy condition facts remain valid.
+
+PVC cleanup observations request `--show-managed-fields=true` in the same API
+read, retaining UID/resourceVersion binding without a second-read race. Optional
+encrypted `managedOwners` classifies only fixed field-manager strings for
+entries explicitly owning `status.conditions`; unknown manager names and field
+keys remain behind an aggregate digest. The entry count is capped at 32 and the
+input at 64 KiB. Field-manager codes are ownership hints, not authenticated
+controller identities or permission to delete. Missing/malformed hints leave
+existing fingerprints intact. Under the 4 KiB snapshot cap, optional condition
+digests drop first, then manager hints, then condition facts. The retained
+baseline and exact resource-version deletion refusal remain unchanged.

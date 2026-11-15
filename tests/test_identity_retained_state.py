@@ -113,6 +113,98 @@ class RetainedStateGuards(unittest.TestCase):
             else:bad['statusFieldsSHA256']=[]
             with self.assertRaises(ValueError):R.validate_pvc_state(bad)
 
+    def owner_entry(self,manager,field='f:conditions'):
+        return {'manager':manager,'operation':'PRIVATE_OPERATION','subresource':'status','fieldsType':'FieldsV1',
+                'fieldsV1':{'f:status':{field:{'k:PRIVATE_CONDITION':{'f:PRIVATE_VALUE':{}}}}}}
+
+    def test_managed_condition_owners_are_fixed_hints_and_digest_only(self):
+        entries=[self.owner_entry('k3s'),self.owner_entry('PRIVATE_MANAGER'),self.owner_entry('k3s'),
+                 self.owner_entry('kubelet','f:phase')]
+        facts=R.condition_owners({'managedFields':entries})
+        self.assertEqual((facts['count'],facts['codes'],facts['unknownCount']),(3,['K3s','Other'],1))
+        self.assertNotIn('PRIVATE',json.dumps(facts))
+        changed=copy.deepcopy(entries);changed[1]['manager']='ANOTHER_PRIVATE_MANAGER'
+        self.assertNotEqual(facts['sha256'],R.condition_owners({'managedFields':changed})['sha256'])
+        empty=R.condition_owners({'managedFields':[]})
+        self.assertEqual((empty['count'],empty['codes'],empty['unknownCount']),(0,[],0))
+        for mutate in (lambda v:v.update(count=True),lambda v:v.update(count=33),
+                       lambda v:v.update(codes=['PRIVATE_MANAGER']),lambda v:v.update(codes=['Other','K3s']),
+                       lambda v:v.update(unknownCount=0),lambda v:v.update(sha256='PRIVATE_VALUE'),
+                       lambda v:v.update(manager='PRIVATE_MANAGER')):
+            bad=copy.deepcopy(facts);mutate(bad)
+            with self.assertRaises(ValueError):R.validate_condition_owners(bad)
+
+    def test_invalid_managed_fields_cannot_suppress_existing_pvc_fingerprints(self):
+        for entries in ([{}]*33,'PRIVATE_VALUE',[None]):
+            obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver','managedFields':entries},
+                 'status':{'conditions':[]}}
+            state=R.pvc_state(obj)
+            self.assertNotIn('managedOwners',state['conditionFacts'])
+            self.assertIn('fieldsSHA256',state['conditionFacts'])
+            self.assertIn('statusFieldsSHA256',state)
+
+    def test_owner_capture_failure_keeps_existing_pvc_detail(self):
+        obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver','managedFields':[]},
+             'status':{'conditions':[]}}
+        with patch.object(R,'condition_owners',side_effect=RuntimeError('PRIVATE_FAILURE')):
+            state=R.pvc_state(obj)
+        self.assertIn('fieldsSHA256',state['conditionFacts'])
+        self.assertNotIn('managedOwners',state['conditionFacts'])
+        self.assertNotIn('PRIVATE',json.dumps(state))
+
+    def test_pvc_owner_hints_keep_version_refusal_and_baseline_immutable(self):
+        obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver','name':'retained-data',
+             'uid':'original','resourceVersion':'1','managedFields':[self.owner_entry('k3s')]},
+             'status':{'conditions':[{'type':'PRIVATE_TYPE','status':'False'}]}}
+        rec=self.record(obj);rec['parent']={'volumeName':'bound-volume','volumeUID':'bound-pv'}
+        rec['pvcState']=R.pvc_state(obj);baseline=copy.deepcopy(rec['pvcState'])
+        obj['metadata']['resourceVersion']='2';obj['status']['conditions'][0]['status']='True'
+        obj['metadata']['managedFields']=[self.owner_entry('kubectl-patch')]
+        driver=self.driver(obj);driver.kube=MagicMock(side_effect=driver.kube)
+        with patch.object(R,'delete_record') as delete:
+            with self.assertRaisesRegex(ValueError,'identity/metadata changed'):R.conditional_delete(driver,rec)
+            delete.assert_not_called()
+        snapshot=driver._retained_cleanup_drift
+        self.assertEqual(rec['pvcState'],baseline)
+        self.assertEqual(snapshot['pvcState']['expected']['conditionFacts']['managedOwners']['codes'],['K3s'])
+        self.assertEqual(snapshot['pvcState']['observed']['conditionFacts']['managedOwners']['codes'],['KubectlPatch'])
+        self.assertNotIn('PRIVATE',json.dumps(snapshot))
+        self.assertLessEqual(len(json.dumps(snapshot).encode()),4096)
+        self.assertIn('--show-managed-fields=true',driver.kube.call_args.args)
+
+    def test_owner_hint_overflow_keeps_fingerprints_and_refuses_delete(self):
+        for width in (1,253):
+            with self.subTest(version_width=width):
+                entries=[self.owner_entry(manager) for manager in R.PVC_MANAGER_CODES]
+                obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver','name':'retained-data',
+                     'uid':'original','resourceVersion':'1'*width,'managedFields':entries},
+                     'status':{'conditions':[{'type':'PRIVATE_TYPE','status':'False'}]}}
+                rec=self.record(obj);rec['parent']={'volumeName':'bound-volume','volumeUID':'bound-pv'}
+                rec['pvcState']=R.pvc_state(obj);baseline=copy.deepcopy(rec['pvcState'])
+                obj['metadata']['resourceVersion']='2'*width;obj['status']['conditions'][0]['status']='True'
+                driver=self.driver(obj)
+                with patch.object(R,'delete_record') as delete:
+                    with self.assertRaisesRegex(ValueError,'identity/metadata changed'):R.conditional_delete(driver,rec)
+                    delete.assert_not_called()
+                snapshot=driver._retained_cleanup_drift
+                self.assertEqual(rec['pvcState'],baseline)
+                self.assertLessEqual(len(json.dumps(snapshot).encode()),4096)
+                for state in snapshot['pvcState'].values():self.assertIn('statusFieldsSHA256',state)
+                self.assertNotIn('PRIVATE',json.dumps(snapshot))
+                R.validate_cleanup_drift(snapshot)
+
+    def test_cleanup_snapshot_reads_pvc_managed_fields_in_same_observation(self):
+        obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver','name':'retained-data',
+             'uid':'original','resourceVersion':'1','managedFields':[self.owner_entry('k3s')]},'status':{}}
+        driver=SimpleNamespace(kube=MagicMock(return_value=json.dumps(obj)),
+                               get=MagicMock(side_effect=AssertionError('no second PVC read')))
+        proof={'source':{},'records':[{'kind':'PersistentVolumeClaim','name':'retained-data','namespace':'takserver'}]}
+        with patch.object(R,'verify'),patch.object(R,'cleanup_allowed',return_value=True),patch.object(R,'claim_parent',return_value={}):
+            records=R.cleanup_snapshot(driver,proof)
+        self.assertEqual(len(records),1);self.assertEqual(driver.kube.call_count,1)
+        self.assertIn('--show-managed-fields=true',driver.kube.call_args.args)
+        self.assertEqual(records[0]['pvcState']['conditionFacts']['managedOwners']['codes'],['K3s'])
+
     def test_condition_facts_shapes_are_fixed_and_optional(self):
         for status,shape in (({},'absent'),({'conditions':None},'null'),
                              ({'conditions':[]},'list'),({'conditions':'PRIVATE_VALUE'},'other')):

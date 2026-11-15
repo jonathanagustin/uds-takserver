@@ -156,7 +156,9 @@ class EncryptedDiagnosticGuards(unittest.TestCase):
                        'allocatedResources','resizeStatus','allocatedResourceStatuses',
                        'currentVolumeAttributesClassName','modifyVolumeStatus','other')}}
             state['conditionFacts']={'shape':'list','count':1,'knownTypes':{'Resizing':['True']},'otherTypeCount':0,
-                'fieldsSHA256':{key:'0'*64 for key in ('type','status','detail','timestamps','other')}}
+                'fieldsSHA256':{key:'0'*64 for key in ('type','status','detail','timestamps','other')},
+                'managedOwners':{'count':1,'codes':['K3s'],'unknownCount':0,'sha256':'1'*64}}
+            state['conditionFacts'].pop('fieldsSHA256')  # Model the bounded ownership-detail fallback.
             payload.update(kind='cleanup-resource-drift',snapshot={'schema':1,'expected':expected,
                 'observed':{**expected,'resourceVersion':'2'},'changedFields':['resourceVersion'],
                 'pvcState':{'expected':state,'observed':{**state,'finalizersSHA256':'e'*64,'pvcProtection':False}}})

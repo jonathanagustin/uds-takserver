@@ -368,7 +368,9 @@ def cleanup_snapshot(driver,proof):
     verify(driver,proof,remove_sentinels=True);result=[]
     for rec in proof['records']:
         if cleanup_allowed(rec):
-            current=driver.get(rec['kind'],rec['name'],namespace=rec['namespace'])
+            current=(json.loads(driver.kube('get',rec['kind'],rec['name'],'-n',rec['namespace'],
+                '--show-managed-fields=true','-o','json')) if rec['kind']=='PersistentVolumeClaim' else
+                driver.get(rec['kind'],rec['name'],namespace=rec['namespace']))
             if rec['name']=='takserver-startup':startup_map(current)
             if rec['name'] in ('cloudtak-tak-admin','takclient-enrollment'):generated_secret(driver,current,cleanup=True)
             item=resource_record(current);item['origin']=proof['source']
@@ -440,10 +442,41 @@ PVC_CONDITION_STATUSES={'True','False','Unknown','Other'}
 PVC_CONDITION_FIELD_GROUPS={'type':('type',),'status':('status',),
     'detail':('reason','message'),'timestamps':('lastProbeTime','lastTransitionTime')}
 PVC_CONDITION_DIGEST_KEYS=set(PVC_CONDITION_FIELD_GROUPS)|{'other'}
+# Field-manager strings are hints, not authenticated controller identities.
+PVC_MANAGER_CODES={'k3s':'K3s','kube-controller-manager':'KubeController','kubelet':'Kubelet',
+    'velero':'Velero','pepr':'Pepr','zarf':'Zarf','local-path-provisioner':'LocalPath',
+    'kubectl-patch':'KubectlPatch','kubectl-edit':'KubectlEdit','kubectl-client-side-apply':'KubectlApply'}
+
+def validate_condition_owners(value):
+    require(isinstance(value,dict) and set(value)=={'count','codes','unknownCount','sha256'},'PVC managed owner schema differs')
+    require(type(value['count']) is int and 0<=value['count']<=32 and type(value['unknownCount']) is int and
+            0<=value['unknownCount']<=value['count'],'PVC managed owner bound differs')
+    codes=value['codes']
+    require(isinstance(codes,list) and all(isinstance(code,str) and code in set(PVC_MANAGER_CODES.values())|{'Other'} for code in codes) and
+            codes==sorted(set(codes)) and len(codes)<=value['count'] and bool(codes)==bool(value['count']) and
+            ('Other' in codes)==bool(value['unknownCount']),'PVC managed owner code differs')
+    require(isinstance(value['sha256'],str) and re.fullmatch('[0-9a-f]{64}',value['sha256']),'PVC managed owner digest differs')
+    return value
+
+def condition_owners(meta):
+    entries=meta['managedFields']
+    require(isinstance(entries,list) and len(entries)<=32 and all(isinstance(entry,dict) for entry in entries) and
+            len(json.dumps(entries).encode())<=64*1024,'PVC managed field input bound differs')
+    relevant=[];codes=set();unknown=0
+    for entry in entries:
+        fields=entry.get('fieldsV1')
+        status=fields.get('f:status') if isinstance(fields,dict) else None
+        if entry.get('fieldsType')!='FieldsV1' or not isinstance(status,dict) or not isinstance(status.get('f:conditions'),dict):continue
+        manager=entry.get('manager');code=PVC_MANAGER_CODES.get(manager,'Other') if isinstance(manager,str) else 'Other'
+        codes.add(code);unknown+=code=='Other'
+        relevant.append({'manager':manager,'operation':entry.get('operation'),'subresource':entry.get('subresource'),
+                         'conditions':status['f:conditions']})
+    # No raw manager, condition key, operation, timestamp or value is emitted.
+    return validate_condition_owners({'count':len(relevant),'codes':sorted(codes),'unknownCount':unknown,'sha256':sha(relevant)})
 
 def validate_condition_facts(value):
-    require(isinstance(value,dict) and set(value) in ({'shape','count','knownTypes','otherTypeCount'},
-            {'shape','count','knownTypes','otherTypeCount','fieldsSHA256'}),'PVC condition facts schema differs')
+    require(isinstance(value,dict) and {'shape','count','knownTypes','otherTypeCount'}<=set(value) and
+            set(value)<={'shape','count','knownTypes','otherTypeCount','fieldsSHA256','managedOwners'},'PVC condition facts schema differs')
     require(value['shape'] in ('absent','null','list','other') and type(value['count']) is int and
             0<=value['count']<=32 and type(value['otherTypeCount']) is int and
             0<=value['otherTypeCount']<=value['count'],'PVC condition facts bound differs')
@@ -461,6 +494,7 @@ def validate_condition_facts(value):
                 set(fields)==PVC_CONDITION_DIGEST_KEYS,'PVC condition field schema differs')
         require(all(isinstance(digest,str) and re.fullmatch('[0-9a-f]{64}',digest)
                     for digest in fields.values()),'PVC condition field digest differs')
+    if 'managedOwners' in value:validate_condition_owners(value['managedOwners'])
     return value
 
 def condition_facts(status):
@@ -519,6 +553,9 @@ def pvc_state(obj):
         'otherFinalizerCount':sum(value!='kubernetes.io/pvc-protection' for value in finalizers)}
     try:state['conditionFacts']=condition_facts(status)
     except ValueError:pass  # Optional detail cannot suppress the existing fingerprints.
+    if 'conditionFacts' in state and 'managedFields' in obj['metadata']:
+        try:state['conditionFacts']['managedOwners']=condition_owners(obj['metadata'])
+        except Exception:pass  # Optional hint failure never suppresses existing fingerprints.
     return validate_pvc_state(state)
 
 def validate_cleanup_drift(snapshot):
@@ -547,7 +584,8 @@ def conditional_delete(driver,rec):
     driver.guard();driver.core_unchanged()
     consumers_gone(driver)
     if not driver.kube('get','namespace',rec['namespace'],'--ignore-not-found','-o','json').strip():return
-    output=driver.kube('get',rec['kind'],rec['name'],'-n',rec['namespace'],'--ignore-not-found','-o','json')
+    output=driver.kube('get',rec['kind'],rec['name'],'-n',rec['namespace'],'--ignore-not-found',
+        *(['--show-managed-fields=true'] if rec['kind']=='PersistentVolumeClaim' else []),'-o','json')
     if not output.strip():return
     current=json.loads(output)
     expected={key:rec[key] for key in CLEANUP_IDENTITY_FIELDS};observed=resource_record(current)
@@ -563,6 +601,8 @@ def conditional_delete(driver,rec):
                     snapshot['pvcState']={'expected':baseline,'observed':current_state}
                     if len(json.dumps(snapshot).encode())>4096:
                         for state in snapshot['pvcState'].values():state.get('conditionFacts',{}).pop('fieldsSHA256',None)
+                    if len(json.dumps(snapshot).encode())>4096:
+                        for state in snapshot['pvcState'].values():state.get('conditionFacts',{}).pop('managedOwners',None)
                     if len(json.dumps(snapshot).encode())>4096:
                         for state in snapshot['pvcState'].values():state.pop('conditionFacts',None)
                 except Exception:pass  # Keep the basic identity diagnostic if extra capture fails.
