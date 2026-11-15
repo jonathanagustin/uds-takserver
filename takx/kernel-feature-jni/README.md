@@ -74,6 +74,16 @@ recorded compiler commands. The controlled-consumer receipt is
 `8d4ece7b77b3312c52f914bd71f6e8e9221374615b924d050e67568212a3b531`.
 This does not qualify every wrapper, allocator or concurrent cleanup path.
 
+A further consumer matrix passes 166 elevation checks, 62 feature bindings and
+typed options/envelope controls, 22 managed callback failure operations with
+listener/child cleanup, and both surface construction orders with 100 concurrent
+calls. Each uses Native09's own Java/Core/JNI, checks exclusive Core/JNI mapping,
+and reports zero strict-JNI warnings. Its receipt is
+`378832301e0a9c0f6dc74faf51e1303bc32532700ab539cda9776b4ebcba3e93`.
+Sixteen test classes/probe libraries reproduce byte for byte from the recorded
+compiler commands. These scoped controls do not qualify all elevation paths or
+listener concurrency.
+
 Two separate animator-owned software pixel controls pass drawing, post-hide
 checks and cleanup without JNI or uncaught runtime failures. These experiments
 use the intermediate nine-file JNI candidate with retained Native07 core,
@@ -85,8 +95,8 @@ The animator harness is still separate from the owned historical draw probe.
 
 ## Remaining gates
 
-The remaining typed/elevation/surface/lifecycle consumers need qualification
-against Native09. Allocation/class-initialization failures, complete cache/peer cleanup,
+The remaining elevation fault/listener/chunk and headed lifecycle consumers need
+qualification against Native09. Allocation/class-initialization failures, complete cache/peer cleanup,
 asynchronous listener concurrency and retained-listener use after disposal need
 qualification. The profile is not integrated into the portable native builder.
 
