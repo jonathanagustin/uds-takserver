@@ -21,7 +21,20 @@
              template<class Ti>
              static void onShutdown(JNIEnv &env, void *opaque) NOTHROWS
              {
-@@ -115,6 +129,7 @@
+@@ -107,20 +121,26 @@
+         template<class T>
+         inline bool InterfaceMarshalContext<T>::isWrapper(JNIEnv &env, jobject obj) NOTHROWS
+         {
+-            if(!javaWrapperType)
++            if(env.ExceptionCheck() || !javaWrapperType || !obj)
+                 return false;
+-            return ATAKMapEngineJNI_equals(&env, javaWrapperType, env.GetObjectClass(obj));
++            Java::JNILocalRef objectType(env, env.GetObjectClass(obj));
++            if(env.ExceptionCheck() || !objectType)
++                return false;
++            return env.IsSameObject(javaWrapperType, objectType.get());
+         }
+         template<class T>
          template<class WrapperType>
          inline TAK::Engine::Util::TAKErr InterfaceMarshalContext<T>::marshal(std::shared_ptr<T> &value, JNIEnv &env, jobject obj) NOTHROWS
          {
@@ -29,7 +42,16 @@
              TAK::Engine::Util::TAKErr code(TAK::Engine::Util::TE_Ok);
              if(!obj)
                  return TAK::Engine::Util::TE_InvalidArg;
-@@ -150,8 +165,19 @@
+             TAK::Engine::Thread::LockPtr lock(NULL, NULL);
+             // check if it's a wrapper, and return
+-            if(isWrapper(env, obj)) {
++            const bool wrapper = isWrapper(env, obj);
++            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++            if(wrapper) {
+                 do {
+                     jobject msourcePtr = env.GetObjectField(obj, javaWrapperPointerField);
+                     if(!Pointer_makeShared<T>(&env, msourcePtr))
+@@ -150,8 +170,19 @@
                  }
              }
  
@@ -51,7 +73,7 @@
  
              return code;
          }
-@@ -224,9 +250,15 @@
+@@ -224,9 +255,15 @@
          template<class WrapperType>
          TAK::Engine::Util::TAKErr InterfaceMarshalContext<T>::marshal(std::unique_ptr<T, void(*)(const T *)> &value, JNIEnv &env, jobject obj) NOTHROWS
          {
@@ -121,7 +143,15 @@
      JNIStringUTF_get(name, env_, (jstring)mname);
  
  }
-@@ -78,7 +81,10 @@
+@@ -70,6 +73,7 @@
+         return;
+     visibilityListeners[clistener] = env->NewWeakGlobalRef(mlistener);
+     env->CallVoidMethod(impl, Layer_class.addOnLayerVisibleChangedListener, mlistener.get());
++    if(env->ExceptionCheck()) return;
+ }
+ const char* ManagedLayer::getName () const throw ()
+ {
+@@ -78,7 +82,10 @@
  bool ManagedLayer::isVisible () const
  {
      LocalJNIEnv env;

@@ -1,6 +1,6 @@
 # Checked feature-renderer JNI source profile
 
-Version 3 stages seven exact C++ files and two interop headers from the frozen
+Version 4 stages seven exact C++ files and two interop headers from the frozen
 Native07 Kernel composition. It adds checked callback boundaries, prevents
 publication of a failed wrapper, rolls back failed listener registration, and
 preserves the first Java exception while clearing a disposed native pointer.
@@ -8,7 +8,7 @@ Actual Kernel version is 8.30.5; the composed parent is not pristine upstream.
 
 The exact parent receipt is
 `54630be999ac532f4724e0c62a5197e42f16f3244e1063022d6121e09cd8990e`.
-All nine pre/postimages, patch bytes and six owned diagnostic sources must match
+All nine pre/postimages, patch bytes and seven owned diagnostic sources must match
 the closed lock. Source preparation grants no runtime or SDK acceptance.
 
 ## Use
@@ -49,7 +49,33 @@ and retains the primary failure over a secondary removal failure. `Pointer.h`
 saves a pending exception around the deleter and pointer-field clearing, so
 ordinary disposal and disposal entered with a pending primary remain JNI-clean.
 
+Version 4 also compares wrapper class identity with JNI `IsSameObject`, using a
+scoped class reference and preserving a lookup exception before cache work.
+Visibility-listener registration checks the Java callback result. These changes
+cover the ordinary cached/listener path; asynchronous cleanup and throwing
+visibility registration remain unqualified.
+
 ## Scoped evidence
+
+The two-boundary causal candidate freshly compiles all 159 JNI units against
+retained Native09 Core and its own Java classes. Review verifies exactly two
+changes relative to Native09, fresh object hashes, identical export names/types
+and identical required libraries. Its receipt is
+`beb8c5efad5bd283c957fd99e33d95208702a7d815c7fd87ffadff89118d0ca1`.
+The owned sequential cache/visibility control passes 16 assertions with zero
+JNI warnings. The same test artifacts against original Native09 JNI produce
+three warnings; both have identical test-class bytes. Positive receipt:
+`506b6c2fddfe4740a71f490564b4583361f781d4df47a1bf4724603df0285934`.
+Three constructor/disposal regression consumers also remain JNI-clean, with
+primary identity and fresh recovery preserved. Their receipt is
+`64a7d70f4ed47e12ff1379c05a35d91df1b1de23b48fdafea052e2cd381d911a`.
+Instrumented and uninstrumented animator replays pass their scoped CPU/pixel
+controls with zero JNI warnings. Their receipts are
+`48909b40946d92025ecb8693d9d635db34d2910769d8f80810e4d4dcad752dc1`
+and `9e457e963b84cbb9a84507f4aaff42393a4e68189d7a465ca8e66bc24164b683`.
+These are causal consumers with retained Core, not complete fresh version-4
+producer or full renderer/SDK/client acceptance. Earlier failures remain retained;
+the pixel result alone does not establish their cause.
 
 Native09 freshly compiled all 815 units (483 core, 159 JNI, 173 Cesium) with all
 nine version-3 files. Independent review verifies object freshness, all source

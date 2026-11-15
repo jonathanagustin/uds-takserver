@@ -23,7 +23,7 @@ class SourceGuards(unittest.TestCase):
                 P.main(args)
 
     def test_contract_rejects_scope_parent_and_acceptance_change(self):
-        for field, value in (('files', {'../foreign.cpp': {}}), ('parent_native_sha256', 'a'*64),
+        for field, value in (('profile', 'native07-checked-feature-callbacks-v3'), ('files', {'../foreign.cpp': {}}), ('parent_native_sha256', 'a'*64),
                              ('strict_callback_accepted', True)):
             with tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary) / 'profile'
