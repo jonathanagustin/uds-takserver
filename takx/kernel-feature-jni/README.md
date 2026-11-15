@@ -81,6 +81,51 @@ changed source relative to Native10 (`jnativelayer.cpp`), and identical exported
 symbol and required-library inventories. This candidate is not a fresh complete
 native graph; earlier Native10 proofs continue to describe version 4 only.
 
+## Fresh version-5 Native11 qualification
+
+Native11 freshly compiles all 815 units (483 Core, 159 JNI, 173 Cesium) with the
+complete version-5 composition and passes the generic CPU/database/logger JNI
+controls. Independent review verifies object freshness and hashes, every source
+and recipe snapshot, 3,861 bound tool files, 119 unchanged JNI headers and its own
+2,701 Java classes. The Java classes match Native10 byte-for-byte; the sole native
+source change relative to Native10 is `jnativelayer.cpp`. No causal objects or
+libraries are adopted. Producer receipt:
+`831ef28172da6a5d3b00bcc6723bc9f9148f1da625c438c7d6399c433f9dddb7`.
+
+The same three registration-failure cases pass against Native11's own Core/JNI
+and Java: 27 checks, zero strict JNI diagnostics, expected exclusive mappings,
+primary exception identity, cleanup attempts and fresh registration recovery.
+Existing constructor/disposal, cache/listener, feature lookup, managed callback,
+elevation/cursor/bulk/scalar and both surface-order controls also pass. The scoped
+headed lifecycle passes three recreation cycles, two live views, worker retirement
+and terminal renderer collections on owned Xvfb/software GL/private font03.
+Independent compilation reproduces all 61 runtime class/probe artifacts byte for
+byte and verifies removal of the owned display and auth file.
+
+| Control cohort | Receipt SHA-256 |
+| --- | --- |
+| Constructor/disposal/cache/listener | `e18d71c98185af03bc3556dc9de3c036366c5cbb21a09114c358c6e239c853ed` |
+| Registration failure/recovery, 3 cases/27 checks | `614d64e34924cad1512e31dae6763613e8bd0d9c7e11435923c54f2c26de9aad` |
+| Elevation/feature/callback/surface matrix | `da66707c1d5291aaba2d5818ebc99a819f3ed3f921bc77338530813472cf249a` |
+| Listener/bounds and direct chunk matrix | `c69f2011a5ca78681bf59cd1370e8a7ea78fc74063c8f577e53705ea529d501a` |
+| Bulk fault matrix | `76924b119a304d75540c37fc93e127f656367cc40443a69a722a70045dfe95ed` |
+| Scalar fault matrix | `99777743190e6eadcd2e8b1030f95de09d6ddae5b65fd2008752b37dda76af85` |
+| Scoped headed lifecycle | `1f183a5476bcd96dc4393eb25b50d7b112a3e50e7a0480f3365e68262be11b6a` |
+
+The retained constructor/cache harness prints a historical Native10 mapping label;
+its wrapper checks the passed library paths. Independent review explicitly verifies
+those arguments and mappings bind Native11 before accepting that log marker.
+An initial registration replay stopped before runtime on a harness baseline-path
+error; its incomplete evidence remains retained separately. The corrected replay
+and all subsequent artifact reviews complete successfully. Pipeline receipt:
+`0a493d9f41eb275b6f035cc5c5562dbf005ec449330cb1aaf41ae1ec158dcae3`.
+
+These are scoped local results. Allocation/class initialization, uncooperative
+Java removal before its own cleanup, asynchronous retained listeners, complete
+cache/peer cleanup, portable builder, contour pixels, hardware/stock-JDK rendering
+and full SDK/client acceptance remain open. All broad acceptance flags stay false.
+Earlier Native10 proofs and pixel failures retain their original source scope.
+
 ## Scoped evidence
 
 The preceding version-4 Native10 producer freshly compiles all 815 units (483 core,
