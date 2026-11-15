@@ -87,10 +87,40 @@ control receipt:
 `fac74b7daa8cfafcdb6c5efa4a7926019ab20378d868b7f41e51cbd91137b01d`.
 Independent review verifies all source/object/input/fixture/log hashes and
 preserved existing exports and required libraries; eight added exports are weak
-template helpers. Fresh Native14 full-graph/consumer qualification is pending.
-This context-level guard does not qualify every direct Pointer helper or
-concurrent mutation of pointer fields. Previous Native13 evidence below remains
-bound to its version-7 inputs.
+template helpers.
+
+Fresh Native14 compiles all 815 units (483 Core, 159 JNI, 173 Cesium), without
+adopting candidate objects or libraries. Independent producer review checks all
+object/source hashes and freshness, recipe snapshots, 3,861 bound tool files,
+119 headers identical to Native07 and its own 2,701 Java classes identical to
+Native13. The only changed source from Native13 is InterfaceMarshalContext.h.
+Producer receipt:
+`e09683c9e43e300e35845fb057b19f992d8595485d5da2435e5c9dab462db290`.
+
+All ten scoped runtime cohorts pass, including the six new inbound cases, seven
+outbound cases, prior feature/listener/registration/removal and elevation controls,
+both surface call orders and the owned Xvfb/software-GL/private-font lifecycle.
+All 71 runtime artifacts reproduce byte-for-byte. Final review rechecks 11,226
+unique input hashes and display/auth cleanup. Pipeline receipt:
+`6e156afd868e868f812c6334b245960a49c33fe1ceac0e4cba130683e1169288`.
+
+| Native14 control cohort | Receipt SHA-256 |
+| --- | --- |
+| Inbound wrapper lifetime | `bd384aa12544120b220b24503e745160a4a816ee014a5184b2effb828748ccbb` |
+| Outbound construction/cache/unique callbacks | `f6bc9dc05a404a5a646ebf9ca154cf829f3c21a80dc74be55834b57a96131369` |
+| Feature constructor/disposal/cache/listeners | `6f9bce1557cd4f77aaf437315ded0761d23ea040e7a8b9488530f87bf315f065` |
+| Visibility registration rollback | `d493f262844e2b04babce0b3fd6d8d4e11c4cadba8abccbd38cc2f6e01e7bd50` |
+| Unknown/repeated listener removal | `189ed1f852dfa4286e4339524d404cfb5f9b3e910d7757290ccb3c360e3ef56f` |
+| Surface and consumer matrix | `09d2d3435718f729804ce726abbd064820f75b2045f1e544d8f6fe489d9d0b44` |
+| Listener/bounds and direct chunks | `827493761a09b4cc95fb69110a17cae24509e7221083fe4f9231a4e9e63653de` |
+| Elevation failure cleanup | `b7d19edda881c897b6040dc94b9af579b8de0a9fbfcbf87aebc07d5a2d58a513` |
+| Scalar return/publication | `b46b85de05758469dc2df8394def8fdb7fc432bd14842c90afe2ff3fde61dc88` |
+| Scoped headed lifecycle | `13393f05351b572e26a982d32b35b051a493895d3f8a16c4c6a20a1e29d1d14c` |
+
+This context-level guard does not qualify every direct Pointer helper, allocation
+failure or concurrent mutation of pointer fields. Full renderer, portable builder,
+SDK and client gates remain open. Previous Native13 evidence below remains bound
+to its version-7 inputs.
 
 ## Outbound wrapper construction and live cache entries
 
