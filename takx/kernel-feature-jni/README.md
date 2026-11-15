@@ -91,6 +91,16 @@ mapping. Its receipt is
 Nine test classes/probe libraries reproduce byte for byte. These controls do
 not establish general asynchronous listener safety.
 
+The cursor/bulk elevation fault matrix also passes 13 cases, including secondary
+cleanup failures, with preserved primary exceptions, zero strict-JNI warnings
+and exclusive Native09 Core/JNI mapping. Its receipt is
+`de067384f9edbc631e84e4e9f1fd10842b7ba7aeefbda7b124359f0824af56f6`.
+
+Six scalar elevation fault cases also pass with zero strict-JNI warnings and
+exclusive Native09 Core/JNI mapping. Their receipt is
+`c245309f3fc30d1cb2637c5dc6368fd9895cb052b12b231945aa22d6befcbe4d`.
+The cursor/bulk and scalar test classes reproduce byte for byte.
+
 Two separate animator-owned software pixel controls pass drawing, post-hide
 checks and cleanup without JNI or uncaught runtime failures. These experiments
 use the intermediate nine-file JNI candidate with retained Native07 core,
@@ -102,8 +112,7 @@ The animator harness is still separate from the owned historical draw probe.
 
 ## Remaining gates
 
-The remaining elevation fault and headed lifecycle consumers need
-qualification against Native09. Allocation/class-initialization failures, complete cache/peer cleanup,
+The remaining headed lifecycle consumers need qualification against Native09. Allocation/class-initialization failures, complete cache/peer cleanup,
 asynchronous listener concurrency and retained-listener use after disposal need
 qualification. The profile is not integrated into the portable native builder.
 
