@@ -3,6 +3,7 @@
 """Private invariants and exact retained-application cleanup, never Core cleanup."""
 import base64
 import copy
+from datetime import datetime
 import hashlib
 import json
 from pathlib import PurePosixPath
@@ -10,6 +11,7 @@ import re
 import shlex
 import ssl
 import tempfile
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -375,7 +377,11 @@ def cleanup_snapshot(driver,proof):
             if rec['name'] in ('cloudtak-tak-admin','takclient-enrollment'):generated_secret(driver,current,cleanup=True)
             item=resource_record(current);item['origin']=proof['source']
             if rec['kind']=='PersistentVolumeClaim':
+                require(item['uid']==rec['uid'],'verified PVC replaced before cleanup snapshot')
                 item['parent']=claim_parent(driver,current)
+                require(item['parent']==rec['parent'],'verified PVC parent changed before cleanup snapshot')
+                barrier=pvc_usage_barrier(current)
+                if barrier is not None:item['pvcUsageBarrier']=barrier
                 try:item['pvcState']=pvc_state(current)
                 except Exception:pass  # Optional evidence cannot change cleanup authorization.
             result.append(item)
@@ -437,7 +443,7 @@ PVC_STATUS_FIELDS=('phase','accessModes','capacity','conditions','allocatedResou
                    'currentVolumeAttributesClassName','modifyVolumeStatus')
 PVC_STATUS_DIGEST_KEYS=set(PVC_STATUS_FIELDS)|{'other'}
 PVC_CONDITION_TYPES={'Resizing','FileSystemResizePending','ControllerResizeError',
-                     'NodeResizeError','ModifyVolumeError','ModifyingVolume'}
+                     'NodeResizeError','ModifyVolumeError','ModifyingVolume','Unused'}
 PVC_CONDITION_STATUSES={'True','False','Unknown','Other'}
 PVC_CONDITION_FIELD_GROUPS={'type':('type',),'status':('status',),
     'detail':('reason','message'),'timestamps':('lastProbeTime','lastTransitionTime')}
@@ -578,6 +584,108 @@ def validate_cleanup_drift(snapshot):
     require(len(json.dumps(snapshot).encode())<=4096,'cleanup drift byte bound')
     return snapshot
 
+def capture_cleanup_drift(driver,rec,current):
+    expected={key:rec[key] for key in CLEANUP_IDENTITY_FIELDS}
+    try:observed=resource_record(current)
+    except Exception:
+        driver._retained_cleanup_drift=None;return
+    # Record only identities and a metadata digest, never object bodies or values.
+    # Capture failure must not mask the deletion refusal or authorize a retry.
+    try:
+        snapshot={'schema':1,'expected':expected,'observed':observed,
+            'changedFields':[key for key in CLEANUP_IDENTITY_FIELDS if expected[key]!=observed[key]]}
+        if rec['kind']=='PersistentVolumeClaim' and 'pvcState' in rec:
+            try:
+                baseline=copy.deepcopy(validate_pvc_state(rec['pvcState']));current_state=pvc_state(current)
+                snapshot['pvcState']={'expected':baseline,'observed':current_state}
+                if len(json.dumps(snapshot).encode())>4096:
+                    for state in snapshot['pvcState'].values():state.get('conditionFacts',{}).pop('fieldsSHA256',None)
+                if len(json.dumps(snapshot).encode())>4096:
+                    for state in snapshot['pvcState'].values():state.get('conditionFacts',{}).pop('managedOwners',None)
+                if len(json.dumps(snapshot).encode())>4096:
+                    for state in snapshot['pvcState'].values():state.pop('conditionFacts',None)
+            except Exception:pass  # Keep the basic identity diagnostic if extra capture fails.
+        driver._retained_cleanup_drift=validate_cleanup_drift(snapshot)
+    except Exception:driver._retained_cleanup_drift=None
+
+# The controller's published in-use -> unused transition is an expected phase
+# boundary. This separate proof is authorization state, not optional diagnostics.
+# It binds every PVC field except RV/managedFields and the one exact known
+# condition. No manager string grants permission; deletion still binds UID + RV.
+def pvc_usage_condition(obj,state):
+    status=obj.get('status',{})
+    conditions=status.get('conditions')
+    if obj.get('kind')!='PersistentVolumeClaim' or status.get('phase')!='Bound' or not isinstance(conditions,list) or len(conditions)!=1:return False
+    value=conditions[0]
+    required={'type','status','reason','message','lastTransitionTime'}
+    if not isinstance(value,dict) or not required<=set(value) or not set(value)<=required|{'lastProbeTime'}:return False
+    reason,message=(('PodUsingPVC','A pod is currently referencing this PVC') if state=='False' else
+                    ('NoPodsUsingPVC','No pods are currently referencing this PVC'))
+    if state not in ('False','True') or any(value.get(key)!=expected for key,expected in
+        (('type','Unused'),('status',state),('reason',reason),('message',message))):return False
+    for key in ('lastTransitionTime','lastProbeTime'):
+        stamp=value.get(key)
+        if key=='lastProbeTime' and stamp is None:continue
+        if not isinstance(stamp,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z',stamp):return False
+        try:datetime.fromisoformat(stamp.replace('Z','+00:00'))
+        except ValueError:return False
+    return True
+
+def pvc_usage_invariant(obj):
+    value=copy.deepcopy(obj)
+    value['metadata'].pop('resourceVersion',None)
+    value['metadata'].pop('managedFields',None)
+    value['status'].pop('conditions',None)
+    return sha(value)
+
+def pvc_usage_barrier(obj):
+    if not pvc_usage_condition(obj,'False'):return None
+    return {'schema':1,'transition':'UnusedFalseToTrue','invariantSHA256':pvc_usage_invariant(obj)}
+
+def validate_pvc_usage_barrier(value):
+    require(isinstance(value,dict) and set(value)=={'schema','transition','invariantSHA256'} and
+            type(value['schema']) is int and value['schema']==1 and value['transition']=='UnusedFalseToTrue' and
+            isinstance(value['invariantSHA256'],str) and re.fullmatch('[0-9a-f]{64}',value['invariantSHA256']),
+            'PVC cleanup barrier differs')
+    return value
+
+def quiescent_pvc_record(rec,current):
+    barrier=validate_pvc_usage_barrier(rec['pvcUsageBarrier'])
+    require(rec['kind']=='PersistentVolumeClaim','PVC cleanup barrier scope differs')
+    observed=resource_record(current)
+    require(all(observed[key]==rec[key] for key in CLEANUP_IDENTITY_FIELDS if key!='resourceVersion'),
+            'retained PVC identity/metadata changed before quiescence')
+    require(pvc_usage_invariant(current)==barrier['invariantSHA256'],
+            'retained PVC invariant changed before quiescence')
+    if pvc_usage_condition(current,'False'):return None
+    require(pvc_usage_condition(current,'True'),'retained PVC usage transition differs')
+    require(observed['resourceVersion']!=rec['resourceVersion'],'PVC usage transition has unchanged resource version')
+    result=copy.deepcopy(rec);result.update(observed);result.pop('pvcUsageBarrier')
+    result.pop('pvcState',None)
+    try:result['pvcState']=pvc_state(current)
+    except Exception:pass  # Optional evidence cannot change cleanup authorization.
+    return result
+
+def quiescent_cleanup_record(driver,rec):
+    if 'pvcUsageBarrier' not in rec:return rec
+    require(cleanup_allowed(rec) and rec['kind']=='PersistentVolumeClaim','PVC cleanup barrier scope differs')
+    require_origin(rec);validate_pvc_usage_barrier(rec['pvcUsageBarrier'])
+    deadline=time.monotonic()+60
+    while True:
+        driver.guard();driver.core_unchanged();consumers_gone(driver)
+        if not driver.kube('get','namespace',rec['namespace'],'--ignore-not-found','-o','json').strip():return rec
+        text=driver.kube('get',rec['kind'],rec['name'],'-n',rec['namespace'],'--ignore-not-found',
+                         '--show-managed-fields=true','-o','json')
+        if not text.strip():return rec
+        current=json.loads(text)
+        try:result=quiescent_pvc_record(rec,current)
+        except ValueError:
+            capture_cleanup_drift(driver,rec,current)
+            raise
+        if result is not None:return result
+        require(time.monotonic()<deadline,'retained PVC usage condition did not settle')
+        time.sleep(min(1,max(0,deadline-time.monotonic())))
+
 def conditional_delete(driver,rec):
     require(cleanup_allowed(rec),'cleanup outside exact retained application scope')
     require_origin(rec)
@@ -590,24 +698,7 @@ def conditional_delete(driver,rec):
     current=json.loads(output)
     expected={key:rec[key] for key in CLEANUP_IDENTITY_FIELDS};observed=resource_record(current)
     if observed!=expected:
-        # Record only identities and a metadata digest, never object bodies or values.
-        # Capture failure must not mask the deletion refusal or authorize a retry.
-        try:
-            snapshot={'schema':1,'expected':expected,'observed':observed,
-                'changedFields':[key for key in CLEANUP_IDENTITY_FIELDS if expected[key]!=observed[key]]}
-            if rec['kind']=='PersistentVolumeClaim' and 'pvcState' in rec:
-                try:
-                    baseline=copy.deepcopy(validate_pvc_state(rec['pvcState']));current_state=pvc_state(current)
-                    snapshot['pvcState']={'expected':baseline,'observed':current_state}
-                    if len(json.dumps(snapshot).encode())>4096:
-                        for state in snapshot['pvcState'].values():state.get('conditionFacts',{}).pop('fieldsSHA256',None)
-                    if len(json.dumps(snapshot).encode())>4096:
-                        for state in snapshot['pvcState'].values():state.get('conditionFacts',{}).pop('managedOwners',None)
-                    if len(json.dumps(snapshot).encode())>4096:
-                        for state in snapshot['pvcState'].values():state.pop('conditionFacts',None)
-                except Exception:pass  # Keep the basic identity diagnostic if extra capture fails.
-            driver._retained_cleanup_drift=validate_cleanup_drift(snapshot)
-        except Exception:driver._retained_cleanup_drift=None
+        capture_cleanup_drift(driver,rec,current)
         raise ValueError('retained resource identity/metadata changed')
     if rec['kind']=='PersistentVolumeClaim':
         volume=driver.get('persistentvolume',rec['parent']['volumeName'],namespace='default')

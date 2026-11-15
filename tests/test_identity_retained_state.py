@@ -198,7 +198,7 @@ class RetainedStateGuards(unittest.TestCase):
              'uid':'original','resourceVersion':'1','managedFields':[self.owner_entry('k3s')]},'status':{}}
         driver=SimpleNamespace(kube=MagicMock(return_value=json.dumps(obj)),
                                get=MagicMock(side_effect=AssertionError('no second PVC read')))
-        proof={'source':{},'records':[{'kind':'PersistentVolumeClaim','name':'retained-data','namespace':'takserver'}]}
+        proof={'source':{},'records':[{'kind':'PersistentVolumeClaim','name':'retained-data','namespace':'takserver','uid':'original','parent':{}}]}
         with patch.object(R,'verify'),patch.object(R,'cleanup_allowed',return_value=True),patch.object(R,'claim_parent',return_value={}):
             records=R.cleanup_snapshot(driver,proof)
         self.assertEqual(len(records),1);self.assertEqual(driver.kube.call_count,1)

@@ -696,9 +696,12 @@ class PackageTrial(D.Driver):
                 try:self.journal('retained-source-diagnostic-unavailable',phase='rollback')
                 except Exception:pass
             raise
-        for record in self.state['retainedCleanup']:
+        for index,record in enumerate(self.state['retainedCleanup']):
             self._retained_cleanup_drift=None
-            try:R.conditional_delete(self,record)
+            try:
+                record=R.quiescent_cleanup_record(self,record)
+                self.state['retainedCleanup'][index]=record
+                R.conditional_delete(self,record)
             except ValueError:
                 try:
                     if self._retained_cleanup_drift is not None:
