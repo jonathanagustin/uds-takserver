@@ -120,6 +120,15 @@ Their receipts are
 and `8a94bb25b5beef34a4e42424d1a2476563209ba9987e8ce9749aedfa2aa7daa9`.
 The animator harness is still separate from the owned historical draw probe.
 
+The first complete Native09 animator draw attempt stopped at an owned database
+path collision (replay12); its failed evidence remains retained. With separate
+CPU/draw paths (replay13), 597 CPU checks and visible contour pixels pass, but
+post-hide pixels remain at 814 major and 268 minor. All bound input hashes and
+exclusive Native09 Core/JNI mapping verify, with zero strict-JNI warnings.
+This is a failed pixel acceptance result, not an established SDK root cause.
+Its receipt is
+`4e19f0e80c92bcbd4b98c727b38ab72c84c87aec618c533931d3d80ccbf4978a`.
+
 ## Remaining gates
 
 Allocation/class-initialization failures, complete cache/peer cleanup,
