@@ -16,6 +16,9 @@ NATIVE_RECEIPT = '54630be999ac532f4724e0c62a5197e42f16f3244e1063022d6121e09cd899
 JAVA_RECEIPT = 'cc1098f808b9db9af92393f45552f698d67cca15ec5c7f23adcccef64d84d4c0'
 RUNTIME_MANIFEST = 'bc80457f02e5fb41c4e406f2d62b405b21071ad89ed0cbd8fed20c135f711404'
 PROBES = {'ElevationListenerProbe': 112, 'ElevationChunkProbe': 231}
+SCALAR_CASES = [('source:query', False, 4), ('cursor:close', False, 5),
+                ('chunk:getType', False, 6), ('chunk:getBounds', False, 6),
+                ('chunk:sample', False, 6), ('chunk:sample', True, 7)]
 JNI_HEADERS = {'include/jni.h': '1266aea5b9f5d5db1cb6f8e5c6c43cfa7f80bc4f72d7fe42c6131bb939dc70f4', 'include/linux/jni_md.h': '88cb5c33e306900dd35a78d5a439087123b8e91b0986bb5acb42cc9bd2fcc42e'}
 
 
@@ -97,7 +100,8 @@ def fresh_output(output, roots):
         require(output != root and not output.is_relative_to(root) and not root.is_relative_to(output), 'output overlaps input root')
 
 
-def run(native, java, jdk, output):
+def run(native, java, jdk, output, suite='probes'):
+    require(suite in ('probes', 'scalar'), 'unknown control suite')
     native, java, jdk, output = [Path(path).absolute() for path in (native, java, jdk, output)]
     for root in (native, java, jdk):
         require(not any(path.is_symlink() for path in (root, *root.parents)), 'symlink input root refused')
@@ -121,7 +125,7 @@ def run(native, java, jdk, output):
 
     output.mkdir(mode=0o700)
     record = {'schema': 1, 'type': 'frozen-native07-elevation-controls', 'inputs': inputs,
-              'commands': [], 'outputs': artifacts, 'completed': False, 'native_builder_integration': False,
+              'suite': suite, 'commands': [], 'outputs': artifacts, 'completed': False, 'native_builder_integration': False,
               'strict_elevation_accepted': False, 'full_sdk_accepted': False, 'full_client_accepted': False}
 
     def write():
@@ -131,7 +135,10 @@ def run(native, java, jdk, output):
            not key.startswith(('LD_', 'DYLD_', 'JAVA_', '_JAVA_', 'JDK_'))}
     env['LC_ALL'] = 'C'
     try:
-        for probe, checks in PROBES.items():
+        cases = list(PROBES.items()) if suite == 'probes' else [('scalar-' + str(i), case[2]) for i, case in enumerate(SCALAR_CASES)]
+        for probe, checks in cases:
+            scalar = suite == 'scalar'
+            source = 'ElevationScalarControls' if scalar else probe
             folder = output / probe
             folder.mkdir()
             (folder / 'classes').mkdir()
@@ -139,7 +146,7 @@ def run(native, java, jdk, output):
             classpath = ':'.join([str(java / 'classes'), *jars])
             library = folder / 'probe.so'
             commands = [('compile-java', [jdk / 'bin/javac', '--release', '17', '-proc:none', '-cp', classpath,
-                         '-d', folder / 'classes', HERE / 'tests' / (probe + '.java')]),
+                         '-d', folder / 'classes', HERE / 'tests' / (source + '.java')]),
                         ('compile-probe', [compiler, '-std=c++17', '-fPIC', '-shared', '-O1',
                          '-I' + str(native / 'layout/takkernel/engine/src/main/cpp'),
                          '-I' + str(native / 'layout/takkernel/engine/src/main/jni'),
@@ -150,6 +157,11 @@ def run(native, java, jdk, output):
                         ('runtime', [jdk / 'bin/java', '-Xcheck:jni', '-Xmx256m', '-Djava.awt.headless=true',
                          '-cp', str(folder / 'classes') + ':' + classpath, probe,
                          native / 'runtime-native.sha256', library])]
+            if scalar:
+                case, secondary, _checks = SCALAR_CASES[int(probe.split('-')[1])]
+                commands = [commands[0], ('runtime', [jdk / 'bin/java', '-Xcheck:jni', '-Xmx256m',
+                    '-Djava.awt.headless=true', '-cp', str(folder / 'classes') + ':' + classpath,
+                    source, native / 'runtime-native.sha256', case, *(['secondary'] if secondary else [])])]
             for label, argv in commands:
                 unchanged()
                 log = folder / (label + '.log')
@@ -171,11 +183,12 @@ def run(native, java, jdk, output):
                         artifacts[str(product.relative_to(output))] = sha(product)
                 if label == 'runtime':
                     text = log.read_text()
-                    marker = 'ELEVATION_' + ('LISTENER' if probe == 'ElevationListenerProbe' else 'CHUNK')
-                    require(re.search(marker + r'_CONTROLS_PASS checks=' + str(checks) + r'\b', text) and
+                    marker = ('ELEVATION_SCALAR_CONTROLS_PASS case=' + re.escape(case) if scalar else
+                              'ELEVATION_' + ('LISTENER' if probe == 'ElevationListenerProbe' else 'CHUNK') + '_CONTROLS_PASS')
+                    require(re.search(marker + r' checks=' + str(checks) + r'\b', text) and
                             not diagnostics.strict_jni_failures(text), 'strict scoped controls failed')
                 unchanged()
-        record.update(completed=True, functional_checks=sum(PROBES.values()), strict_jni_diagnostics=0)
+        record.update(completed=True, functional_checks=sum(count for _name, count in cases), strict_jni_diagnostics=0)
         write()
     except BaseException as error:
         record.update(failed=True, failure_type=type(error).__name__)
@@ -185,6 +198,7 @@ def run(native, java, jdk, output):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--suite', choices=('probes', 'scalar'), default='probes')
     parser.add_argument('--phase', choices=('verify', 'run'), default='verify')
     for name in ('native', 'java', 'jdk', 'output'):
         parser.add_argument('--' + name, type=Path)
@@ -194,7 +208,7 @@ def main(argv=None):
         module('elevation_prepare_verify', HERE / 'prepare.py').contract()
         return
     require(all(getattr(args, name) is not None for name in ('native', 'java', 'jdk', 'output')), 'complete run arguments required')
-    run(args.native, args.java, args.jdk, args.output)
+    run(args.native, args.java, args.jdk, args.output, args.suite)
 
 
 if __name__ == '__main__':

@@ -36,8 +36,9 @@ stock font failures and all earlier elevation abort/warning failures remain
 retained. No production class overlay or causal object replacement is adopted
 in these full-graph replays.
 
-The extra scalar fixture is a separately authenticated local regression source,
-not part of the source-preparation-owned fixtures. The native build remains
+The earlier scalar experiments used a separately authenticated local regression
+source. The identical source is now an owned control with an explicit public
+consumer, documented below. The native build remains
 a separately reviewed local composition experiment, not this profile's public
 builder. Public native-builder integration, other elevation entry points,
 successful createData mesh materialization, concurrency beyond the listed surface control,
@@ -94,3 +95,24 @@ diagnostics, authenticating 5,556 inputs and seven products. Receipt:
 Nine profile/consumer guards pass, including a real over-quota subprocess that
 retains bounded first-failure evidence and prevents later commands from running.
 The earlier receipts remain frozen.
+
+
+## Public scalar consumer
+
+The seventh owned control is the byte-identical scalar fixture used by the earlier
+Native07 and Native10 experiments. `controls.py --phase run --suite scalar`
+authenticates the same frozen Native07 composition and executes six isolated JVMs
+with the existing live quotas. All 34 checks pass with zero strict JNI diagnostics;
+receipt `a54ef52f4c484f7c1f38da4027bdfb33c33c3a27e12368696301968fa91dca14`.
+Independent review verifies every input, output and log digest and recompiles all
+24 class artifacts byte-identically. Eleven offline guards include a scalar
+JNI-warning refusal that preserves the failed receipt and stops before case two.
+The six old owned sources, three native postimages, frozen producer and prior
+receipt-bound worktree remain unchanged. This manifest expansion changes no
+native implementation or broad acceptance flag.
+
+The unchanged default listener/chunk suite also passes through this updated
+consumer: 343 assertions, zero strict JNI diagnostics, with every input/output
+hash rechecked. Receipt:
+`4fcd9af8f360f4b99cd613f9c21113eca62151885428aeda225a52f6117398fe`.
+The earlier default-suite receipts remain frozen separately.

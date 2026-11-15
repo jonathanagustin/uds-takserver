@@ -13,7 +13,7 @@ The source lookup checks its wrapper callback before creating/interning a manage
 source. Query allocation/boxing and metadata callbacks are checked before their
 results are passed to subsequent JNI operations.
 
-All three original source images, corrected images, patch bytes and both owned
+All three original source images, corrected images, patch bytes and all seven owned
 control sources are locked. Default verification starts no process. Explicit
 preparation copies the exact cached official sources into a fresh disjoint output,
 applies the closed three-file patch without fuzz, and checks every postimage and
@@ -109,3 +109,36 @@ It does not build Native07, download dependencies, relocate the frozen layout,
 or provide a hermetic compiler toolchain. System compiler headers remain part of
 the qualified local host environment. A portable native producer remains an open
 gate; a matching receipt digest alone does not grant SDK/client acceptance.
+
+## Reproduce scalar callback failure controls
+
+The optional `--suite scalar` consumer uses the same authenticated frozen Native07
+composition and bounded executor as the listener/chunk probes. It compiles the
+locked `tests/ElevationScalarControls.java` against the actual public SDK classes
+and starts six isolated JVMs with `-Xcheck:jni`. The cases inject source query,
+cursor close, chunk type/bounds/sample failures and a sample failure followed by
+secondary cleanup failures. All 34 checks require the original exception object,
+applicable cursor/chunk cleanup, and successful analytic-plane sampling afterward.
+No additional native probe library is compiled for this suite.
+
+```sh
+python3 -B takx/kernel-elevation-jni/controls.py --phase run --suite scalar \
+  --native /path/to/reviewed/native07 --java /path/to/reviewed/java \
+  --jdk /path/to/reviewed/jdk17 --output /path/to/fresh/scalar-output
+```
+
+Selecting a suite alone still only verifies source pins. An explicit run requires
+all four paths and refuses altered producer inputs before creating output. The
+40-second command timeout, 8 MiB disk budget, 2 MiB log ceiling, closed compiler
+output membership, and input/output hash checks apply to both suites. A failed
+command or strict JNI diagnostic retains a failed receipt and stops later cases.
+This is a scoped consumer of one reviewed composition; all builder, strict
+elevation, full SDK, and client acceptance flags remain false.
+
+
+The public scalar replay passes all six cases (34 checks) with zero strict JNI
+diagnostics. Receipt SHA-256:
+`a54ef52f4c484f7c1f38da4027bdfb33c33c3a27e12368696301968fa91dca14`.
+An independent review verifies every pinned input, output and command log and
+recompiles each case's class artifacts for byte comparison. Earlier Native07 and
+Native10 scalar receipts remain separate; this replay does not relabel them.
