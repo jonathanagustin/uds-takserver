@@ -88,10 +88,39 @@ Every JNI entry point and required-library inventory is preserved. Eleven weak
 context template exports disappear and 27 template/helper exports appear; the
 entire C++ export inventory is therefore not identical.
 
-Fresh Native13 qualification is pending. The candidate does not grant complete
-changed-graph, renderer, SDK or client acceptance. Pointer allocation failure,
-C++ allocation failure, arbitrary constructor reentry and concurrent disposal/cache
-lookup remain outside these sequential controls. Existing scoped Native12 evidence
+Fresh Native13 then compiles the complete 815-unit composition (483 Core, 159
+JNI, 173 Cesium), with no adopted candidate objects or libraries. Producer review
+verifies all object/source hashes and freshness, 3,861 bound tool files and recipe
+snapshots. Its own 2,701 Java classes match Native12 byte-for-byte, and all 119
+JNI headers match Native07. The sole source change from Native12 is
+InterfaceMarshalContext.h. Producer receipt:
+`713519a0e5fe7ee1e9c7877ef5ba969d07e8e4555397acde5b7cc3405f6b7800`.
+
+All nine scoped runtime cohorts pass, including the seven new outbound controls,
+prior constructor/disposal/cache/listener and registration/removal cases, elevation
+fault/scalar/bulk/cursor cases, both surface call orders and the owned
+Xvfb/software-GL/private-font headed lifecycle. Independent recompilation
+reproduces all 69 runtime class/probe artifacts byte-for-byte. Final review
+rechecks 11,218 unique input hashes and confirms display/auth cleanup. Pipeline
+receipt:
+`57fd751940417e7483e570930c7622673fa1eb83b6a5fa784bcc8b16a9cf7c43`.
+
+| Native13 control cohort | Receipt SHA-256 |
+| --- | --- |
+| Outbound construction/cache/unique callbacks | `26581d965e4941ccd3c4fb0f93c655cfc945dc66684c32066e84fa575b9017d0` |
+| Feature constructors/disposal/cache/listeners | `ae611f5b655d362af00f03e9b3d14b4c42f91aef3bb477e0e2a221293e86430e` |
+| Visibility registration rollback | `5b8635eba9030a813c5e170b0c6f6994a01fe368a3928ba6a123e87a97db60b7` |
+| Unknown/repeated listener removal | `edb5e1b297407e3a3f5ab9e809f8b08659be0c6c5d250bff6225719e2429e12b` |
+| Surface and consumer matrix | `28ced5cacec3f78bde5574c3b1468d88409da6291b7e2ad0daf4e1b53b1e0b02` |
+| Listener/bounds and direct chunks | `f5a25f1ef6520f550dd6fc2de222c9ad6d506404d8487217d89c2ac9647b220f` |
+| Elevation failure cleanup | `74990e73d00f0b1b2f3d6a2e63320896a126324f964fc48ebf2a66dd9beff845` |
+| Scalar return/publication | `27e8ff11adc8046f492c69b55663d951d6eba22d4e22fc2ab606d935033ba99d` |
+| Scoped headed lifecycle | `4125f623572233f4e464c9cd7644a0d8403fd9a0d261d08e16819298bdb5c83f` |
+
+Pointer allocation failure, C++ allocation failure, arbitrary constructor reentry
+and concurrent disposal/cache lookup remain outside these sequential controls.
+Complete cache/peer lifetime, portable builder, hardware/stock-JDK rendering,
+full renderer, SDK and client acceptance remain open. Existing Native12 evidence
 below remains bound to its version-6 inputs.
 
 ## Null listener removal and fresh version-6 Native12
