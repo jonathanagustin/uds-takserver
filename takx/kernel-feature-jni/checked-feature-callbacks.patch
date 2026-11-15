@@ -349,7 +349,7 @@
      TAKErr code(TE_Ok);
      atakmap::core::Layer *clayer = JLONG_TO_INTPTR(atakmap::core::Layer, ptr);
      if(!clayer) {
-@@ -104,9 +105,21 @@
+@@ -104,14 +105,27 @@
      }
      std::shared_ptr<atakmap::core::Layer::VisibilityListener> clistener;
      code = Core::Interop_marshal(clistener, *env, mlistener);
@@ -371,3 +371,9 @@
      return NewPointer(env, clistener);
  }
  JNIEXPORT void JNICALL Java_com_atakmap_map_layer_NativeLayer_removeOnLayerVisibleChangedListener
+   (JNIEnv *env, jclass jclazz, jlong ptr, jobject mlistenerPointer)
+ {
++    if(!mlistenerPointer) return;
+     TAKErr code(TE_Ok);
+     atakmap::core::Layer *clayer = JLONG_TO_INTPTR(atakmap::core::Layer, ptr);
+     if(clayer)

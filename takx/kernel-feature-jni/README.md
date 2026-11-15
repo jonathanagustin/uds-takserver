@@ -1,6 +1,6 @@
 # Checked feature-renderer JNI source profile
 
-Version 5 stages eight exact C++ files and two interop headers from the frozen
+Version 6 stages eight exact C++ files and two interop headers from the frozen
 Native07 Kernel composition. It adds checked callback boundaries, prevents
 publication of a failed wrapper, rolls back failed datastore listener registration, and
 preserves the first Java exception while clearing a disposed native pointer.
@@ -8,7 +8,7 @@ Actual Kernel version is 8.30.5; the composed parent is not pristine upstream.
 
 The exact parent receipt is
 `54630be999ac532f4724e0c62a5197e42f16f3244e1063022d6121e09cd8990e`.
-All ten pre/postimages, patch bytes and eight owned diagnostic sources must match
+All ten pre/postimages, patch bytes and nine owned diagnostic sources must match
 the closed lock. Source preparation grants no runtime or SDK acceptance.
 
 ## Use
@@ -58,6 +58,60 @@ exception cleared, then restores the exact original throwable even if removal
 throws. It returns without publishing a native Pointer. A Java removal callback
 that throws before removing its own listener is still outside the proven scope;
 this is a cleanup attempt, not a guarantee about arbitrary Java implementations.
+
+## Null listener removal and fresh version-6 Native12
+
+The real NativeLayer Java wrapper can pass a null Pointer when removing an
+unregistered listener, removing a listener twice, or removing it after failed
+registration. Native11 aborts under checked JNI in all three cases while reading
+a field from that null object. The owned negative experiment disables core dumps
+and retains its failed logs. Baseline receipt:
+`ebc452d41ab21aba3256d5ef386632e45fb2b9e8b3e9411b6e2c7598d7aaab5f`.
+
+Version 6 returns immediately for a null listener Pointer before any JNI field
+read. The same fixture classes pass all three cases (26 checks) on a candidate
+with 159 fresh JNI units and retained Native11 Core/providers/own Java, with zero
+strict JNI diagnostics and exclusive expected mappings. Candidate receipt:
+`267e1bfbe384274e37e066013e2935ca95ea7e3aee7ff0bb255328e163ec1d88`;
+control receipt:
+`2221ddb1920dd4a432ce84c06e7d0b29570cb0aff4081bbfa72ada5897763bc0`.
+Independent review verifies every source/object/input/class/log digest and
+identical exported-symbol/required-library inventories. The only changed source
+versus Native11 is jnativelayer.cpp.
+
+Fresh Native12 then compiles all 815 units (483 Core, 159 JNI, 173 Cesium) from
+the complete version-6 source composition and passes producer CPU/database/logger
+controls. Its own 2,701 Java classes match Native11 byte-for-byte; all 119 JNI
+headers match the frozen parent. Independent review verifies object freshness,
+source/recipe snapshots and 3,861 bound tool files. Producer receipt:
+`7be80650bf6afcafcd1cdf9d6657b0460de606e2051fff34f8d9cd34ddb5b85b`.
+
+Both the new removal cases and the prior registration-failure cases pass on
+Native12's own Java/Core/JNI. All existing scoped CPU/callback/cache/elevation/
+surface and headed lifecycle controls also pass with zero strict JNI diagnostics.
+Independent recompilation reproduces all 64 runtime class/probe artifacts byte
+for byte; final review rechecks 11,207 unique input hashes. The headed control
+uses owned Xvfb/software GL/private font03 and verifies display/auth cleanup.
+
+| Native12 control cohort | Receipt SHA-256 |
+| --- | --- |
+| Constructor/disposal/cache/listener | `47873ba2616c5d91342226d77d3c13342337b50dfab883bfeb3ba15ec0afdadc` |
+| Registration failure/recovery, 3 cases/27 checks | `a009a0b636acaea525eac3200f284e12cd768f7d3bcc68855504c7683d5daa6c` |
+| Unknown/repeated removal, 3 cases/26 checks | `6c6ecf1002fa99a7b800c874731f165123716b9c26f14df6ca5aeb19006b2f84` |
+| Elevation/feature/callback/surface matrix | `d89a0da3e271c9174996d3a9f26b4a03efbcc5a391018d28b3ef143abddffdf6` |
+| Listener/bounds and direct chunk matrix | `642b748dfc0e3b9fde42ca74222e4737b1d62a203fb542c5f095b41d414ce765` |
+| Bulk fault matrix | `ad195f7cd9a0ee0c1ebcb24cbf57eaec7edbd28042659c1a11e474d3be1afdd9` |
+| Scalar fault matrix | `456b263a173ec71da80ed4fbef6f0868afa2d5a39eb30d32809bc6cd965587ef` |
+| Scoped headed lifecycle | `e955072eeac7680964d1b6a841d47eb045246512b721b970ba5b7b45f2ce832c` |
+
+Qualification pipeline receipt:
+`ce0cfa36537d5465ed1a5518ceff33bb5718489e90e4d1614a9b419d819f0b3e`.
+This establishes the listed sequential null/removal and failure/recovery behavior.
+Allocation/class initialization, pending-entry cleanup beyond the listed cases,
+uncooperative Java removal, asynchronous retained listeners, complete cache/peer
+cleanup, portable builder, contour pixels, stock-JDK/hardware rendering and full
+SDK/client acceptance remain open. All broad acceptance flags stay false.
+Native11 and earlier experiments retain their original source/recipe scope.
 
 ## Visibility registration failure controls
 

@@ -15,7 +15,7 @@ import tempfile
 
 HERE = Path(__file__).resolve().parent
 FILES = {'takkernel/engine/src/main/jni/jnativelayer.cpp', 'takkernel/engine/src/main/jni/interop/core/ManagedLayer.cpp', 'takkernel/engine/src/main/jni/interop/renderer/core/ManagedGLLayerSpi2.cpp', 'takkernel/engine/src/main/jni/interop/feature/Interop.cpp', 'takkernel/engine/src/main/jni/interop/InterfaceMarshalContext.h', 'takkernel/engine/src/main/jni/interop/renderer/core/ManagedGLLayer2.cpp', 'takkernel/engine/src/main/jni/interop/Pointer.h', 'takkernel/engine/src/main/jni/interop/feature/ManagedFeatureDefinition.cpp', 'takkernel/engine/src/main/jni/interop/feature/ManagedFeatureDataStore2.cpp', 'takkernel/engine/src/main/jni/jnativefeaturedatastore4.cpp'}
-CONTROLS = {'tests/LayerRegistrationFault.java', 'tests/LayerVisibilityControls.java', 'tests/FeatureRegistrationFault.cpp', 'tests/ContourDrawProbe.java', 'tests/LayerConstructorFault.java', 'tests/GLSubjectFault.cpp', 'tests/GLSubjectFault.java', 'tests/FeatureRegistrationFault.java'}
+CONTROLS = {'tests/LayerRemovalControls.java', 'tests/LayerRegistrationFault.java', 'tests/LayerVisibilityControls.java', 'tests/FeatureRegistrationFault.cpp', 'tests/ContourDrawProbe.java', 'tests/LayerConstructorFault.java', 'tests/GLSubjectFault.cpp', 'tests/GLSubjectFault.java', 'tests/FeatureRegistrationFault.java'}
 FLAGS = ('native_builder_integration', 'strict_callback_accepted', 'rendered_layer_accepted', 'full_sdk_accepted', 'full_client_accepted')
 LIMIT = 4 * 1024 * 1024
 
@@ -45,7 +45,7 @@ def contract():
     lock = json.loads(regular(HERE / 'inputs.lock.json'))
     patch = regular(HERE / 'checked-feature-callbacks.patch')
     require(type(lock['schema']) is int and lock['schema'] == 1 and
-            lock['profile'] == 'native07-checked-feature-callbacks-v5' and
+            lock['profile'] == 'native07-checked-feature-callbacks-v6' and
             lock['official_revision'] == '9f6893dd657feacc35ec5de03dad721c2e44170e' and
             lock['actual_kernel_version'] == '8.30.5' and set(lock['files']) == FILES and lock['parent_native_sha256'] == '54630be999ac532f4724e0c62a5197e42f16f3244e1063022d6121e09cd8990e',
             'source identity differs')
