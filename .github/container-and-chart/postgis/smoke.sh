@@ -7,12 +7,12 @@
 #
 #   smoke.sh ghcr.io/jonathanagustin/uds-takserver/postgis:18-3.6-<key>-amd64
 #
-# OLD_IMAGE reads the immutable pre-rename PG15 baseline. New builds publish
-# only to the renamed repository; the old PG15 image is not republished.
+# OLD_IMAGE reads the original multi-arch PG15 bytes from the current registry
+# namespace. Pin the historical index; no PG15 rebuild or baseline substitution.
 set -euo pipefail
 
 image="${1:?usage: smoke.sh IMAGE}"
-old_image="${OLD_IMAGE:-ghcr.io/jonathanagustin/uds-k3d-takserver/postgis:15-3.4}"
+old_image="${OLD_IMAGE:-ghcr.io/jonathanagustin/uds-takserver/postgis:15-3.4@sha256:ee12d6b71ca639a51ec83b7c12803376f99df5cfdcabe5f4b94268efefa45647}"
 if ! docker image inspect "${old_image}" >/dev/null 2>&1; then
   docker pull "${old_image}"
 fi
