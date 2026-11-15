@@ -181,3 +181,14 @@ absence; present objects retain UID, resource-version and content hashes. Requir
 references take precedence over optional references to the same name. Permission,
 transport and other command failures still fail, and appearance or disappearance
 between cold and warm snapshots changes the configuration binding.
+
+
+## Additional November 15 startup execution
+
+The [retained AMD64 repeat](https://github.com/jonathanagustin/uds-takserver/tree/main/bench/results/startup-repeat-20261115)
+adds one source-qualified cold/warm application-start pair: Pod spans 170/130
+seconds, compared with the earlier AMD64 pair's 140/100 seconds. The restored
+Core namespace UID matches the earlier execution; run/cohort and application
+Pod/JVM identities establish additional execution. ARM64 failed Core restoration
+before measurement. The report retains original records and metadata and does
+not infer a tuning benefit, cache effect, startup distribution or ISA ranking.

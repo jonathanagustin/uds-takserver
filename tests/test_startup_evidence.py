@@ -44,5 +44,52 @@ class StartupEvidenceTests(unittest.TestCase):
             EVIDENCE.read(ROOT / 'records/amd64/cold.json', '0' * 64)
 
 
+REPEAT_ROOT = ROOT.parent/'startup-repeat-20261115'
+REPEAT_SPEC = importlib.util.spec_from_file_location('startup_repeat_evidence', REPEAT_ROOT/'check.py')
+REPEAT = importlib.util.module_from_spec(REPEAT_SPEC)
+REPEAT_SPEC.loader.exec_module(REPEAT)
+
+
+class StartupRepeatEvidenceTests(unittest.TestCase):
+    def records(self):
+        return tuple(REPEAT.decode(REPEAT.read(REPEAT_ROOT/'records/amd64'/(mode+'.json')))
+                     for mode in ('cold','warm'))
+
+    def test_additional_pair_grain_and_published_table(self):
+        rows,spans=REPEAT.verify()
+        self.assertEqual(len(rows),4);self.assertEqual(spans,[['amd64',170,130]])
+        self.assertIn(REPEAT.tables(rows,spans),(REPEAT_ROOT/'README.md').read_text())
+
+    def test_restored_namespace_uid_is_not_a_unique_trial_identifier(self):
+        cold,warm=self.records();previous=REPEAT.prior_records()
+        self.assertEqual(cold['snapshot']['cluster_uid'],previous[0]['snapshot']['cluster_uid'])
+        REPEAT.verify_independent(cold,warm)
+
+    def test_reused_execution_pod_or_jvm_cannot_count_as_additional_pair(self):
+        for mode in ('run','cohort','pod','jvm'):
+            with self.subTest(mode=mode):
+                cold,warm=self.records();old=REPEAT.prior_records()[0]
+                if mode=='run':cold['begin']['caller']['run_id']=old['begin']['caller']['run_id']
+                elif mode=='cohort':cold['begin']['cohort']=old['begin']['cohort']
+                elif mode=='pod':cold['phases']['takserver-api']['evidence']['pod_uid']=old['phases']['takserver-api']['evidence']['pod_uid']
+                else:cold['phases']['takserver-api']['jvm_observation']['jvm_start_time_unix_ms']=old['phases']['takserver-api']['jvm_observation']['jvm_start_time_unix_ms']
+                with self.assertRaises(ValueError):REPEAT.verify_independent(cold,warm)
+
+    def test_skipped_execution_step_and_changed_archive_metadata_are_rejected(self):
+        import hashlib,json,shutil,tempfile
+        for mode in ('step','archive'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as directory:
+                target=Path(directory)/'evidence';shutil.copytree(REPEAT_ROOT,target)
+                manifest=REPEAT.decode(REPEAT.read(target/'sources.json'))
+                if mode=='step':
+                    job=REPEAT.decode(REPEAT.read(target/'job.json'))
+                    next(step for step in job['steps'] if step['name']=='Acquire only the matching published application package')['conclusion']='skipped'
+                    raw=json.dumps(job).encode();(target/'job.json').write_bytes(raw)
+                    manifest['job_metadata_sha256']=hashlib.sha256(raw).hexdigest()
+                else:manifest['datasets'][0]['archive_sha256']='0'*64
+                (target/'sources.json').write_text(json.dumps(manifest))
+                with self.assertRaises(ValueError):REPEAT.verify(target)
+
+
 if __name__ == '__main__':
     unittest.main()
