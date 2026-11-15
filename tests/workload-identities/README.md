@@ -373,3 +373,12 @@ Each digest includes field presence; unknown fields contribute only to a single
 `other` digest. Neither unknown field names nor any status values are emitted.
 Legacy aggregate-only snapshots remain valid. These encrypted diagnostics do
 not authorize deletion after resource-version drift or establish its controller.
+
+When PVC status drift is confined to `conditions`, the optional encrypted
+descriptor also reports absent/null/list/other shape, a count capped at 32,
+known Kubernetes PVC condition types and fixed True/False/Unknown/Other statuses.
+The six known types follow Kubernetes API v0.35.3 constants; unknown types are
+counted without emitting their names. Reasons, messages, timestamps and arbitrary
+condition values are never emitted. Invalid or oversized detail falls back to
+the existing fingerprints without changing the retained baseline. The snapshot
+keeps its 4 KiB bound and resource-version drift still forbids deletion.

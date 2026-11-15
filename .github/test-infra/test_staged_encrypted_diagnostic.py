@@ -155,6 +155,7 @@ class EncryptedDiagnosticGuards(unittest.TestCase):
                    'statusFieldsSHA256':{key:'f'*64 for key in ('phase','accessModes','capacity','conditions',
                        'allocatedResources','resizeStatus','allocatedResourceStatuses',
                        'currentVolumeAttributesClassName','modifyVolumeStatus','other')}}
+            state['conditionFacts']={'shape':'list','count':1,'knownTypes':{'Resizing':['True']},'otherTypeCount':0}
             payload.update(kind='cleanup-resource-drift',snapshot={'schema':1,'expected':expected,
                 'observed':{**expected,'resourceVersion':'2'},'changedFields':['resourceVersion'],
                 'pvcState':{'expected':state,'observed':{**state,'finalizersSHA256':'e'*64,'pvcProtection':False}}})

@@ -434,10 +434,47 @@ PVC_STATUS_FIELDS=('phase','accessModes','capacity','conditions','allocatedResou
                    'resizeStatus','allocatedResourceStatuses',
                    'currentVolumeAttributesClassName','modifyVolumeStatus')
 PVC_STATUS_DIGEST_KEYS=set(PVC_STATUS_FIELDS)|{'other'}
+PVC_CONDITION_TYPES={'Resizing','FileSystemResizePending','ControllerResizeError',
+                     'NodeResizeError','ModifyVolumeError','ModifyingVolume'}
+PVC_CONDITION_STATUSES={'True','False','Unknown','Other'}
+
+def validate_condition_facts(value):
+    require(isinstance(value,dict) and set(value)=={'shape','count','knownTypes','otherTypeCount'},'PVC condition facts schema differs')
+    require(value['shape'] in ('absent','null','list','other') and type(value['count']) is int and
+            0<=value['count']<=32 and type(value['otherTypeCount']) is int and
+            0<=value['otherTypeCount']<=value['count'],'PVC condition facts bound differs')
+    known=value['knownTypes']
+    require(isinstance(known,dict) and set(known)<=PVC_CONDITION_TYPES,'PVC condition type differs')
+    for statuses in known.values():
+        require(isinstance(statuses,list) and 1<=len(statuses)<=32 and
+                all(isinstance(status,str) and status in PVC_CONDITION_STATUSES for status in statuses) and
+                statuses==sorted(statuses),'PVC condition status differs')
+    require(sum(map(len,known.values()))+value['otherTypeCount']==value['count'],'PVC condition count differs')
+    require(value['shape']=='list' or value['count']==0,'PVC condition shape differs')
+    return value
+
+def condition_facts(status):
+    value=status.get('conditions')
+    shape='absent' if 'conditions' not in status else 'null' if value is None else 'list' if isinstance(value,list) else 'other'
+    result={'shape':shape,'count':0,'knownTypes':{},'otherTypeCount':0}
+    if shape=='list':
+        require(len(value)<=32 and all(isinstance(item,dict) for item in value),'PVC condition input bound differs')
+        result['count']=len(value)
+        for item in value:
+            kind=item.get('type')
+            if not isinstance(kind,str) or kind not in PVC_CONDITION_TYPES:
+                result['otherTypeCount']+=1
+                continue
+            state=item.get('status')
+            if not isinstance(state,str) or state not in PVC_CONDITION_STATUSES:state='Other'
+            result['knownTypes'].setdefault(kind,[]).append(state)
+        for statuses in result['knownTypes'].values():statuses.sort()
+    return validate_condition_facts(result)
 
 def validate_pvc_state(value):
     require(isinstance(value,dict) and set(value) in ({'specSHA256','statusSHA256','finalizersSHA256','pvcProtection','otherFinalizerCount'},
-            {'specSHA256','statusSHA256','finalizersSHA256','pvcProtection','otherFinalizerCount','statusFieldsSHA256'}),'PVC state schema differs')
+            {'specSHA256','statusSHA256','finalizersSHA256','pvcProtection','otherFinalizerCount','statusFieldsSHA256'},
+            {'specSHA256','statusSHA256','finalizersSHA256','pvcProtection','otherFinalizerCount','statusFieldsSHA256','conditionFacts'}),'PVC state schema differs')
     for key in ('specSHA256','statusSHA256','finalizersSHA256'):
         require(isinstance(value[key],str) and re.fullmatch('[0-9a-f]{64}',value[key]),'PVC state digest differs')
     require(type(value['pvcProtection']) is bool and type(value['otherFinalizerCount']) is int and
@@ -447,6 +484,7 @@ def validate_pvc_state(value):
         require(isinstance(fields,dict) and set(fields)==PVC_STATUS_DIGEST_KEYS,'PVC status field schema differs')
         require(all(isinstance(digest,str) and re.fullmatch('[0-9a-f]{64}',digest)
                     for digest in fields.values()),'PVC status field digest differs')
+    if 'conditionFacts' in value:validate_condition_facts(value['conditionFacts'])
     return value
 
 def pvc_state(obj):
@@ -459,9 +497,12 @@ def pvc_state(obj):
     require(isinstance(status,dict),'PVC status input differs')
     fields={key:sha({'present':key in status,'value':status.get(key)}) for key in PVC_STATUS_FIELDS}
     fields['other']=sha({key:value for key,value in status.items() if key not in PVC_STATUS_FIELDS})
-    return validate_pvc_state({'statusFieldsSHA256':fields,'specSHA256':sha(obj.get('spec',{})),'statusSHA256':sha(obj.get('status',{})),
+    state={'statusFieldsSHA256':fields,'specSHA256':sha(obj.get('spec',{})),'statusSHA256':sha(obj.get('status',{})),
         'finalizersSHA256':sha(sorted(finalizers)),'pvcProtection':'kubernetes.io/pvc-protection' in finalizers,
-        'otherFinalizerCount':sum(value!='kubernetes.io/pvc-protection' for value in finalizers)})
+        'otherFinalizerCount':sum(value!='kubernetes.io/pvc-protection' for value in finalizers)}
+    try:state['conditionFacts']=condition_facts(status)
+    except ValueError:pass  # Optional detail cannot suppress the existing fingerprints.
+    return validate_pvc_state(state)
 
 def validate_cleanup_drift(snapshot):
     require(isinstance(snapshot,dict) and set(snapshot) in ({'schema','expected','observed','changedFields'}, {'schema','expected','observed','changedFields','pvcState'}) and
@@ -501,8 +542,10 @@ def conditional_delete(driver,rec):
                 'changedFields':[key for key in CLEANUP_IDENTITY_FIELDS if expected[key]!=observed[key]]}
             if rec['kind']=='PersistentVolumeClaim' and 'pvcState' in rec:
                 try:
-                    baseline=validate_pvc_state(rec['pvcState']);current_state=pvc_state(current)
+                    baseline=copy.deepcopy(validate_pvc_state(rec['pvcState']));current_state=pvc_state(current)
                     snapshot['pvcState']={'expected':baseline,'observed':current_state}
+                    if len(json.dumps(snapshot).encode())>4096:
+                        for state in snapshot['pvcState'].values():state.pop('conditionFacts',None)
                 except Exception:pass  # Keep the basic identity diagnostic if extra capture fails.
             driver._retained_cleanup_drift=validate_cleanup_drift(snapshot)
         except Exception:driver._retained_cleanup_drift=None

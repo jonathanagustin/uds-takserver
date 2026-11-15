@@ -103,7 +103,7 @@ class RetainedStateGuards(unittest.TestCase):
         explicit_null=copy.deepcopy(obj);explicit_null['status']['phase']=None
         self.assertNotEqual(R.pvc_state(explicit_null)['statusFieldsSHA256']['phase'],
                             baseline['statusFieldsSHA256']['phase'])
-        legacy=copy.deepcopy(baseline);del legacy['statusFieldsSHA256']
+        legacy=copy.deepcopy(baseline);del legacy['statusFieldsSHA256'];legacy.pop('conditionFacts',None)
         self.assertEqual(R.validate_pvc_state(legacy),legacy)
         for mutation in ('extra','missing','raw','wrong-type'):
             bad=copy.deepcopy(baseline)
@@ -112,6 +112,55 @@ class RetainedStateGuards(unittest.TestCase):
             elif mutation=='raw':bad['statusFieldsSHA256']['phase']='PRIVATE_VALUE'
             else:bad['statusFieldsSHA256']=[]
             with self.assertRaises(ValueError):R.validate_pvc_state(bad)
+
+    def test_condition_facts_shapes_are_fixed_and_optional(self):
+        for status,shape in (({},'absent'),({'conditions':None},'null'),
+                             ({'conditions':[]},'list'),({'conditions':'PRIVATE_VALUE'},'other')):
+            facts=R.condition_facts(status)
+            self.assertEqual(facts,{'shape':shape,'count':0,'knownTypes':{},'otherTypeCount':0})
+            self.assertNotIn('PRIVATE',json.dumps(facts))
+        for conditions in ([{}]*33,['PRIVATE_VALUE']):
+            obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver'},'status':{'conditions':conditions}}
+            state=R.pvc_state(obj)
+            self.assertNotIn('conditionFacts',state)
+            self.assertIn('statusFieldsSHA256',state)
+            self.assertEqual(R.validate_pvc_state(state),state)
+
+    def test_condition_facts_only_emit_known_types_and_fixed_statuses(self):
+        facts=R.condition_facts({'conditions':[
+            {'type':'Resizing','status':'True','message':'PRIVATE_MESSAGE','reason':'PRIVATE_REASON'},
+            {'type':'Resizing','status':'PRIVATE_STATUS'},
+            {'type':'PRIVATE_TYPE','status':'True'},
+            {'type':{'PRIVATE_KEY':1},'status':'True'}]})
+        self.assertEqual(facts,{'shape':'list','count':4,'knownTypes':{'Resizing':['Other','True']},'otherTypeCount':2})
+        self.assertNotIn('PRIVATE',json.dumps(facts))
+        for mutate in (lambda v:v.update(extra='private'),lambda v:v.update(count=True),
+                       lambda v:v.update(count=33),lambda v:v.update(shape='PRIVATE'),
+                       lambda v:v['knownTypes'].update(PRIVATE_TYPE=['True']),
+                       lambda v:v['knownTypes'].update(Resizing=['PRIVATE_STATUS']),
+                       lambda v:v['knownTypes'].update(Resizing=['True','Other']),
+                       lambda v:v.update(otherTypeCount=1),lambda v:v.update(shape='absent')):
+            bad=copy.deepcopy(facts);mutate(bad)
+            with self.assertRaises(ValueError):R.validate_condition_facts(bad)
+
+    def test_oversized_condition_detail_preserves_fingerprints_and_delete_refusal(self):
+        conditions=[{'type':sorted(R.PVC_CONDITION_TYPES)[i%6],'status':'Unknown','message':'PRIVATE_MESSAGE'} for i in range(32)]
+        obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver','name':'retained-data',
+             'uid':'original','resourceVersion':'1'*253},'spec':{},'status':{'conditions':conditions}}
+        rec=self.record(obj);rec['parent']={'volumeName':'bound-volume','volumeUID':'bound-pv'}
+        rec['pvcState']=R.pvc_state(obj);original=copy.deepcopy(rec['pvcState'])
+        obj['metadata']['resourceVersion']='2'*253;obj['status']['conditions'][0]['status']='False'
+        driver=self.driver(obj)
+        with patch.object(R,'delete_record') as delete:
+            with self.assertRaisesRegex(ValueError,'identity/metadata changed'):R.conditional_delete(driver,rec)
+            delete.assert_not_called()
+        snapshot=driver._retained_cleanup_drift
+        self.assertEqual(rec['pvcState'],original)
+        self.assertLessEqual(len(json.dumps(snapshot).encode()),4096)
+        for value in snapshot['pvcState'].values():
+            self.assertIn('statusFieldsSHA256',value)
+            self.assertNotIn('conditionFacts',value)
+        self.assertEqual(R.validate_cleanup_drift(snapshot),snapshot)
 
     def setup_fixture(self):
         hook={'apiVersion':'batch/v1','kind':'Job','metadata':{'name':'takserver-db-setup',
