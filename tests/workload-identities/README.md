@@ -573,7 +573,8 @@ and mutation label, the expected transformed image, and a registry host present
 in the retained `zarf/private-registry` credential. The credential's whole-object
 digest is captured in the image-source binding and rechecked during observation
 and later verification. The supported source references are fully qualified TAK
-registry names with explicit tags or SHA256 digests; unknown forms reject.
+registry names with tags (including the default latest) or SHA256 digests; unknown
+forms reject.
 No credentials, image references or Pod names enter public proofs. The immutable
 runtime image ID, Deployment/ReplicaSet/Ready Pod chain, actual JAR checksum,
 source-file mount refusal and pre/post observation checks remain required.
