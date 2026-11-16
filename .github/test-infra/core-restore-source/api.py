@@ -232,7 +232,7 @@ class Observer:
         self.guard()
         B.require(B.digest(B.regular(path, 512 * 1024**2)) == pin, 'deployment bundle changed')
         return self.command([self.cli, 'deploy', path, '--packages', 'core-backup-restore', '--confirm',
-            '--retries', ('0' if label == 'fresh-candidate-deploy' else '1'), '--tmpdir', self.output / 'tmp', '--uds-cache', self.output / 'uds-cache',
+            '--retries', '1', '--tmpdir', self.output / 'tmp', '--uds-cache', self.output / 'uds-cache',
             '--no-progress', '--no-log-file'], label, timeout=1500)
 
     def require_fresh_velero(self):

@@ -359,13 +359,13 @@ class ApiGuards(unittest.TestCase):
                     self.observer(root, variant).observe(variant, schema(True), binding,
                                                         'b' * 64, baseline, mode='fresh')
 
-    def test_fresh_deployment_cannot_retry_into_an_upgrade(self):
+    def test_fresh_deployment_uses_one_attempt_not_zero_default(self):
+        # Embedded Zarf treats zero as its default retry count; one means one attempt.
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            bundle = root / 'bundle.tar.zst'
-            bundle.write_bytes(b'fixed bundle')
-            observer = A.Observer('/pinned/uds', root, Mock(), {})
-            observer.command = Mock(return_value=(True, b''))
-            observer.deploy_bundle(bundle, A.B.digest(bundle), 'fresh-candidate-deploy')
+            path = Path(temp) / 'bundle'; path.write_bytes(b'fixture')
+            observer = A.Observer('/pinned/uds', Path(temp), Mock(), {})
+            observer.command = Mock()
+            observer.deploy_bundle(path, A.B.digest(path), 'fresh-candidate-deploy')
             argv = observer.command.call_args.args[0]
-            self.assertEqual(argv[argv.index('--retries') + 1], '0')
+            self.assertEqual(argv[argv.index('--retries') + 1], '1')
+            self.assertEqual(observer.command.call_count, 1)
