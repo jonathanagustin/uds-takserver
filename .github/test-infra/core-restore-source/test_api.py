@@ -96,7 +96,7 @@ class ApiGuards(unittest.TestCase):
 
     def test_failure_workloads_are_bounded_fixed_facts_only(self):
         observer = A.Observer('/pinned/uds', Path('/owned'), lambda: None, {})
-        values = [{'kind': 'Deployment', 'metadata': {'name': 'velero', 'namespace': 'velero'},
+        values = [crd(False), {'kind': 'Deployment', 'metadata': {'name': 'velero', 'namespace': 'velero'},
                    'status': {'replicas': 1, 'readyReplicas': 0, 'privateField': 'credential-sentinel'}},
                   {'items': [{'metadata': {'name': 'private-workload-name'}, 'status': {'phase': 'Pending'}}]},
                   {'items': [{'reason': 'private-reason', 'message': 'private-workload-name Insufficient cpu credential-sentinel'}]}]
@@ -108,8 +108,22 @@ class ApiGuards(unittest.TestCase):
         self.assertEqual(result['eventPatternCounts']['resource-pressure'], 1)
         for value in ('credential-sentinel', 'private-workload-name', 'private-reason', 'privateField'):
             self.assertNotIn(value, json.dumps(result))
-        self.assertEqual(observer.k.call_count, 3)
+        self.assertEqual(observer.k.call_count, 4)
         self.assertTrue(all(c.args[0] == 'get' for c in observer.k.call_args_list))
+
+    def test_crd_owner_facts_are_fixed_booleans_without_private_values(self):
+        good = crd(False)
+        self.assertTrue(all(A.crd_owner_facts(good).values()))
+        bad = copy.deepcopy(good)
+        bad['metadata']['annotations']['meta.helm.sh/release-name'] = 'private-owner-sentinel'
+        bad['metadata']['labels']['app.kubernetes.io/managed-by'] = 'private-manager-sentinel'
+        facts = A.crd_owner_facts(bad)
+        self.assertFalse(facts['releaseMatchesCoreConfig'])
+        self.assertFalse(facts['managedByHelm'])
+        self.assertTrue(all(type(v) is bool for v in facts.values()))
+        self.assertNotIn('private-', json.dumps(facts))
+        with self.assertRaisesRegex(ValueError, 'CRD ownership differs'):
+            A.validate_crd(bad, schema(False))
 
     def test_failure_workload_read_refuses_wrong_cluster(self):
         observer = A.Observer('/pinned/uds', Path('/owned'), Mock(side_effect=ValueError('wrong cluster')), {})

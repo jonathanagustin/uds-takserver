@@ -67,3 +67,9 @@ phase counts plus allowlisted error-pattern counts. Object names, raw reasons,
 messages, command logs, credentials and manifests are omitted. Diagnostic failure
 cannot turn the original failure into acceptance. This does not change CPU
 requests, admission policy, signature requirements, or the schema assertions.
+
+CRD diagnostics expose only fixed ownership predicate booleans, the normalized
+specification hash, and whether the v1 schema contains `resourcePolicy`. They do
+not publish observed owner/manager names or alter the required Core Helm owner.
+These facts distinguish a metadata mismatch from a schema replacement while
+preserving the same acceptance rules.

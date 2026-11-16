@@ -56,16 +56,24 @@ def expected_specs(directory, lock):
     return {'baseline': baseline, 'candidate': candidate}
 
 
+def crd_owner_facts(value):
+    """Fixed ownership predicates; never expose unknown metadata values."""
+    meta = value.get('metadata', {})
+    uid = meta.get('uid', '')
+    return {'nameMatches': meta.get('name') == 'restores.velero.io',
+            'notDeleting': not bool(meta.get('deletionTimestamp')),
+            'uidShapeMatches': isinstance(uid, str) and bool(re.fullmatch('[a-f0-9-]{36}', uid)),
+            'managedByHelm': meta.get('labels', {}).get('app.kubernetes.io/managed-by') == 'Helm',
+            'releaseMatchesCoreConfig': meta.get('annotations', {}).get('meta.helm.sh/release-name') == 'uds-velero-config',
+            'releaseNamespaceMatches': meta.get('annotations', {}).get('meta.helm.sh/release-namespace') == 'velero',
+            'ownerReferencesAbsent': not bool(meta.get('ownerReferences'))}
+
+
 def validate_crd(value, expected):
     B.require(value.get('kind') == 'CustomResourceDefinition' and
               value.get('apiVersion') == 'apiextensions.k8s.io/v1', 'CRD API differs')
     meta = value.get('metadata', {})
-    B.require(meta.get('name') == 'restores.velero.io' and not meta.get('deletionTimestamp') and
-              re.fullmatch('[a-f0-9-]{36}', meta.get('uid', '')) and
-              meta.get('labels', {}).get('app.kubernetes.io/managed-by') == 'Helm' and
-              meta.get('annotations', {}).get('meta.helm.sh/release-name') == 'uds-velero-config' and
-              meta.get('annotations', {}).get('meta.helm.sh/release-namespace') == 'velero' and
-              not meta.get('ownerReferences'), 'CRD ownership differs')
+    B.require(all(crd_owner_facts(value).values()), 'CRD ownership differs')
     B.require(crd_spec(value['spec']) == expected, 'CRD schema differs beyond the reviewed policy')
     conditions = {c['type']: c['status'] for c in value.get('status', {}).get('conditions', [])}
     B.require(conditions.get('Established') == 'True' and conditions.get('NamesAccepted') == 'True',
@@ -196,10 +204,24 @@ class Observer:
         except Exception:
             return {'status': 'cluster-guard-refused'}
         try:
+            _, raw = self.k('get', 'crd', 'restores.velero.io', '--ignore-not-found',
+                            '-o', 'json', label='diagnostic-crd')
+            crd = json.loads(raw) if raw.strip() else None
+            result = {'status': 'captured', 'crdPresent': crd is not None}
+            if crd is not None:
+                B.require(crd.get('kind') == 'CustomResourceDefinition' and
+                          crd.get('metadata', {}).get('name') == 'restores.velero.io', 'diagnostic CRD differs')
+                result['crdOwnership'] = crd_owner_facts(crd)
+                result['crdReleaseMatchesVeleroServer'] = crd['metadata'].get('annotations', {}).get('meta.helm.sh/release-name') == 'velero'
+                result['crdSpecSHA256'] = canonical(crd_spec(crd['spec']))
+                versions = crd['spec']['versions']
+                B.require(isinstance(versions, list) and len(versions) <= 8, 'diagnostic CRD version bound')
+                served = [v for v in versions if v.get('name') == 'v1']
+                result['resourcePolicyPresent'] = len(served) == 1 and 'resourcePolicy' in served[0].get('schema', {}).get('openAPIV3Schema', {}).get('properties', {}).get('spec', {}).get('properties', {})
             _, raw = self.k('get', 'deployment', 'velero', '-n', 'velero', '--ignore-not-found',
                             '-o', 'json', label='diagnostic-deployment')
             deployment = json.loads(raw) if raw.strip() else None
-            result = {'status': 'captured', 'deploymentPresent': deployment is not None}
+            result['deploymentPresent'] = deployment is not None
             if deployment is not None:
                 meta = deployment.get('metadata', {})
                 B.require(deployment.get('kind') == 'Deployment' and meta.get('name') == 'velero' and
