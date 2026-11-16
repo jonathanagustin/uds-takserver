@@ -84,3 +84,14 @@ check and unchanged UID are mandatory before any baseline API evidence is taken.
 No direct metadata patch, force-conflict flag or ownership bypass is introduced.
 This qualifies an upgrade from the reconciled baseline, not fresh derivative
 installation or actual restore behavior.
+
+The manual workflow also accepts `api_mode: fresh` with `run_api_smoke: true`.
+This mode verifies that no Velero CRDs or namespace exist immediately before
+one candidate bundle deployment. It does not pull, install or reconcile the
+baseline. The first deployment must retain the complete candidate schema and
+Core Helm owner, pass all four strict server dry-run controls, preserve the CRD
+UID during observation and leave no Restore objects. Public evidence records
+`mode: fresh` separately from upgrade results. A passing API check still does
+not qualify actual data restoration, ownership transfer or native ARM behavior.
+The default remains `upgrade`; all signature, source, cluster and quota guards
+apply to both modes.

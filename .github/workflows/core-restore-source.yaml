@@ -6,9 +6,17 @@ on:
   workflow_dispatch:
     inputs:
       run_api_smoke:
-        description: Upgrade only the Restore API in a fresh disposable AMD64 cluster
+        description: Test only the Restore API in a disposable AMD64 cluster
         type: boolean
         default: false
+
+      api_mode:
+        description: Upgrade a reconciled baseline or install the candidate once on a fresh cluster
+        type: choice
+        options:
+          - upgrade
+          - fresh
+        default: upgrade
 
 permissions:
   contents: read
@@ -84,6 +92,7 @@ jobs:
       ARCHITECTURE: amd64
       CORE_RESTORE_POLICY_CANDIDATE: 'true'
       CORE_RESTORE_API_SMOKE: 'true'
+      CORE_RESTORE_API_MODE: ${{ inputs.api_mode }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -132,7 +141,7 @@ jobs:
         run: |
           set -euo pipefail
           uv run --no-project --with pyyaml==6.0.3 --with zstandard==0.25.0 python -B \
-            .github/test-infra/core-restore-source/api.py --execute \
+            .github/test-infra/core-restore-source/api.py --execute --mode "$CORE_RESTORE_API_MODE" \
             --cli "$(readlink -f "$(command -v uds)")" --provider-directory "$RUNNER_TEMP/core-source-provider" \
             --output "$RUNNER_TEMP/core-source-api"
       - name: Retain only bounded API schema proof

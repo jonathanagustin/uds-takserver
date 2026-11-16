@@ -314,3 +314,58 @@ class ApiGuards(unittest.TestCase):
             for error in ('owned command deadline exceeded', 'owned command log quota exceeded'):
                 with patch.object(A.R, 'execute', side_effect=ValueError(error)), self.assertRaisesRegex(ValueError, error):
                     observer.command(['fixed'], 'probe', failure=True)
+
+    def test_fresh_candidate_requires_empty_crds_and_namespace(self):
+        with tempfile.TemporaryDirectory() as temp:
+            observer = A.Observer('/pinned/uds', Path(temp), Mock(), {})
+            for items, namespace, accepts in [([], b'', True),
+                    ([{'spec': {'group': 'other.example'}}], b'', True),
+                    ([{'spec': {'group': 'velero.io'}}], b'', False),
+                    ([], b'{"metadata": {"name": "velero"}}', False)]:
+                with self.subTest(items=items, namespace=namespace):
+                    observer.k = Mock(side_effect=[(True, json.dumps({'items': items}).encode()), (True, namespace)])
+                    if accepts:
+                        self.assertEqual(observer.require_fresh_velero(),
+                            {'veleroCrdsAbsent': True, 'veleroNamespaceAbsent': True})
+                    else:
+                        with self.assertRaisesRegex(ValueError, 'fresh candidate requires'):
+                            observer.require_fresh_velero()
+            observer.k = Mock(side_effect=ValueError('API unavailable'))
+            with self.assertRaisesRegex(ValueError, 'API unavailable'):
+                observer.require_fresh_velero()
+
+    def test_fresh_candidate_has_strict_owner_schema_and_four_api_controls(self):
+        binding = {'sourceSHA': 'a' * 40, 'runID': '12', 'runAttempt': '1'}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            result = self.observer(root, 'candidate').observe('candidate', schema(True), binding,
+                                                            'b' * 64, mode='fresh')
+            self.assertEqual(result['mode'], 'fresh')
+            self.assertEqual(result['dryRunCases'], 4)
+            self.assertTrue(result['coreHelmOwnerVerified'])
+            self.assertFalse(result['restoreAcceptance'])
+            for kwargs in ({'persisted': True}, {'replaced': True}):
+                with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                    self.observer(root, 'candidate', **kwargs).observe('candidate', schema(True),
+                                                                  binding, 'b' * 64, mode='fresh')
+            bad = crd(True)
+            bad['metadata']['annotations'] = {}
+            observer = self.observer(root, 'candidate')
+            observer.k = Mock(return_value=(True, json.dumps(bad).encode()))
+            with self.assertRaisesRegex(ValueError, 'CRD ownership differs'):
+                observer.observe('candidate', schema(True), binding, 'b' * 64, mode='fresh')
+            for variant, baseline in [('baseline', None), ('candidate', {'completed': True})]:
+                with self.assertRaisesRegex(ValueError, 'observation mode differs'):
+                    self.observer(root, variant).observe(variant, schema(True), binding,
+                                                        'b' * 64, baseline, mode='fresh')
+
+    def test_fresh_deployment_cannot_retry_into_an_upgrade(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bundle = root / 'bundle.tar.zst'
+            bundle.write_bytes(b'fixed bundle')
+            observer = A.Observer('/pinned/uds', root, Mock(), {})
+            observer.command = Mock(return_value=(True, b''))
+            observer.deploy_bundle(bundle, A.B.digest(bundle), 'fresh-candidate-deploy')
+            argv = observer.command.call_args.args[0]
+            self.assertEqual(argv[argv.index('--retries') + 1], '0')

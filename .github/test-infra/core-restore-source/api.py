@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright 2026 uds-takserver authors
 # SPDX-License-Identifier: GPL-3.0-only
-"""Observe a Core-owned Restore CRD upgrade using server dry runs only."""
+"""Observe Core-owned Restore CRD upgrades or fresh installs with server dry runs."""
 import argparse
 import copy
 import hashlib
@@ -156,6 +156,7 @@ def failure_diagnostic(error, observer=None):
         'baseline reconciliation requires no backup or restore objects': 'bootstrap-active-operations',
         'baseline reconciliation replaced the CRD': 'bootstrap-crd-replaced',
         'deployment bundle changed': 'deployment-input',
+        'fresh candidate requires no Velero CRDs or namespace': 'fresh-preexisting-velero',
     }
     files = {str(Path(path).resolve()): str(Path(path).resolve().relative_to(B.ROOT))
              for path in (__file__, B.__file__, E.__file__, R.__file__)}
@@ -170,7 +171,8 @@ def failure_diagnostic(error, observer=None):
               'exceptionType': summary['exceptionType'], 'frames': frames[-8:]}
     if observer is not None:
         allowed = {'checkpoint', 'verified-official-pull', 'baseline-bootstrap-crd', 'baseline-empty-backups',
-                   'baseline-empty-restores', 'baseline-reconcile', 'baseline-reconciled-crd'}
+                   'baseline-empty-restores', 'baseline-reconcile', 'baseline-reconciled-crd',
+                   'fresh-empty-crds', 'fresh-empty-namespace', 'fresh-candidate-deploy'}
         for variant in ('baseline', 'candidate'):
             allowed.update(variant + '-' + suffix for suffix in ('create', 'deploy', 'valid', 'unknown', 'kind', 'name'))
             allowed.update(prefix + '-' + variant for prefix in ('read-crd', 'reread-crd', 'before-restores', 'after-restores'))
@@ -225,13 +227,22 @@ class Observer:
                              '--request-timeout=30s', *args], label, failure=failure)
 
     def deploy_bundle(self, path, pin, label):
-        B.require(label in ('baseline-deploy', 'baseline-reconcile', 'candidate-deploy'),
+        B.require(label in ('baseline-deploy', 'baseline-reconcile', 'candidate-deploy', 'fresh-candidate-deploy'),
                   'deployment role differs')
         self.guard()
         B.require(B.digest(B.regular(path, 512 * 1024**2)) == pin, 'deployment bundle changed')
         return self.command([self.cli, 'deploy', path, '--packages', 'core-backup-restore', '--confirm',
-            '--retries', '1', '--tmpdir', self.output / 'tmp', '--uds-cache', self.output / 'uds-cache',
+            '--retries', ('0' if label == 'fresh-candidate-deploy' else '1'), '--tmpdir', self.output / 'tmp', '--uds-cache', self.output / 'uds-cache',
             '--no-progress', '--no-log-file'], label, timeout=1500)
+
+    def require_fresh_velero(self):
+        _, raw = self.k('get', 'crds', '-o', 'json', label='fresh-empty-crds')
+        B.require(not any(item['spec']['group'] == 'velero.io' for item in json.loads(raw)['items']),
+                  'fresh candidate requires no Velero CRDs or namespace')
+        _, raw = self.k('get', 'namespace', 'velero', '--ignore-not-found', '-o', 'json',
+                        label='fresh-empty-namespace')
+        B.require(not raw.strip(), 'fresh candidate requires no Velero CRDs or namespace')
+        return {'veleroCrdsAbsent': True, 'veleroNamespaceAbsent': True}
 
     def reconcile_baseline(self, path, pin, expected):
         _, raw = self.k('get', 'crd', 'restores.velero.io', '-o', 'json', label='baseline-bootstrap-crd')
@@ -305,9 +316,11 @@ class Observer:
         except Exception:
             return {'status': 'unavailable'}
 
-    def observe(self, variant, expected, binding, provider_sha, baseline=None):
+    def observe(self, variant, expected, binding, provider_sha, baseline=None, mode='upgrade'):
         B.require(variant in ('baseline', 'candidate'), 'observation variant differs')
-        if variant == 'candidate':
+        B.require(mode in ('upgrade', 'fresh') and (mode != 'fresh' or
+                  (variant == 'candidate' and baseline is None)), 'observation mode differs')
+        if variant == 'candidate' and mode == 'upgrade':
             B.require(baseline and baseline['schema'] == 1 and baseline['completed'] is True and
                       baseline['variant'] == 'baseline' and baseline['binding'] == binding and
                       baseline['providerSHA256'] == provider_sha, 'baseline receipt differs')
@@ -337,16 +350,18 @@ class Observer:
         B.require(json.loads(raw)['items'] == [], 'a Restore persisted during schema smoke')
         _, raw = self.k('get', 'crd', 'restores.velero.io', '-o', 'json', label='reread-crd-' + variant)
         B.require(validate_crd(json.loads(raw), expected) == uid, 'CRD changed during observation')
-        return {'schema': 1, 'scope': 'api-schema-smoke-only', 'variant': variant, 'completed': True,
+        return {'schema': 1, 'scope': 'api-schema-smoke-only', 'mode': mode, 'variant': variant, 'completed': True,
                 'binding': binding, 'providerSHA256': provider_sha, 'crdUidSHA256': uid,
                 'crdSpecSHA256': canonical(expected), 'coreHelmOwnerVerified': True,
                 'restoreObjectsPersisted': False, 'dryRunCases': len(cases),
                 'restoreAcceptance': False, 'ownerAcceptance': False}
 
 
-def execute(directory, cli, output):
+def execute(directory, cli, output, mode='upgrade'):
     import shutil
     import signal
+    B.require(mode in ('upgrade', 'fresh') and
+              os.environ.get('CORE_RESTORE_API_MODE') == mode, 'API mode differs')
     binding, lock = B.context(), B.contract()
     B.require(os.environ.get('CORE_RESTORE_API_SMOKE') == 'true', 'explicit API smoke job required')
     B.verify_recipe(binding)
@@ -370,11 +385,11 @@ def execute(directory, cli, output):
     B.require(shutil.disk_usage(output.parent).free >= 20 * 1024**3, 'API smoke requires 20 GiB free')
     output.mkdir(mode=0o700)
     state = {'schema': 1, 'scope': 'api-schema-smoke-only', 'completed': False,
-             'binding': binding, 'phase': 'verify-provider', 'inputs': pins,
+             'binding': binding, 'mode': mode, 'phase': 'verify-provider', 'inputs': pins,
              'restoreAcceptance': False, 'ownerAcceptance': False}
     def save():
         (output / 'private-state.json').write_text(json.dumps(state, indent=2) + '\n')
-        public = {k: state[k] for k in ('schema', 'scope', 'completed', 'binding', 'phase',
+        public = {k: state[k] for k in ('schema', 'scope', 'completed', 'binding', 'mode', 'phase',
                                        'restoreAcceptance', 'ownerAcceptance')}
         if 'failureType' in state:
             public['failureType'] = state['failureType']
@@ -413,24 +428,28 @@ def execute(directory, cli, output):
             payload_unchanged()
             B.require(canonical(E.verify(E.CONTEXT, E.command)) == cluster, 'API trial cluster changed')
         observer.guard = guard
-        state['phase'] = 'official-pull'; save()
-        baseline_dir = output / 'official'
-        baseline_dir.mkdir()
-        observer.command([cli, 'zarf', 'package', 'pull',
-            'oci://ghcr.io/defenseunicorns/packages/uds/core-backup-restore@' + BASELINE_DIGEST,
-            '--architecture', 'amd64', '--output-directory', baseline_dir, '--verify=always',
-            '--certificate-identity', UPSTREAM_IDENTITY, '--certificate-oidc-issuer', B.ISSUER,
-            '--insecure-ignore-tlog=false', '--tmpdir', output / 'tmp', '--cache', output / 'cache',
-            '--no-color'], 'verified-official-pull', timeout=900)
-        archives = list(baseline_dir.glob('*.tar.zst'))
-        B.require(len(archives) == 1 and archives[0].name ==
-                  'zarf-package-core-backup-restore-amd64-1.16.0-upstream.tar.zst', 'official archive inventory differs')
-        baseline_pin = B.digest(archives[0])
+        baseline_pin, archives, baseline_dir = None, [], None
+        if mode == 'upgrade':
+            state['phase'] = 'official-pull'; save()
+            baseline_dir = output / 'official'
+            baseline_dir.mkdir()
+            observer.command([cli, 'zarf', 'package', 'pull',
+                'oci://ghcr.io/defenseunicorns/packages/uds/core-backup-restore@' + BASELINE_DIGEST,
+                '--architecture', 'amd64', '--output-directory', baseline_dir, '--verify=always',
+                '--certificate-identity', UPSTREAM_IDENTITY, '--certificate-oidc-issuer', B.ISSUER,
+                '--insecure-ignore-tlog=false', '--tmpdir', output / 'tmp', '--cache', output / 'cache',
+                '--no-color'], 'verified-official-pull', timeout=900)
+            archives = list(baseline_dir.glob('*.tar.zst'))
+            B.require(len(archives) == 1 and archives[0].name ==
+                      'zarf-package-core-backup-restore-amd64-1.16.0-upstream.tar.zst', 'official archive inventory differs')
+            baseline_pin = B.digest(archives[0])
         baseline = None
-        for variant, package_dir in [('baseline', baseline_dir), ('candidate', directory)]:
+        variants = ([('baseline', baseline_dir)] if mode == 'upgrade' else []) + [('candidate', directory)]
+        for variant, package_dir in variants:
             state['phase'] = variant; save()
             guard()
-            B.require(B.digest(archives[0]) == baseline_pin, 'official package changed')
+            if mode == 'upgrade':
+                B.require(B.digest(archives[0]) == baseline_pin, 'official package changed')
             folder = output / variant
             folder.mkdir()
             definition = folder / 'uds-bundle.yaml'
@@ -443,17 +462,25 @@ def execute(directory, cli, output):
             B.require(len(built) == 1 and B.digest(definition) == definition_pin, 'API bundle inventory differs')
             bundle_pin = B.digest(built[0])
             guard()
-            B.require(B.digest(built[0]) == bundle_pin and B.digest(archives[0]) == baseline_pin,
+            B.require(B.digest(built[0]) == bundle_pin and
+                      (mode == 'fresh' or B.digest(archives[0]) == baseline_pin),
                       'API deployment input changed')
-            observer.deploy_bundle(built[0], bundle_pin, variant + '-deploy')
+            fresh = observer.require_fresh_velero() if mode == 'fresh' else None
+            observer.deploy_bundle(built[0], bundle_pin,
+                                   'fresh-candidate-deploy' if mode == 'fresh' else variant + '-deploy')
             reconciliation = (observer.reconcile_baseline(built[0], bundle_pin, expected['baseline'])
                               if variant == 'baseline' else None)
-            result = observer.observe(variant, expected[variant], binding, provider_sha, baseline)
+            result = observer.observe(variant, expected[variant], binding, provider_sha, baseline, mode)
+            if fresh is not None:
+                result['freshPreconditions'] = fresh
+                result['candidateDeployments'] = 1
+                result['baselineReconciliationPerformed'] = False
             if reconciliation is not None:
                 result['bootstrapReconciliation'] = reconciliation
             result.update(clusterIdentitySHA256=cluster, bundleSHA256=bundle_pin,
-                          candidatePackageSHA256=provider['packageSHA256'],
-                          officialIndexDigest=BASELINE_DIGEST, officialArchiveSHA256=baseline_pin)
+                          candidatePackageSHA256=provider['packageSHA256'])
+            if mode == 'upgrade':
+                result.update(officialIndexDigest=BASELINE_DIGEST, officialArchiveSHA256=baseline_pin)
             (output / (variant + '-review.json')).write_text(json.dumps(result, indent=2) + '\n')
             if variant == 'baseline':
                 baseline = result
@@ -475,16 +502,17 @@ def execute(directory, cli, output):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--execute', action='store_true')
+    parser.add_argument('--mode', choices=('upgrade', 'fresh'), default='upgrade')
     parser.add_argument('--provider-directory', type=Path)
     parser.add_argument('--cli', type=Path)
     parser.add_argument('--output', type=Path)
     args = parser.parse_args(argv)
     if not args.execute:
-        B.require(args.provider_directory is args.cli is args.output is None, 'explicit execution required')
+        B.require(args.provider_directory is args.cli is args.output is None and args.mode == 'upgrade', 'explicit execution required')
         B.contract()
         return
     B.require(all(v is not None for v in (args.provider_directory, args.cli, args.output)), 'complete API arguments required')
-    execute(args.provider_directory, args.cli, args.output)
+    execute(args.provider_directory, args.cli, args.output, args.mode)
 
 
 if __name__ == '__main__':
