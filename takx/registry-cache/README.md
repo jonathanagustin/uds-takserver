@@ -4,8 +4,8 @@ Local commands package a verified Draco 1.5.7 producer into a small relocatable
 component, the foundation for [#482](https://github.com/jonathanagustin/uds-takserver/issues/482).
 These commands do **not** publish to a registry, authenticate a publisher or
 qualify a complete SDK. Existing native profiles remain unchanged. The separate v2 manual
-workflow below adds an optional trusted publisher; ordinary PR CI does not build
-or publish native components.
+workflow below adds an optional trusted publisher. A separate read-only PR job
+restores the reviewed component or builds fresh when its inputs differ.
 
 The payload contains the real static archive, 201 installed Draco headers, four
 upstream CMake package files and the upstream license. It excludes executables,
@@ -90,8 +90,8 @@ consumers must pass before the key tag is promoted. A different subject for an
 existing key fails closed. No PR or scheduled writer is introduced.
 
 The reader requires an explicitly approved producer source SHA; it does not
-trust a source revision merely because unsigned metadata names it. A read-only
-PR consumer can use that reader later; no automatic PR restore is wired here.
+trust a source revision merely because unsigned metadata names it. The read-only PR
+consumer below uses that reader with a separately reviewed immutable subject pin.
 The first hosted registry experiment completed in
 [run 43088282608](https://github.com/jonathanagustin/uds-takserver/actions/runs/43088282608),
 attempt 1, from protected source `3415a69bfd52d4210d8c7308f51f77d29a358f94`.
@@ -106,7 +106,7 @@ the capsule SHA-256 is `86cfa7ac0071b95238828d82dcdb227154434b15f0f9efd5c2edaef6
 The accepted receipt is retained in
 [artifact 13887622883](https://github.com/jonathanagustin/uds-takserver/actions/runs/43088282608/artifacts/13887622883).
 Consumers must still verify the immutable subject and trusted provenance under
-the reader policy above. Automatic PR restore is not wired. Complete SDK
+the reader policy above. Automatic PR restoration uses this pinned subject. Complete SDK
 qualification and publication remain separate open gates in #482 and #477;
 this component result does not qualify a renderer or TAKX client.
 
@@ -139,3 +139,26 @@ quiet, syntax-only and explicit null input/output controls. Local GNU 14.2
 metadata probes produced repeatable nonempty identity and no assembly files;
 this is not a pinned-container build qualification or proof of the lost job's
 specific inner failure. The exact version command enters each tool identity.
+
+## Read-only PR builds
+
+`native-cache-pr.yaml` runs on pull requests touching the component cache or its
+consumed native helpers, and on explicit manual dispatch. It verifies the exact
+reviewed subject, producer source and native qualification from
+`pr-consumer.lock.json`, then repeats the existing SLSA/qualification verification
+and anonymous OCI readback before restoring anything. Mutable key tags are never
+lookup inputs. The reader and workflow receive only contents/attestation read
+permissions; they do not log in to GHCR, sign, promote or publish.
+
+A compatible hit runs the real codec and whole-archive PIC consumers at two fresh
+prefixes in the pinned GCC container. Build recipe, source or base-image changes
+are compatibility misses: the job checks out the pinned official Draco source
+and compiles a fresh component with the existing qualification controls. Invalid
+signatures, unexpected predicates, corrupt capsules and network/authentication
+errors fail the job rather than becoming misses. Documentation and reader-only
+changes do not alter the component build key.
+
+Artifacts contain the selection result and completed consumer/build receipt,
+without command logs or executable payloads. This adds automated component reuse
+and qualification; existing SDK profiles are not redirected to this cache, and
+component success does not establish SDK or TAKX interoperability acceptance.
