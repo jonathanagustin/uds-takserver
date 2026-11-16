@@ -11,6 +11,33 @@ The exact parent receipt is
 All ten pre/postimages, patch bytes and seventeen owned diagnostic sources must match
 the closed lock. Source preparation grants no runtime or SDK acceptance.
 
+## Current native qualification
+
+The version-11 patch profile passes a new complete Native17 source rebuild:
+483 Core, 159 JNI and 173 Cesium translation units, with its own 2,701 Java
+classes and 119 JNI headers. No prior native objects or libraries were adopted.
+The producer receipt SHA256 is
+`ad799bcc0ffefc5c7145d3b2dac01c147bae90dd93f8e8633ec8638bf47d6f94`.
+
+Ten scoped runtime cohorts pass against those fresh libraries, including inbound
+wrapping, feature callbacks, constructor/class-initialization failures, listener
+registration/removal, cache/surface consumers, elevation faults and the owned
+headed lifecycle. Independent final review rechecks 11,230 unique input hashes
+and reproduces 71 runtime artifacts byte for byte. Its SHA256 is
+`7fda5a909648b3fe3152d6c4414f0931ec0842b96a1ca31f8201e5a14a223314`;
+the scoped pipeline receipt is
+`53b24c4347094e04a19c47e0fea6507561f6bf662a0b8a6d53c4f6f9b6923953`.
+
+The eighteen direct-pointer cases and valid-empty-holder compatibility probe also
+pass on Native17, with zero strict-JNI diagnostics. All four additional Java/probe
+artifacts reproduce byte for byte; that review receipt is
+`d1de8e768c889898e8910f68f01c46bf4070b611adecc30640e6887e5759a5b0`.
+These results qualify the closed ten-file source patch for the tested composition
+and sequential paths. They do not establish full renderer/SDK/client acceptance,
+stock-JDK or hardware rendering, arbitrary concurrent disposal, or portable
+native-builder integration. Source preparation still cannot grant runtime
+acceptance on another machine or input composition.
+
 ## Use
 
 Default verification starts no process:
