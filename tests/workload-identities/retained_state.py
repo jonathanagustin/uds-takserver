@@ -10,6 +10,7 @@ from pathlib import PurePosixPath
 import re
 import shlex
 import ssl
+import subprocess
 import tempfile
 import time
 import urllib.parse
@@ -19,7 +20,7 @@ import yaml
 
 APP_RELEASES={'takserver':{'takserver','uds-takserver-config'},'cloudtak':{'uds-cloudtak'}}
 GENERATED_SECRETS={'takserver-ca-key','takserver-certs','tak-health-client'}
-SOURCE_CLEANUP={(ns,'Secret',name) for ns,name in [('takserver',name) for name in GENERATED_SECRETS|{'takserver-keystore','takclient-enrollment'}]+[('cloudtak','cloudtak-tak-admin')]}|{('takserver','ConfigMap','cert-migration'),('takserver','ConfigMap','takserver-startup')}
+SOURCE_CLEANUP={(ns,'Secret',name) for ns,name in [('takserver',name) for name in GENERATED_SECRETS|{'takserver-keystore','takclient-enrollment','takserver-crl'}]+[('cloudtak','cloudtak-tak-admin')]}|{('takserver','ConfigMap','cert-migration'),('takserver','ConfigMap','takserver-startup')}
 
 def cleanup_allowed(rec):
     return rec['namespace'] in APP_RELEASES and (rec['kind']=='PersistentVolumeClaim' and 'parent' in rec or (rec['namespace'],rec['kind'],rec['name']) in SOURCE_CLEANUP)
@@ -29,7 +30,7 @@ def require(value,message):
 
 def sha(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
-SOURCE_FILES=('pepr/capabilities/workload.ts','pepr/capabilities/cloudtak-admin.ts','pepr/capabilities/takclient-credentials.ts')
+SOURCE_FILES=('pepr/capabilities/workload.ts','pepr/capabilities/cloudtak-admin.ts','pepr/capabilities/takclient-credentials.ts','pepr/capabilities/takclient.ts','pepr/capabilities/takclient-pki.ts','pepr/capabilities/takclient-capability.ts')
 
 def source_files():
     return {name:hashlib.sha256((Path(__file__).resolve().parents[2]/name).read_bytes()).hexdigest() for name in SOURCE_FILES}
@@ -332,7 +333,7 @@ def capture(driver):
         for secret in driver.get('secrets',namespace=namespace)['items']:
             name=secret['metadata']['name']
             annotations=secret['metadata'].get('annotations',{})
-            extra=(namespace,name) in {('cloudtak','cloudtak-tak-admin'),('takserver','takclient-enrollment')}
+            extra=(namespace,name) in {('cloudtak','cloudtak-tak-admin'),('takserver','takclient-enrollment'),('takserver','takserver-crl')}
             if extra:generated_secret(driver,secret)
             if name in referenced or namespace=='takserver' and name in GENERATED_SECRETS|{'takserver-keystore'} or extra:
                 rec=resource_record(secret);rec['dataSHA256']=sha(secret.get('data',{}));rec['recreatedHook']=namespace=='takserver' and name=='takserver-keystore';records.append(rec)
@@ -367,6 +368,7 @@ def verify(driver,proof,remove_sentinels=False):
     return observations
 
 def cleanup_snapshot(driver,proof):
+    if any(rec['namespace']=='takserver' and rec['name'] in GENERATED_SECRETS|{'takserver-crl'} for rec in proof['records']):no_live_clients(driver)
     verify(driver,proof,remove_sentinels=True);result=[]
     for rec in proof['records']:
         if cleanup_allowed(rec):
@@ -374,7 +376,7 @@ def cleanup_snapshot(driver,proof):
                 '--show-managed-fields=true','-o','json')) if rec['kind']=='PersistentVolumeClaim' else
                 driver.get(rec['kind'],rec['name'],namespace=rec['namespace']))
             if rec['name']=='takserver-startup':startup_map(current)
-            if rec['name'] in ('cloudtak-tak-admin','takclient-enrollment'):generated_secret(driver,current,cleanup=True)
+            if rec['name'] in ('cloudtak-tak-admin','takclient-enrollment','takserver-crl'):generated_secret(driver,current,cleanup=True)
             item=resource_record(current);item['origin']=proof['source']
             if rec['kind']=='PersistentVolumeClaim':
                 require(item['uid']==rec['uid'],'verified PVC replaced before cleanup snapshot')
@@ -746,6 +748,7 @@ def conditional_delete(driver,rec):
     require_origin(rec)
     driver.guard();driver.core_unchanged()
     consumers_gone(driver)
+    if rec['namespace']=='takserver' and rec['name'] in GENERATED_SECRETS|{'takserver-crl'}:no_live_clients(driver)
     if not driver.kube('get','namespace',rec['namespace'],'--ignore-not-found','-o','json').strip():return
     output=driver.kube('get',rec['kind'],rec['name'],'-n',rec['namespace'],'--ignore-not-found',
         *(['--show-managed-fields=true'] if rec['kind']=='PersistentVolumeClaim' else []),'-o','json')
@@ -857,6 +860,13 @@ def startup_map(obj):
 
 def generated_secret(driver,obj,cleanup=False):
     meta=obj['metadata'];name=meta['name'];namespace=meta['namespace']
+    if namespace=='takserver' and name=='takserver-crl':
+        if cleanup:no_live_clients(driver)
+        config=driver.get('configmap','cert-migration')
+        binary=config.get('binaryData',{})
+        ca=(base64.b64decode(binary['ca.pem'],validate=True).decode() if 'ca.pem' in binary else config.get('data',{}).get('ca.pem'))
+        empty_crl(obj,ca)
+        return True
     if namespace=='cloudtak' and name=='cloudtak-tak-admin':
         require(meta.get('labels',{}).get('app.kubernetes.io/part-of')=='cloudtak','admin copy source label differs')
         config=driver.get('configmap','cert-migration');keystore=driver.get('secret','takserver-keystore')
@@ -963,4 +973,55 @@ def preserved_registry(driver,obj,bindings):
     require(len(matches)==1,'registry copy has no bound Zarf authority')
     rec=registry_binding(driver,obj)
     require(rec==matches[0],'bound registry copy or retained Zarf authority changed')
+    return True
+
+
+def no_live_clients(driver):
+    try:clients=driver.get('takclients.tak.jonathanagustin.github.io',namespace='takclients')['items']
+    except ValueError:
+        # The Pepr chart owns the CRD as a template, so uninstall may already
+        # have removed the API. A failed list alone never establishes absence.
+        require(not driver.kube('get','customresourcedefinition','takclients.tak.jonathanagustin.github.io',
+                                '--ignore-not-found','-o','json').strip(),'TakClient inventory unavailable')
+        return
+    require(isinstance(clients,list) and not clients,
+            'active clients prevent application CA and CRL retirement')
+
+
+def empty_crl(obj,ca):
+    """Authorize only an empty source-format CRL signed by the bound app CA."""
+    meta=obj.get('metadata',{});data=obj.get('data',{})
+    require(obj.get('apiVersion')=='v1' and obj.get('kind')=='Secret' and obj.get('type')=='Opaque' and meta.get('namespace')=='takserver' and
+            meta.get('name')=='takserver-crl' and not meta.get('deletionTimestamp') and
+            meta.get('labels',{}).get('app.kubernetes.io/part-of')=='takserver' and
+            meta.get('labels',{}).get('uds.dev/pod-reload')=='false' and
+            set(data)=={'ca.crl','revoked.json','number','ca-fingerprint','reload-at'} and
+            not obj.get('stringData') and isinstance(ca,str) and 0<len(ca)<=65536,
+            'CRL is not the empty source-generated checkpoint')
+    require(all(isinstance(value,str) and len(value)<=131072 for value in data.values()),'CRL data bound differs')
+    try:decoded={key:base64.b64decode(value,validate=True) for key,value in data.items()}
+    except (ValueError,TypeError):raise ValueError('CRL encoding differs') from None
+    require(decoded['revoked.json']==b'[]' and decoded['reload-at']==b'' and
+            re.fullmatch(rb'[1-9][0-9]{0,19}',decoded['number']) and
+            0<len(decoded['ca.crl'])<=65536,'CRL contains revocation or pending reload state')
+    try:
+        fingerprint=hashlib.sha256(ssl.PEM_cert_to_DER_cert(ca)).hexdigest().upper()
+    except (ValueError,TypeError):raise ValueError('CRL CA material differs') from None
+    require(decoded['ca-fingerprint']==':'.join(fingerprint[i:i+2] for i in range(0,64,2)).encode(),
+            'CRL issuer does not match application CA')
+    with tempfile.TemporaryDirectory(prefix='owned-crl-check-') as directory:
+        ca_path,crl_path=Path(directory)/'ca.pem',Path(directory)/'ca.crl'
+        for path,value in ((ca_path,ca.encode()),(crl_path,decoded['ca.crl'])):
+            path.write_bytes(value);path.chmod(0o600)
+        try:
+            verified=subprocess.run(['openssl','crl','-in',str(crl_path),'-CAfile',str(ca_path),'-verify','-noout'],
+                                    stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
+            inspected=subprocess.run(['openssl','crl','-in',str(crl_path),'-noout','-text','-crlnumber'],
+                                     stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=10)
+        except (OSError,subprocess.TimeoutExpired):raise ValueError('CRL verification unavailable') from None
+    number=re.search(rb'^crlNumber=0x([0-9A-Fa-f]+)$',inspected.stdout,re.MULTILINE)
+    require(verified.returncode==0 and inspected.returncode==0 and
+            re.search(rb'^No Revoked Certificates\.$',inspected.stdout,re.MULTILINE) and
+            b'Revoked Certificates:' not in inspected.stdout and number and
+            int(number[1],16)==int(decoded['number']),'CRL signature, entries or number differs')
     return True

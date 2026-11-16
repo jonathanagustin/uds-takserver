@@ -496,3 +496,28 @@ application deletion allowlist or public proof. Other Secrets, including
 `takserver-crl`, continue to prevent clean-state acceptance. CRL handling requires
 separate evidence and a decision about retaining revocation state; this registry
 change alone does not justify another staged package trial.
+
+### Retire only an empty application CRL
+
+The controller's `onCaMaterial`/`ensureCrl` path creates `takserver-crl` even
+before any TakClient exists. Fresh strict may retire this empty bookkeeping
+Secret with the application CA, using the same unchanged source-origin,
+UID/resourceVersion and conditional API deletion checks as other retained
+application objects. The CRL producer, PKI helper and controller source hashes
+are included in the bound origin.
+
+The capture and pre-uninstall cleanup snapshot require the exact five-key
+source payload and labels, an empty `revoked.json`, no pending reload, a positive
+CRL number and an issuer fingerprint matching `cert-migration`'s CA. OpenSSL
+must verify the actual CRL signature against that CA, report no revoked
+certificates and agree on the CRL number. A JSON claim of empty revocation state
+cannot mask a signed CRL containing revoked serials. Nonempty history, unknown
+payload, signature mismatch or unavailable verification refuses the trial.
+
+Live TakClients prevent the cleanup snapshot and each CA/CRL conditional delete.
+After chart uninstall removes the TakClient API, an explicit successful CRD
+not-found observation is required; a failed client list alone is insufficient.
+The existing consumer, source and exact deletion guards still apply. No keys or
+CRL bodies enter public proofs. This scoped cleanup is not permission to discard
+revocation history in an existing deployment, and offline tests do not establish
+a successful fresh-strict package run.

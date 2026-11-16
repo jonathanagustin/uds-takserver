@@ -713,3 +713,96 @@ class RegistryAuthorityGuards(unittest.TestCase):
         with self.assertRaises(ValueError):R.registry_binding(driver,obj)
         driver.get=lambda *a,**k:(_ for _ in ()).throw(ValueError('source unavailable'))
         with self.assertRaises(ValueError):R.registry_binding(driver,obj)
+
+class EmptyCrlGuards(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary=tempfile.TemporaryDirectory(prefix='empty-crl-fixture-')
+        cls.addClassCleanup(cls.temporary.cleanup)
+        cls.folder=Path(cls.temporary.name)
+        def run(*args):
+            subprocess.run(['openssl',*args],cwd=cls.folder,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=20)
+        for name in ('ca','other'):
+            run('req','-x509','-newkey','rsa:2048','-nodes','-keyout',name+'.key','-out',name+'.pem','-subj','/CN='+name,'-days','2')
+        (cls.folder/'newcerts').mkdir()
+        (cls.folder/'index').write_text('');(cls.folder/'serial').write_text('01\n');(cls.folder/'crlnumber').write_text('01\n')
+        (cls.folder/'openssl.cnf').write_text('[ca]\ndefault_ca=authority\n[authority]\ndir='+str(cls.folder)+'\n'
+            'database=$dir/index\nnew_certs_dir=$dir/newcerts\ncertificate=$dir/ca.pem\nprivate_key=$dir/ca.key\n'
+            'serial=$dir/serial\ncrlnumber=$dir/crlnumber\ndefault_md=sha256\ndefault_days=1\ndefault_crl_days=1\npolicy=policy\n'
+            '[policy]\ncommonName=supplied\n')
+        run('ca','-config','openssl.cnf','-gencrl','-out','empty.crl')
+        run('req','-newkey','rsa:2048','-nodes','-keyout','leaf.key','-out','leaf.csr','-subj','/CN=leaf')
+        run('ca','-config','openssl.cnf','-batch','-in','leaf.csr','-out','leaf.pem')
+        run('ca','-config','openssl.cnf','-revoke','leaf.pem')
+        run('ca','-config','openssl.cnf','-gencrl','-out','revoked.crl')
+
+    def fixture(self):
+        import hashlib,ssl
+        ca=(self.folder/'ca.pem').read_text()
+        digest=hashlib.sha256(ssl.PEM_cert_to_DER_cert(ca)).hexdigest().upper()
+        data={'ca.crl':(self.folder/'empty.crl').read_text(),'revoked.json':'[]','number':'1',
+              'ca-fingerprint':':'.join(digest[i:i+2] for i in range(0,64,2)),'reload-at':''}
+        obj={'apiVersion':'v1','kind':'Secret','type':'Opaque','metadata':{'name':'takserver-crl','namespace':'takserver',
+             'uid':'bound-crl','resourceVersion':'1','labels':{'app.kubernetes.io/part-of':'takserver','uds.dev/pod-reload':'false'}},
+             'data':{key:base64.b64encode(value.encode()).decode() for key,value in data.items()}}
+        return obj,ca
+
+    def test_real_empty_signed_crl_accepts_and_source_data_is_not_modified(self):
+        obj,ca=self.fixture();before=copy.deepcopy(obj)
+        self.assertTrue(R.empty_crl(obj,ca));self.assertEqual(obj,before)
+        self.assertTrue(R.cleanup_allowed(R.resource_record(obj)))
+
+    def test_wrong_signer_and_real_revocation_cannot_hide_behind_empty_json(self):
+        import hashlib,ssl
+        obj,ca=self.fixture();other=(self.folder/'other.pem').read_text()
+        with self.assertRaisesRegex(ValueError,'issuer'):R.empty_crl(obj,other)
+        fingerprint=hashlib.sha256(ssl.PEM_cert_to_DER_cert(other)).hexdigest().upper()
+        obj['data']['ca-fingerprint']=base64.b64encode(':'.join(fingerprint[i:i+2] for i in range(0,64,2)).encode()).decode()
+        with self.assertRaisesRegex(ValueError,'signature'):R.empty_crl(obj,other)
+        obj,ca=self.fixture();obj['data']['ca.crl']=base64.b64encode((self.folder/'revoked.crl').read_bytes()).decode()
+        obj['data']['number']=base64.b64encode(b'2').decode()
+        with self.assertRaisesRegex(ValueError,'signature, entries'):R.empty_crl(obj,ca)
+
+    def test_state_payload_and_metadata_guards_refuse(self):
+        changes=[lambda v:v['data'].update({'revoked.json':base64.b64encode(b'[{"serial":"1"}]').decode()}),
+                 lambda v:v['data'].update({'reload-at':base64.b64encode(b'pending').decode()}),
+                 lambda v:v['data'].update(number=base64.b64encode(b'2').decode()),
+                 lambda v:v['data'].update({'ca.crl':'invalid-base64!'}),
+                 lambda v:v['data'].update(extra=''),
+                 lambda v:v['metadata']['labels'].update({'uds.dev/pod-reload':'true'}),
+                 lambda v:v['metadata'].update(namespace='zarf'),
+                 lambda v:v['metadata'].update(deletionTimestamp='now')]
+        for change in changes:
+            obj,ca=self.fixture();change(obj)
+            with self.subTest(change=change),self.assertRaises(ValueError):R.empty_crl(obj,ca)
+        obj,ca=self.fixture()
+        with patch.object(R.subprocess,'run',side_effect=FileNotFoundError):
+            with self.assertRaisesRegex(ValueError,'unavailable'):R.empty_crl(obj,ca)
+
+    def test_live_clients_prevent_snapshot_and_conditional_ca_or_crl_deletion(self):
+        obj,ca=self.fixture();driver=SimpleNamespace(get=lambda *a,**k:{'items':[{'metadata':{'name':'active'}}]})
+        with patch.object(R,'verify') as verify:
+            with self.assertRaisesRegex(ValueError,'active clients'):R.cleanup_snapshot(driver,{'records':[{'namespace':'takserver','name':'takserver-crl'}]})
+            verify.assert_not_called()
+        helper=RetainedStateGuards()
+        for name in ('takserver-crl','takserver-ca-key','takserver-certs','tak-health-client'):
+            obj['metadata']['name']=name;rec=helper.record(obj)
+            driver.guard=lambda:None;driver.core_unchanged=lambda:None
+            with patch.object(R,'consumers_gone'),patch.object(R,'delete_record') as delete:
+                with self.assertRaisesRegex(ValueError,'active clients'):R.conditional_delete(driver,rec)
+                delete.assert_not_called()
+
+    def test_generated_secret_checks_real_ca_material_and_absent_clients_before_cleanup(self):
+        obj,ca=self.fixture()
+        driver=SimpleNamespace(get=lambda kind,*a,**k:({'items':[]} if kind.startswith('takclients.') else
+                               {'binaryData':{'ca.pem':base64.b64encode(ca.encode()).decode()}}))
+        self.assertTrue(R.generated_secret(driver,obj,cleanup=True))
+
+    def test_missing_client_api_requires_explicit_crd_absence(self):
+        driver=SimpleNamespace(get=lambda *a,**k:(_ for _ in ()).throw(ValueError('list failed')),
+                               kube=lambda *a:'')
+        R.no_live_clients(driver)
+        driver.kube=lambda *a:'{"kind":"CustomResourceDefinition"}'
+        with self.assertRaisesRegex(ValueError,'inventory unavailable'):R.no_live_clients(driver)
+        driver.kube=lambda *a:(_ for _ in ()).throw(ValueError('query failed'))
+        with self.assertRaises(ValueError):R.no_live_clients(driver)
