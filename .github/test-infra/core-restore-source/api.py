@@ -107,14 +107,73 @@ def bundle(variant, directory):
             'version': 'dev', 'description': 'Disposable Core Restore API schema smoke only'}, 'packages': [package]}
 
 
+def failure_diagnostic(error, observer=None):
+    """Emit fixed classifications and known source frames, never private text."""
+    summary = B.failure_summary(error)
+    categories = {
+        'CRD ownership differs': 'crd-owner',
+        'CRD schema differs beyond the reviewed policy': 'crd-schema',
+        'CRD is not established': 'crd-not-established',
+        'server dry-run result differs': 'dry-run-outcome',
+        'API rejection reason differs': 'dry-run-reason',
+        'a Restore persisted during schema smoke': 'restore-persisted',
+        'API smoke requires no existing Restore objects': 'restore-inventory',
+        'CRD was replaced during Core upgrade': 'crd-replaced',
+        'CRD changed during observation': 'crd-changed',
+        'API bundle inventory differs': 'bundle-inventory',
+        'API trial cluster changed': 'cluster-identity',
+    }
+    files = {str(Path(path).resolve()): str(Path(path).resolve().relative_to(B.ROOT))
+             for path in (__file__, B.__file__, E.__file__, R.__file__)}
+    frames, current = [], error.__traceback__
+    while current:
+        path = str(Path(current.tb_frame.f_code.co_filename).resolve())
+        if path in files:
+            frames.append({'file': files[path], 'line': current.tb_lineno, 'sourceSHA256': B.digest(path)})
+        current = current.tb_next
+    result = {'schema': 1, 'scope': 'source-callsite-only',
+              'category': categories.get(str(error), summary['category']),
+              'exceptionType': summary['exceptionType'], 'frames': frames[-8:]}
+    if observer is not None:
+        allowed = {'checkpoint', 'verified-official-pull'}
+        for variant in ('baseline', 'candidate'):
+            allowed.update(variant + '-' + suffix for suffix in ('create', 'deploy', 'valid', 'unknown', 'kind', 'name'))
+            allowed.update(prefix + '-' + variant for prefix in ('read-crd', 'reread-crd', 'before-restores', 'after-restores'))
+        result['command'] = observer.last_label if observer.last_label in allowed else 'unclassified'
+        patterns = {
+            'unknown-flag': rb'unknown flag:',
+            'missing-api': rb'no matches for kind|resource mapping not found',
+            'helm-timeout': rb'timed out waiting|context deadline exceeded',
+            'helm-owner': rb'invalid ownership metadata|cannot be imported into the current release',
+            'field-conflict': rb'field manager conflict|conflict with',
+            'schema-rejection': rb'unknown field|strict decoding error|Required value',
+            'image-pull': rb'ImagePullBackOff|ErrImagePull',
+            'resource-pressure': rb'Insufficient cpu|Insufficient memory|FailedScheduling',
+            'network-error': rb'no such host|connection refused|i/o timeout|TLS handshake timeout|x509:',
+            'api-denied': rb'\bunauthorized\b|\bforbidden\b|access denied',
+            'admission-rejected': rb'admission webhook.*(?:denied|rejected)|policy.*violation|violates PodSecurity',
+        }
+        data = b''
+        if observer.last_log and observer.last_log.is_file():
+            with observer.last_log.open('rb') as stream:
+                stream.seek(max(0, observer.last_log.stat().st_size - 64 * 1024))
+                data = stream.read(64 * 1024)
+        result['patterns'] = [name for name, pattern in patterns.items() if re.search(pattern, data, re.I)]
+    return result
+
+
 class Observer:
     def __init__(self, cli, output, guard, env):
         self.cli, self.output, self.guard, self.env = cli, output, guard, env
         self.index = 0
+        self.last_label = None
+        self.last_log = None
 
     def command(self, argv, label, timeout=45, failure=False):
         self.index += 1
+        self.last_label = label
         label = str(self.index) + '-' + label
+        self.last_log = self.output / (label + '.log')
         try:
             return True, R.execute([str(v) for v in argv], self.output, label, timeout, self.env,
                                   capture=True, disk_limit=8 * 1024**3, log_limit=4 * 1024**2)
@@ -129,6 +188,47 @@ class Observer:
         self.guard()
         return self.command([self.cli, 'zarf', 'tools', 'kubectl', '--context', E.CONTEXT,
                              '--request-timeout=30s', *args], label, failure=failure)
+
+    def failure_status(self):
+        """Read only the owned trial; emit fixed counters/patterns, not object names."""
+        try:
+            self.guard()
+        except Exception:
+            return {'status': 'cluster-guard-refused'}
+        try:
+            _, raw = self.k('get', 'deployment', 'velero', '-n', 'velero', '--ignore-not-found',
+                            '-o', 'json', label='diagnostic-deployment')
+            deployment = json.loads(raw) if raw.strip() else None
+            result = {'status': 'captured', 'deploymentPresent': deployment is not None}
+            if deployment is not None:
+                meta = deployment.get('metadata', {})
+                B.require(deployment.get('kind') == 'Deployment' and meta.get('name') == 'velero' and
+                          meta.get('namespace') == 'velero', 'diagnostic Deployment differs')
+                result['replicas'] = {key: value for key, value in deployment.get('status', {}).items()
+                                      if key in ('replicas', 'readyReplicas', 'availableReplicas', 'updatedReplicas')
+                                      and type(value) is int and 0 <= value <= 1024}
+            _, raw = self.k('get', 'pods', '-n', 'velero', '-o', 'json', label='diagnostic-pods')
+            pods = json.loads(raw)['items']
+            B.require(isinstance(pods, list) and len(pods) <= 128, 'diagnostic Pod inventory bound')
+            phases = ('Pending', 'Running', 'Succeeded', 'Failed', 'Unknown')
+            result['podPhaseCounts'] = {phase: sum(p.get('status', {}).get('phase') == phase for p in pods)
+                                        for phase in phases}
+            result['unclassifiedPodPhaseCount'] = sum(p.get('status', {}).get('phase') not in phases for p in pods)
+            _, raw = self.k('get', 'events', '-n', 'velero', '-o', 'json', label='diagnostic-events')
+            events = json.loads(raw)['items']
+            B.require(isinstance(events, list) and len(events) <= 512, 'diagnostic Event inventory bound')
+            patterns = {'resource-pressure': r'Insufficient cpu|Insufficient memory|FailedScheduling',
+                        'image-pull': r'ImagePullBackOff|ErrImagePull|failed to pull image',
+                        'admission-rejected': r'admission webhook.*(?:denied|rejected)|policy.*violation|violates PodSecurity',
+                        'mount-failed': r'FailedMount|MountVolume.*failed',
+                        'container-unhealthy': r'Unhealthy|CrashLoopBackOff|BackOff',
+                        'api-denied': r'\bunauthorized\b|\bforbidden\b|access denied'}
+            result['eventPatternCounts'] = {name: sum(bool(re.search(pattern, str(e.get('reason', '')) + ' ' +
+                                                str(e.get('message', '')), re.I)) for e in events)
+                                           for name, pattern in patterns.items()}
+            return result
+        except Exception:
+            return {'status': 'unavailable'}
 
     def observe(self, variant, expected, binding, provider_sha, baseline=None):
         B.require(variant in ('baseline', 'candidate'), 'observation variant differs')
@@ -203,6 +303,7 @@ def execute(directory, cli, output):
                                        'restoreAcceptance', 'ownerAcceptance')}
         if 'failureType' in state:
             public['failureType'] = state['failureType']
+            public['failure'] = state['failure']
         (output / 'public-result.json').write_text(json.dumps(public, indent=2) + '\n')
     def unchanged():
         B.require(all(B.digest(p) == pin for p, pin in pins.items()), 'API recipe changed during execution')
@@ -210,6 +311,7 @@ def execute(directory, cli, output):
         raise TimeoutError('API aggregate deadline exceeded')
     previous_handler = signal.signal(signal.SIGALRM, expired)
     signal.alarm(7200)
+    observer = None
     try:
         save()
         provider = B.verify_provider(directory, cli, output / 'provider-verification')
@@ -282,7 +384,10 @@ def execute(directory, cli, output):
         state.update(completed=True, phase='complete', providerSHA256=provider_sha)
         save()
     except BaseException as error:
-        state.update(failed=True, failureType=type(error).__name__)
+        diagnostic = failure_diagnostic(error, observer)
+        if observer is not None and state['phase'] in ('baseline', 'candidate'):
+            diagnostic['workloads'] = observer.failure_status()
+        state.update(failed=True, failureType=diagnostic['exceptionType'], failure=diagnostic)
         save()
         raise
     finally:

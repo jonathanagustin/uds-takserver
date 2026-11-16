@@ -69,6 +69,54 @@ class ApiGuards(unittest.TestCase):
             observer.k('create', '--dry-run=server', label='probe')
         observer.command.assert_not_called()
 
+    def test_failure_diagnostic_omits_private_messages_and_log_values(self):
+        with tempfile.TemporaryDirectory() as temp:
+            observer = A.Observer('/pinned/uds', Path(temp), lambda: None, {})
+            observer.last_label = 'baseline-deploy'
+            observer.last_log = Path(temp) / 'private.log'
+            observer.last_log.write_bytes(b'private-workload-name credential-sentinel: Insufficient cpu; x509: private-host')
+            result = A.failure_diagnostic(ValueError('credential-sentinel private-workload-name'), observer)
+            self.assertEqual(result['category'], 'unclassified')
+            self.assertEqual(result['command'], 'baseline-deploy')
+            self.assertEqual(result['patterns'], ['resource-pressure', 'network-error'])
+            for value in ('credential-sentinel', 'private-workload-name', 'private-host'):
+                self.assertNotIn(value, json.dumps(result))
+            observer.last_label = 'private-workload-name'
+            self.assertEqual(A.failure_diagnostic(ValueError('opaque'), observer)['command'], 'unclassified')
+
+    def test_failure_diagnostic_binds_known_source_callsite(self):
+        try:
+            A.validate_crd(crd(True), schema(False))
+        except ValueError as error:
+            result = A.failure_diagnostic(error)
+        self.assertEqual(result['category'], 'crd-schema')
+        self.assertTrue(result['frames'])
+        self.assertTrue(any(f['file'].endswith('/api.py') for f in result['frames']))
+        self.assertTrue(all(A.B.digest(A.B.ROOT / f['file']) == f['sourceSHA256'] for f in result['frames']))
+
+    def test_failure_workloads_are_bounded_fixed_facts_only(self):
+        observer = A.Observer('/pinned/uds', Path('/owned'), lambda: None, {})
+        values = [{'kind': 'Deployment', 'metadata': {'name': 'velero', 'namespace': 'velero'},
+                   'status': {'replicas': 1, 'readyReplicas': 0, 'privateField': 'credential-sentinel'}},
+                  {'items': [{'metadata': {'name': 'private-workload-name'}, 'status': {'phase': 'Pending'}}]},
+                  {'items': [{'reason': 'private-reason', 'message': 'private-workload-name Insufficient cpu credential-sentinel'}]}]
+        observer.k = Mock(side_effect=[(True, json.dumps(v).encode()) for v in values])
+        result = observer.failure_status()
+        self.assertEqual(result['status'], 'captured')
+        self.assertEqual(result['replicas'], {'replicas': 1, 'readyReplicas': 0})
+        self.assertEqual(result['podPhaseCounts']['Pending'], 1)
+        self.assertEqual(result['eventPatternCounts']['resource-pressure'], 1)
+        for value in ('credential-sentinel', 'private-workload-name', 'private-reason', 'privateField'):
+            self.assertNotIn(value, json.dumps(result))
+        self.assertEqual(observer.k.call_count, 3)
+        self.assertTrue(all(c.args[0] == 'get' for c in observer.k.call_args_list))
+
+    def test_failure_workload_read_refuses_wrong_cluster(self):
+        observer = A.Observer('/pinned/uds', Path('/owned'), Mock(side_effect=ValueError('wrong cluster')), {})
+        observer.k = Mock()
+        self.assertEqual(observer.failure_status(), {'status': 'cluster-guard-refused'})
+        observer.k.assert_not_called()
+
     def test_default_and_off_context_launch_nothing(self):
         with patch.object(A.B.subprocess, 'run', side_effect=AssertionError('process')), patch.object(
                 A.B.urllib.request, 'urlopen', side_effect=AssertionError('network')):

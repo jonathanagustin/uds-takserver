@@ -58,3 +58,12 @@ builder; the resolved regular file must still match the exact pinned SHA256.
 On failure, the builder prints only a fixed guard category, an allowlisted
 exception type, and its own source hash/callsite lines. Arbitrary exception
 messages, paths, HTTP bodies, credentials, and private command output are omitted.
+
+A failed API smoke retains fixed failure categories, its command role, and
+hash-bound callsite lines from the known helpers. At baseline/candidate failures,
+a read-only diagnostic repeats the trial-cluster guard before inspecting the
+fixed Velero Deployment, Pods and Events. Public proof contains only replica and
+phase counts plus allowlisted error-pattern counts. Object names, raw reasons,
+messages, command logs, credentials and manifests are omitted. Diagnostic failure
+cannot turn the original failure into acceptance. This does not change CPU
+requests, admission policy, signature requirements, or the schema assertions.
