@@ -317,6 +317,126 @@
              env->SetLongField(jpointer, Pointer_class.value, 0LL);
              env->SetLongField(jpointer, Pointer_class.raw, 0LL);
              env->SetLongField(jpointer, Pointer_class.deleter, 0LL);
+@@ -82,8 +101,10 @@
+         template<class T>
+         inline T *Pointer_get(JNIEnv &env, jobject jpointer) NOTHROWS
+         {
++            if(env.ExceptionCheck() || !jpointer)
++                return NULL;
+             jlong pointer = env.GetLongField(jpointer, Pointer_class.raw);
+-            if (pointer == 0LL)
++            if(env.ExceptionCheck() || pointer == 0LL)
+                 return NULL;
+             return JLONG_TO_INTPTR(T, pointer);
+         }
+@@ -91,19 +112,28 @@
+         template<class T>
+         inline T *Pointer_get(JNIEnv *env, jobject jpointer) NOTHROWS
+         {
+-            return Pointer_get<T>(*env, jpointer);
++            return env ? Pointer_get<T>(*env, jpointer) : NULL;
+         }
+         template<class T>
+         inline TAK::Engine::Util::TAKErr Pointer_get(std::shared_ptr<T> &value, JNIEnv &env, jobject mpointer) NOTHROWS
+         {
+-            TAK::Engine::Util::TAKErr code(TAK::Engine::Util::TE_Ok);
+-            if(!mpointer)
+-                return TAK::Engine::Util::TE_InvalidArg;
+-            if(!Pointer_isShared<T>(&env, mpointer) && !Pointer_makeShared<T>(&env, mpointer))
+-                return TAK::Engine::Util::TE_Err;
++            using namespace TAK::Engine::Util;
++            if(env.ExceptionCheck()) return TE_Err;
++            if(!mpointer) return TE_InvalidArg;
++            T *raw = Pointer_get<T>(env, mpointer);
++            if(env.ExceptionCheck()) return TE_Err;
++            if(!raw) return TE_InvalidArg;
++            if(!Pointer_isShared<T>(&env, mpointer)) {
++                if(env.ExceptionCheck() || !Pointer_makeShared<T>(&env, mpointer)) return TE_Err;
++            }
++            if(env.ExceptionCheck()) return TE_Err;
+             jlong ptr = env.GetLongField(mpointer, Pointer_class.value);
+-            value = *JLONG_TO_INTPTR(std::shared_ptr<T>, ptr);
+-            return code;
++            if(env.ExceptionCheck()) return TE_Err;
++            if(!ptr) return TE_InvalidArg;
++            const std::shared_ptr<T> &candidate = *JLONG_TO_INTPTR(std::shared_ptr<T>, ptr);
++            if(!candidate || candidate.get() != raw) return TE_InvalidArg;
++            value = candidate;
++            return TE_Ok;
+         }
+ 
+         template<class T>
+@@ -160,34 +190,51 @@
+         template<class T>
+         inline bool Pointer_makeShared(JNIEnv *env, jobject mpointer) NOTHROWS
+         {
++            if(!env || env->ExceptionCheck() || !mpointer) return false;
++            T *raw = Pointer_get<T>(*env, mpointer);
++            if(env->ExceptionCheck() || !raw) return false;
+             jint type = env->GetIntField(mpointer, Pointer_class.type);
++            if(env->ExceptionCheck()) return false;
+             jlong ptr = env->GetLongField(mpointer, Pointer_class.value);
++            if(env->ExceptionCheck() || !ptr) return false;
++            if(type == com_atakmap_interop_Pointer_SHARED) {
++                const std::shared_ptr<T> &model = *JLONG_TO_INTPTR(std::shared_ptr<T>, ptr);
++                return model && model.get() == raw;
++            }
++            if(type != com_atakmap_interop_Pointer_UNIQUE && type != com_atakmap_interop_Pointer_RAW)
++                return false;
++            if(JLONG_TO_INTPTR(T, ptr) != raw) return false;
+             jlong deleter = env->GetLongField(mpointer, Pointer_class.deleter);
+-            if(type == com_atakmap_interop_Pointer_REFERENCE) {
+-                // reference can't be shared
++            if(env->ExceptionCheck() || !deleter) return false;
++            typedef void(*deleter_fn)(const T *);
++            typedef std::unique_ptr<T, deleter_fn> TPtr;
++            TPtr cpointer(raw, JLONG_TO_FNPTR(deleter_fn, deleter));
++            std::shared_ptr<T> *model = NULL;
++            try {
++                model = new std::shared_ptr<T>(std::move(cpointer));
++            } catch(...) {
++                // A failed shared_ptr(unique_ptr&&) construction leaves its
++                // argument unchanged. Java still owns it: do not retire raw.
++                cpointer.release();
+                 return false;
+-            } else if(type == com_atakmap_interop_Pointer_SHARED) {
+-                // already shared
+-                return true;
+-            } else {
+-                typedef void(*deleter_fn)(const T *);
+-                typedef std::unique_ptr<T, void(*)(const T *)> TPtr;
+-                deleter_fn d =  JLONG_TO_FNPTR(deleter_fn, deleter);
+-                TPtr cpointer(JLONG_TO_INTPTR(T, ptr), d);
+-
+-                // promote to shared pointer
+-                std::shared_ptr<T> *model = new std::shared_ptr<T>(std::move(cpointer));
+-                env->SetLongField(mpointer, Pointer_class.value, INTPTR_TO_JLONG(model));
+-                env->SetIntField(mpointer, Pointer_class.type, com_atakmap_interop_Pointer_SHARED);
+-                env->SetLongField(mpointer, Pointer_class.deleter, 0LL);
+-                return true;
+-            }
++            }
++            env->SetLongField(mpointer, Pointer_class.value, INTPTR_TO_JLONG(model));
++            env->SetIntField(mpointer, Pointer_class.type, com_atakmap_interop_Pointer_SHARED);
++            env->SetLongField(mpointer, Pointer_class.deleter, 0LL);
++            return true;
+         }
+         template<class T>
+         inline bool Pointer_isShared(JNIEnv *env, jobject mpointer) NOTHROWS
+         {
++            if(!env || env->ExceptionCheck() || !mpointer) return false;
++            T *raw = Pointer_get<T>(*env, mpointer);
++            if(env->ExceptionCheck() || !raw) return false;
+             jint type = env->GetIntField(mpointer, Pointer_class.type);
+-            return (type == com_atakmap_interop_Pointer_SHARED);
++            if(env->ExceptionCheck() || type != com_atakmap_interop_Pointer_SHARED) return false;
++            jlong ptr = env->GetLongField(mpointer, Pointer_class.value);
++            if(env->ExceptionCheck() || !ptr) return false;
++            const std::shared_ptr<T> &model = *JLONG_TO_INTPTR(std::shared_ptr<T>, ptr);
++            return model && model.get() == raw;
+         }
+     }
+ }
 --- a/takkernel/engine/src/main/jni/interop/core/ManagedLayer.cpp
 +++ b/takkernel/engine/src/main/jni/interop/core/ManagedLayer.cpp
 @@ -32,11 +32,14 @@
