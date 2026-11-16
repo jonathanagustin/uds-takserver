@@ -188,7 +188,7 @@ def inspect_package(path, lock, signed, binding=None):
             meta['metadata']['description'].startswith('Local UDS Core source derivative') and
             meta['build']['architecture'] == 'amd64' and meta['build']['flavor'] == 'upstream' and
             meta['build'].get('signed', False) is signed and
-            set(meta['build'].get('provenanceFiles') or []) <= {'zarf.bundle.sig'}, 'package identity differs')
+            set(meta['build'].get('provenanceFiles') or []) == ({'checksums.txt', 'zarf.bundle.sig'} if signed else {'checksums.txt'}), 'package identity differs')
     annotations = meta['metadata'].get('annotations', {})
     signed_fields = {k: v for k, v in annotations.items() if k.startswith('takserver.qualification/')}
     expected_fields = ({'takserver.qualification/source-sha': binding['sourceSHA'],
