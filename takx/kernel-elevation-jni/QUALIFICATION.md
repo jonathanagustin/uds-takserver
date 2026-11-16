@@ -1,3 +1,29 @@
+## Current component review
+
+The checked three-file source patch is ready as a bounded component. A review
+of the final rebased public source verifies that its code, controls and shared
+executor/diagnostic helpers remain byte-identical to the qualified scalar branch.
+Both retained public consumer receipts are reauthenticated: 343 listener/chunk
+assertions plus 34 scalar assertions, 31 compiled products and 5,630 unique input
+hashes. All command/log/product digests verify and strict-JNI diagnostics remain
+zero. Review SHA256:
+`af4b8222191c444fb5bf56a1f429a439a004f2cdb7c694d666ceaccf72214ca9`.
+
+All three native postimages also exactly match those in the fresh complete
+Native17 composition, whose producer SHA256 is
+`ad799bcc0ffefc5c7145d3b2dac01c147bae90dd93f8e8633ec8638bf47d6f94`.
+That producer independently compiled 815 translation units, its own 2,701 Java
+classes and 119 JNI headers. Its separate scoped elevation callback/fault/scalar
+replays passed and reproduced their runtime artifacts. This is evidence for the
+same native postimages; it does not relabel the retained Native07 consumer runs
+or imply that the public consumer accepts other producers automatically.
+
+The deliverable remains the exact source patch/preparer and explicit bounded
+consumer. Successful mesh materialization, broader builder/wrapper entry points,
+concurrency, portable native-builder integration and full elevation/renderer/SDK/
+client acceptance remain independent open work. Source preparation alone grants
+none of those acceptance claims.
+
 # Scoped full native composition results
 
 The fresh Native07 composition consumes the full original 815-unit graph

@@ -50,7 +50,7 @@ and all 13 fault cases with zero strict JNI diagnostics (receipt
 All prior failures, objects, original sources and consumed recipe snapshots remain
 retained. The causal relinks are not adopted as fresh full native variants.
 
-Four offline guards and real exact preparation pass. A new complete 815-unit
+Eleven offline source/consumer guards and real exact preparation pass. A new complete 815-unit
 composition and actual-library replays now pass; see [QUALIFICATION.md](QUALIFICATION.md).
 The public source preparer is still not a portable native builder. Other elevation entry points, successful mesh materialization,
 concurrency and rendering remain outside the current 13-case qualification scope.
