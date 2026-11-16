@@ -663,6 +663,49 @@ def failure_categories(directory, progress):
     return result
 
 
+def receipt_failure(error, operation, directory, arch):
+    """Fixed predicates and our source frames only; never private exception text."""
+    require(operation in ('receipt-generation', 'public-proof-verification'), 'invalid diagnostic operation')
+    source = Path(__file__).resolve()
+    frames, current = [], error.__traceback__
+    while current:
+        if Path(current.tb_frame.f_code.co_filename).resolve() == source:
+            frames.append({'file': '.github/scripts/staged-migrations.py',
+                           'line': current.tb_lineno, 'sourceSHA256': sha(source)})
+        current = current.tb_next
+    allowed = {'ValueError', 'OSError', 'FileNotFoundError', 'PermissionError',
+               'KeyError', 'TypeError', 'AttributeError', 'JSONDecodeError'}
+    result = {'schema': 1, 'scope': 'receipt-validation-diagnostic-only', 'operation': operation,
+              'exceptionType': type(error).__name__ if type(error).__name__ in allowed else 'unclassified',
+              'frames': frames[-8:], 'identityMethods': {}}
+    for method in identity_methods() if os.environ.get('SCENARIO') in ('identities', 'all') else []:
+        try:
+            journal = bounded_json(directory / ('identity' if method == 'manual' else 'package-identity') / 'journal.json')
+            facts = {'schemaMatches': type(journal.get('schema')) is int and journal['schema'] == 1,
+                     'completed': journal.get('completed') is True,
+                     'accepted': journal.get('accepted') is True,
+                     'notRecoveryOnly': journal.get('recoveryOnly', False) is False,
+                     'scenarioMatches': journal.get('scenario') == 'identities',
+                     'architectureMatches': journal.get('architecture') == arch,
+                     'driverMatches': journal.get('driverSHA256') == sha(ROOT / 'tests/workload-identities/drive.py'),
+                     'probeMatches': journal.get('probeSourceSHA256') == sha(ROOT / 'tests/workload-identities/ProtocolProbe.java')}
+            if method == 'package':
+                fresh = os.environ.get('FRESH_STRICT', 'false') == 'true'
+                stages = {e.get('stage') for e in journal.get('stages', []) if isinstance(e, dict)}
+                facts.update(methodMatches=journal.get('method') == 'package',
+                             packageDriverMatches=journal.get('packageDriverSHA256') == sha(ROOT / 'tests/workload-identities/package_roundtrip.py'),
+                             packagePhasesMatch=journal.get('packagePhases') ==
+                                 ['shared', 'transition', 'strict', 'rollback', 'shared'] + (['strict'] if fresh else []),
+                             freshRequestedMatches=journal.get('freshStrictRequested') is fresh,
+                             freshAcceptedMatches=journal.get('freshStrictAccepted') is fresh,
+                             finalStagePresent='package-roundtrip-verified' in stages,
+                             stoppedAbsent='stopped' not in stages)
+            result['identityMethods'][method] = {'status': 'captured', 'predicates': facts}
+        except (ValueError, OSError, KeyError, TypeError, AttributeError):
+            result['identityMethods'][method] = {'status': 'unavailable'}
+    return result
+
+
 def publish(directory, output, arch):
     """Always publish a small allowlist; never recursively copy private evidence."""
     scenarios, arches = selection()
@@ -672,7 +715,9 @@ def publish(directory, output, arch):
     (output / 'receipts').mkdir()
     try:
         value = receipt(directory, arch)
-    except (ValueError, OSError, KeyError, TypeError, AttributeError):
+    except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
+        diagnostic = receipt_failure(error, 'receipt-generation', directory, arch)
+        (public / 'receipt-failure.json').write_text(json.dumps(diagnostic, indent=2) + '\n')
         value = {'schema': 1, 'sourceSHA': os.environ['GITHUB_SHA'], 'runID': os.environ['GITHUB_RUN_ID'],
                  'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'], 'architecture': arch, 'scenarios': scenarios,
                  'accepted': False, 'results': {name: 'failed-or-incomplete' for name in scenarios}}
@@ -708,7 +753,10 @@ def publish(directory, output, arch):
     if value['accepted']:
         try:
             verify_public_proofs(public, value)
-        except (ValueError, OSError, KeyError, TypeError, AttributeError):
+        except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
+            diagnostic = receipt_failure(error, 'public-proof-verification', directory, arch)
+            (public / 'receipt-failure.json').write_text(json.dumps(diagnostic, indent=2) + '\n')
+            value['publishedProofHashes']['receipt-failure'] = sha(public / 'receipt-failure.json')
             value['accepted'] = False
             value['results'] = {name: 'failed-or-incomplete' for name in scenarios}
     if progress['accepted'] != value['accepted']:

@@ -332,6 +332,15 @@ stream before selecting output. It never publishes private tail text, matching
 strings, command arguments, URLs, environments or exception messages. Private
 evidence remains excluded from artifact copying.
 
+If receipt generation or sanitized-proof verification fails, the publisher also
+retains `receipt-failure.json`. It records the validation operation, an
+allowlisted exception type and call-site lines hashed against the staged helper.
+For identity journals, it reports only fixed boolean predicates for completion,
+source bindings and requested package phases. It omits observed values, private
+paths, exception messages and unknown fields. Its file hash is bound into the
+unaccepted receipt. A successful trial job or completed progress stage cannot
+replace the required receipt and public phase proofs.
+
 The command runner retained this tail **before** redaction; it may begin inside
 a credential or omit the original error. It is therefore unsafe to publish even
 a subsequently redacted excerpt. Categories are diagnostic signatures, not

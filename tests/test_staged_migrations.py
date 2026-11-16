@@ -20,6 +20,45 @@ ENV = {'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_REF': 'refs/heads/main'
 
 
 class StagedMigrationTests(unittest.TestCase):
+    def test_receipt_failure_publishes_only_source_frames_and_fixed_predicates(self):
+        env = {**ENV, 'SCENARIO': 'identities', 'IDENTITY_METHOD': 'package', 'FRESH_STRICT': 'true'}
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, env, clear=True):
+            root = Path(tmp); private = root / 'private'; folder = private / 'package-identity'; folder.mkdir(parents=True)
+            (folder / 'journal.json').write_text(json.dumps({'schema': 1, 'completed': True, 'accepted': False,
+                'scenario': 'identities', 'architecture': 'amd64', 'private': 'secretneedle',
+                'driverSHA256': 'secretneedle', 'stages': [{'stage': 'package-roundtrip-verified', 'secret': 'secretneedle'}]}))
+            public = root / 'public'; value = S.publish(private, public, 'amd64')
+            self.assertFalse(value['accepted'])
+            path = public / 'proofs/amd64/receipt-failure.json'
+            diagnostic = json.loads(path.read_text())
+            self.assertEqual(diagnostic['operation'], 'receipt-generation')
+            self.assertTrue(diagnostic['frames'])
+            for frame in diagnostic['frames']:
+                self.assertEqual(frame['file'], '.github/scripts/staged-migrations.py')
+                self.assertEqual(frame['sourceSHA256'], S.sha(ROOT / frame['file']))
+            facts = diagnostic['identityMethods']['package']['predicates']
+            self.assertTrue(facts['completed']); self.assertFalse(facts['accepted'])
+            self.assertFalse(facts['driverMatches']); self.assertTrue(facts['finalStagePresent'])
+            self.assertTrue(all(type(v) is bool for v in facts.values()))
+            self.assertNotIn('secretneedle', path.read_text())
+            self.assertNotIn(str(private), path.read_text())
+            self.assertEqual(value['publishedProofHashes']['receipt-failure'], S.sha(path))
+            with self.assertRaises(ValueError): S.verify(public / 'receipts')
+
+    def test_public_proof_failure_stays_false_and_binds_its_diagnostic(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, ENV, clear=True):
+            root = Path(tmp); private = root / 'private'; private.mkdir()
+            value = {'schema': 1, 'accepted': True, 'scenarios': ['velero'], 'results': {'velero': 'passed'}}
+            with patch.object(S, 'receipt', return_value=value), \
+                 patch.object(S, 'verify_public_proofs', side_effect=ValueError('secretneedle')):
+                result = S.publish(private, root / 'public', 'amd64')
+            self.assertFalse(result['accepted'])
+            path = root / 'public/proofs/amd64/receipt-failure.json'
+            self.assertEqual(json.loads(path.read_text())['operation'], 'public-proof-verification')
+            self.assertEqual(result['publishedProofHashes']['receipt-failure'], S.sha(path))
+            self.assertNotIn('secretneedle', path.read_text())
+            self.assertFalse(json.loads((path.parent / 'progress.json').read_text())['accepted'])
+
     def test_two_real_failed_children_preserve_first_private_capture_and_only_publish_ids(self):
         spec = importlib.util.spec_from_file_location('first_failure_driver',
                                                       ROOT / 'tests/velero-ownership/drive.py')
@@ -332,7 +371,8 @@ class StagedMigrationTests(unittest.TestCase):
                 path.write_text(json.dumps(proof))
             public = Path(tmp) / 'public'
             (directory / 'owner/PRIVATE-command-failure.txt').write_bytes(b'orphan-fixture-secret\xff')
-            with patch.object(S, 'failure_categories', side_effect=AssertionError('inactive diagnostic dependency')):
+            with patch.object(S, 'failure_categories', side_effect=AssertionError('inactive diagnostic dependency')), \
+                 patch.object(S, 'receipt_failure', side_effect=AssertionError('inactive receipt diagnostic')):
                 self.assertTrue(S.publish(directory, public, 'amd64')['accepted'])
             self.assertFalse((public / 'proofs/amd64/failure-categories.json').exists())
             self.assertTrue(S.verify(public / 'receipts')['accepted'])
