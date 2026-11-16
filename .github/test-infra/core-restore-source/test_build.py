@@ -25,7 +25,8 @@ class SourceCandidateGuards(unittest.TestCase):
     def test_manual_workflow_limits_signing_and_public_upload(self):
         workflow = yaml.safe_load((B.ROOT / '.github/workflows/core-restore-source.yaml').read_text())
         # PyYAML's YAML 1.1 parser reads the GitHub `on` key as True.
-        self.assertEqual(workflow.get('on', workflow.get(True)), {'workflow_dispatch': None})
+        self.assertEqual(set(workflow.get('on', workflow.get(True))), {'workflow_dispatch'})
+        self.assertFalse(workflow.get('on', workflow.get(True))['workflow_dispatch']['inputs']['run_api_smoke']['default'])
         self.assertEqual(workflow['permissions'], {'contents': 'read'})
         job = workflow['jobs']['build']
         self.assertIn("github.ref == 'refs/heads/main'", job['if'])

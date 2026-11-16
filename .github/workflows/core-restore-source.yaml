@@ -4,6 +4,11 @@ name: Core restore source candidate
 
 on:
   workflow_dispatch:
+    inputs:
+      run_api_smoke:
+        description: Upgrade only the Restore API in a fresh disposable AMD64 cluster
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -64,3 +69,80 @@ jobs:
             ${{ runner.temp }}/core-source-build/artifacts/LICENSE.md
             ${{ runner.temp }}/core-source-build/artifacts/inputs.lock.json
             ${{ runner.temp }}/core-source-build/artifacts/corresponding-source.tar.gz
+
+  api-smoke:
+    if: inputs.run_api_smoke && github.repository == 'jonathanagustin/uds-takserver' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 125
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    env:
+      SCENARIO: velero
+      ARCHITECTURE: amd64
+      CORE_RESTORE_POLICY_CANDIDATE: 'true'
+      CORE_RESTORE_API_SMOKE: 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install pinned API tools
+        uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
+        with:
+          install_args: uv helm k3d aqua:defenseunicorns/uds-cli
+          cache: true
+      - name: Download this attempt's verified public candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: core-restore-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/core-source-provider
+      - name: Expose the pinned Kubernetes client
+        run: |
+          mkdir -p "$RUNNER_TEMP/core-api-client"
+          printf '#!/usr/bin/env bash\nexec uds zarf tools kubectl "$@"\n' > "$RUNNER_TEMP/core-api-client/kubectl"
+          chmod 755 "$RUNNER_TEMP/core-api-client/kubectl"
+          echo "$RUNNER_TEMP/core-api-client" >> "$GITHUB_PATH"
+      - name: Select a fresh kubeconfig
+        run: |
+          test ! -e "$RUNNER_TEMP/core-source-api-kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/core-source-api-kubeconfig" >> "$GITHUB_ENV"
+      - name: Refuse remote or existing clusters before runner preparation
+        run: python3 tests/ephemeral-cluster.py bootstrap --context k3d-uds
+      - name: Install Docker Compose
+        uses: docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a # v2.4.0
+        with:
+          version: v5.7.0
+      - name: Prepare the disposable runner
+        env:
+          TRIM_SKIP_ABOVE_GB: '60'
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sudo sysctl -w fs.inotify.max_user_instances=1280 fs.inotify.max_user_watches=655360
+          ./.github/scripts/trim-runner.sh
+          ./.github/scripts/add-runner-swap.sh
+          printf '%s\n' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Run the Core-owned API upgrade smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-project --with pyyaml==6.0.3 --with zstandard==0.25.0 python -B \
+            .github/test-infra/core-restore-source/api.py --execute \
+            --cli "$(command -v uds)" --provider-directory "$RUNNER_TEMP/core-source-provider" \
+            --output "$RUNNER_TEMP/core-source-api"
+      - name: Retain only bounded API schema proof
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: core-restore-api-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/core-source-api/public-result.json
+            ${{ runner.temp }}/core-source-api/baseline-review.json
+            ${{ runner.temp }}/core-source-api/candidate-review.json

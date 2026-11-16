@@ -29,3 +29,26 @@ uv run --no-project --with pyyaml==6.0.3 python -B -m unittest discover \
 A successful package build establishes package provenance and structure only.
 Core-owned API upgrade testing, actual restore behavior, ARM qualification, and
 owner acceptance remain separate requirements for the restore-policy PR.
+
+The optional `run_api_smoke` input adds a separate AMD64 job with read-only
+GitHub permissions. It downloads only the same attempt's candidate, repeats
+provider/signature/source verification, and refuses a remote Docker daemon or
+an existing test cluster. The established checkpoint helper creates the fresh
+cluster; its run/source/cluster marker is checked before every API observation
+and package deployment.
+
+The job pulls the official Core 1.16.0 backup package by the pinned index digest
+`sha256:e3728d6a8430dbd9a1127cbce7cf474026f8e393135ecb24cbe0616d70e69fa6`,
+requiring the exact upstream release signer and transparency-log verification.
+Separate single-package UDS bundles deploy the official baseline and then the
+signed source candidate, with node agents disabled and schedules paused. Both
+use normal package signature verification and the Core-owned Helm chart.
+
+The baseline must reject `spec.resourcePolicy`. After the upgrade, the same
+server dry run must succeed, while an unknown field and missing required policy
+fields must still fail. Both phases require the exact expected CRD schema and
+Core Helm owner. The CRD UID must survive the upgrade, and no Restore object may
+persist. The only public evidence is fixed schema proof and hashed identities;
+raw API responses, manifests, and command logs are excluded from artifacts.
+This is API schema evidence only, with restore and owner acceptance explicitly
+false. No chart in a normal application bundle or deployment default changes.
