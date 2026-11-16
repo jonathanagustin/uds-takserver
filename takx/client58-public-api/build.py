@@ -9,10 +9,14 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import stat
+import zipfile
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 SOURCE = 'java/gov/tak/api/cot/detail/VehicleModelDetailHandler.java'
+ARTIFACT_CONTROL = 'tests/VehicleArtifactControls.java'
+LIBRARY_CLASSES = {'gov/tak/api/cot/detail/VehicleModelDetailHandler.class',
+                   'gov/tak/api/cot/detail/VehicleModelDetailHandler$Interop.class'}
 
 
 def require(value, message):
@@ -35,8 +39,8 @@ def contract():
     require((HERE / 'inputs.lock.json').stat().st_size <= 65536, 'contract size bound')
     sha(HERE / 'inputs.lock.json')
     lock = json.loads((HERE / 'inputs.lock.json').read_text())
-    require(lock['profile'] == 'public-vehicle-metadata-v1' and set(lock['owned']) ==
-            {SOURCE, 'tests/VehicleModelControls.java'}, 'source profile differs')
+    require(lock['profile'] == 'public-vehicle-metadata-v2' and set(lock['owned']) ==
+            {SOURCE, 'tests/VehicleModelControls.java', ARTIFACT_CONTROL}, 'source profile differs')
     require(all(lock[key] is False for key in ('private_sdk_equivalence', 'vehicle_mesh_runtime_accepted',
             'contours_implemented', 'full_client_accepted')), 'source profile cannot grant acceptance')
     for name, pin in lock['owned'].items():
@@ -44,8 +48,36 @@ def contract():
     return lock
 
 
+def package_library(classes, archive, lock):
+    """Deterministic, source-carrying API JAR containing only the owned classes."""
+    paths = {str(p.relative_to(classes)): p for p in classes.rglob('*.class')}
+    require(set(paths) == LIBRARY_CLASSES, 'library class membership differs')
+    pins = {name: sha(path) for name, path in paths.items()}
+    provenance = {'profile': lock['profile'], 'sourceSHA256': lock['owned'][SOURCE],
+                  'callerRevision': lock['caller_revision'], 'classes': pins}
+    members = {name: path.read_bytes() for name, path in paths.items()}
+    members.update({
+        'META-INF/MANIFEST.MF': b'Manifest-Version: 1.0\r\nImplementation-Title: Public vehicle CoT metadata\r\n\r\n',
+        'META-INF/LICENSE': (REPO / 'LICENSE').read_bytes(),
+        'META-INF/source/gov/tak/api/cot/detail/VehicleModelDetailHandler.java': (HERE / SOURCE).read_bytes(),
+        'META-INF/provenance.json': (json.dumps(provenance, sort_keys=True, separators=(',', ':'))+'\n').encode(),
+    })
+    with zipfile.ZipFile(archive, 'x', compression=zipfile.ZIP_STORED) as output:
+        for name, raw in sorted(members.items()):
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.create_system = 3
+            info.external_attr = 0o100644 << 16
+            output.writestr(info, raw)
+    with zipfile.ZipFile(archive) as output:
+        require(set(output.namelist()) == set(members) and
+                all(output.read(name) == raw for name, raw in members.items()), 'library archive differs')
+    return {'file': archive.name, 'sha256': sha(archive), 'classes': pins,
+            'sourceSHA256': lock['owned'][SOURCE]}
+
+
 def controls(args):
     lock = contract()
+    build_artifact = getattr(args, 'phase', 'controls') == 'build'
     proof_root = args.java_proof.absolute()
     proof_file = proof_root / 'receipt.json'
     require(proof_file.stat().st_size <= 4 * 1024**2, 'Java proof size bound')
@@ -74,6 +106,8 @@ def controls(args):
     java = args.java_home.absolute()
     for name in ('bin/java', 'bin/javac', 'release', 'lib/modules'):
         inputs[str(java / name)] = sha(java / name)
+    if build_artifact:
+        inputs[str(REPO / 'LICENSE')] = sha(REPO / 'LICENSE')
     output = args.output.absolute()
     for root in (proof_root, REPO, java):
         require(output != root and not output.is_relative_to(root) and not root.is_relative_to(output),
@@ -83,7 +117,7 @@ def controls(args):
     output.mkdir(mode=0o700)
     classes_out = output / 'classes'
     classes_out.mkdir()
-    for name in [SOURCE, 'tests/VehicleModelControls.java', 'inputs.lock.json', 'build.py']:
+    for name in [SOURCE, 'tests/VehicleModelControls.java', ARTIFACT_CONTROL, 'inputs.lock.json', 'build.py']:
         inputs[str(HERE / name)] = sha(HERE / name)
     for name in ('takx/native-commoncommo/runner.py', 'takx/jni_diagnostics.py'):
         inputs[str(REPO / name)] = sha(REPO / name)
@@ -98,16 +132,13 @@ def controls(args):
     env['LC_ALL'] = 'C'
     record = {'profile': lock['profile'], 'scope': lock['scope'], 'inputs': inputs,
               'commands': [], 'completed': False, 'full_client_accepted': False, 'vehicle_mesh_runtime_accepted': False}
+    if build_artifact:
+        record['artifact_accepted'] = False
     def write():
         (output / 'receipt.json').write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
     write()
     try:
-        commands = [
-            ('compile', [java / 'bin/javac', '--release', '11', '-proc:none', '-cp', os.pathsep.join(map(str, cp)),
-                         '-d', classes_out, HERE / SOURCE, HERE / 'tests/VehicleModelControls.java']),
-            ('controls', [java / 'bin/java', '-Xcheck:jni', '-Xmx128m', '-Djava.awt.headless=true',
-                          '-cp', os.pathsep.join(map(str, [classes_out, *cp])), 'VehicleModelControls'])]
-        for label, command in commands:
+        def execute(label, command):
             row = {'label': label, 'argv': list(map(str, command))}
             record['commands'].append(row)
             write()
@@ -115,6 +146,30 @@ def controls(args):
                            disk_limit=8 * 1024**2, log_limit=2 * 1024**2)
             row['passed'] = True
             row['log_sha256'] = sha(output / (label + '.log'))
+        if build_artifact:
+            library = output / 'library-classes'
+            library.mkdir()
+            execute('compile-library', [java / 'bin/javac', '--release', '11', '-proc:none',
+                    '-cp', os.pathsep.join(map(str, cp)), '-d', library, HERE / SOURCE])
+            archive = output / 'vehicle-metadata.jar'
+            record['artifact'] = package_library(library, archive, lock)
+            write()
+            artifact_cp = [archive, *cp]
+            execute('compile-controls', [java / 'bin/javac', '--release', '11', '-proc:none',
+                    '-cp', os.pathsep.join(map(str, artifact_cp)), '-d', classes_out,
+                    HERE / 'tests/VehicleModelControls.java', HERE / ARTIFACT_CONTROL])
+            execute('controls', [java / 'bin/java', '-Xcheck:jni', '-Xmx128m', '-Djava.awt.headless=true',
+                    '-cp', os.pathsep.join(map(str, [classes_out, *artifact_cp])),
+                    'VehicleArtifactControls', archive])
+            require(sha(archive) == record['artifact']['sha256'], 'tested library archive changed')
+            require('VEHICLE_METADATA_ARTIFACT_PASS classes=2' in (output / 'controls.log').read_text(),
+                    'artifact class origins were not verified')
+        else:
+            execute('compile', [java / 'bin/javac', '--release', '11', '-proc:none', '-cp',
+                    os.pathsep.join(map(str, cp)), '-d', classes_out,
+                    HERE / SOURCE, HERE / 'tests/VehicleModelControls.java'])
+            execute('controls', [java / 'bin/java', '-Xcheck:jni', '-Xmx128m', '-Djava.awt.headless=true',
+                    '-cp', os.pathsep.join(map(str, [classes_out, *cp])), 'VehicleModelControls'])
         text = (output / 'controls.log').read_text()
         require('VEHICLE_MODEL_CONTROLS_PASS checks=34' in text and not diagnostics.strict_jni_failures(text),
                 'vehicle metadata controls did not pass cleanly')
@@ -125,6 +180,8 @@ def controls(args):
         require({str(p.relative_to(class_root)) for p in class_root.rglob('*.class')} == set(classes),
                 'public class membership changed')
         require(contract() == lock, 'source contract changed')
+        if build_artifact:
+            record['artifact_accepted'] = True
         record.update(completed=True, checks=34, strict_jni_diagnostics=0,
                       outputs={str(p.relative_to(classes_out)): sha(p) for p in classes_out.rglob('*.class')})
         write()
@@ -136,7 +193,7 @@ def controls(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--phase', choices=('verify', 'controls'), default='verify')
+    parser.add_argument('--phase', choices=('verify', 'controls', 'build'), default='verify')
     parser.add_argument('--java-proof', type=Path)
     parser.add_argument('--java-proof-sha256')
     parser.add_argument('--java-home', type=Path)

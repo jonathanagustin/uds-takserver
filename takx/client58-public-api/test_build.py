@@ -63,3 +63,41 @@ class Guards(unittest.TestCase):
             (root / 'link').symlink_to(root / 'real')
             with self.assertRaises(ValueError):
                 P.sha(root / 'link')
+
+
+class ArtifactGuards(unittest.TestCase):
+    def classes(self, root):
+        for name in P.LIBRARY_CLASSES:
+            path=root/name;path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_bytes(b'owned packaging fixture '+name.encode())
+
+    def test_archive_is_deterministic_source_carrying_and_excludes_controls(self):
+        import zipfile
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);classes=root/'classes';self.classes(classes)
+            first=P.package_library(classes,root/'first.jar',P.contract())
+            second=P.package_library(classes,root/'second.jar',P.contract())
+            self.assertEqual((root/'first.jar').read_bytes(),(root/'second.jar').read_bytes())
+            self.assertEqual(first['sha256'],second['sha256'])
+            with zipfile.ZipFile(root/'first.jar') as archive:
+                self.assertEqual({n for n in archive.namelist() if n.endswith('.class')},P.LIBRARY_CLASSES)
+                self.assertEqual(archive.read('META-INF/LICENSE'),(P.REPO/'LICENSE').read_bytes())
+                source='META-INF/source/gov/tak/api/cot/detail/VehicleModelDetailHandler.java'
+                self.assertEqual(archive.read(source),(P.HERE/P.SOURCE).read_bytes())
+                self.assertTrue(all(i.date_time==(1980,1,1,0,0,0) for i in archive.infolist()))
+
+    def test_missing_foreign_or_symlinked_class_cannot_acquire_an_artifact(self):
+        for mutation in ('missing','foreign','symlink'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary);classes=root/'classes';self.classes(classes)
+                path=classes/sorted(P.LIBRARY_CLASSES)[0]
+                if mutation=='missing':path.unlink()
+                elif mutation=='foreign':(classes/'Controls.class').write_bytes(b'not a library class')
+                else:
+                    original=root/'outside';path.rename(original);path.symlink_to(original)
+                with self.assertRaises(ValueError):P.package_library(classes,root/'api.jar',P.contract())
+                self.assertFalse((root/'api.jar').exists())
+
+    def test_artifact_build_requires_explicit_reviewed_inputs(self):
+        with patch('subprocess.Popen',side_effect=AssertionError('no process')),patch('sys.argv',['build.py','--phase','build']):
+            with self.assertRaisesRegex(ValueError,'explicit reviewed inputs'):P.main()
