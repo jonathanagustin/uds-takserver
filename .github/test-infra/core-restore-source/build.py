@@ -14,6 +14,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -461,6 +462,40 @@ def build(output, cli, source_archive=None, signed=False):
         signal.alarm(0)
 
 
+def failure_summary(error):
+    """Publish only fixed guard categories and this source's callsite lines."""
+    categories = {
+        'candidate requires explicit reviewed main owner workflow': 'caller-context',
+        'candidate run/source identity differs': 'caller-context',
+        'bounded regular file required': 'input-shape',
+        'unreviewed UDS CLI payload': 'cli-byte-pin',
+        'output/free-space floor': 'free-space-floor',
+        'fresh disjoint output required': 'output-shape',
+        'producer recipe differs from workflow source': 'source-recipe',
+        'source lock differs': 'source-lock',
+        'source patch/license differs': 'source-lock',
+        'job identity capability missing': 'oidc-capability',
+        'job identity endpoint differs': 'oidc-endpoint',
+        'job identity context differs': 'oidc-claims',
+        'owned command failed; private bounded log retained': 'owned-command-exit',
+        'owned command deadline exceeded': 'owned-command-deadline',
+        'owned command log quota exceeded': 'owned-command-output-quota',
+        'owned output quota exceeded': 'owned-command-disk-quota',
+        'candidate aggregate deadline': 'aggregate-deadline',
+    }
+    allowed_types = {'ValueError', 'TimeoutError', 'CalledProcessError', 'FileNotFoundError',
+                     'HTTPError', 'URLError', 'JSONDecodeError', 'PermissionError', 'OSError'}
+    lines, current = [], error.__traceback__
+    while current:
+        if current.tb_frame.f_code.co_filename == __file__:
+            lines.append(current.tb_lineno)
+        current = current.tb_next
+    return {'schema': 1, 'scope': 'source-callsite-only',
+            'category': categories.get(str(error), 'unclassified'),
+            'exceptionType': type(error).__name__ if type(error).__name__ in allowed_types else 'other',
+            'sourceSHA256': digest(Path(__file__)), 'sourceFrameLines': lines[-8:]}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--phase', choices=('verify', 'local', 'build', 'verify-provider'), default='verify')
@@ -488,5 +523,6 @@ def main(argv=None):
 if __name__ == '__main__':
     try:
         main()
-    except Exception:
+    except Exception as error:
+        print(json.dumps(failure_summary(error)), file=sys.stderr)
         raise SystemExit('Core source candidate failed; private bounded evidence retained when available')

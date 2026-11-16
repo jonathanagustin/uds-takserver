@@ -52,3 +52,9 @@ persist. The only public evidence is fixed schema proof and hashed identities;
 raw API responses, manifests, and command logs are excluded from artifacts.
 This is API schema evidence only, with restore and owner acceptance explicitly
 false. No chart in a normal application bundle or deployment default changes.
+
+Tool-manager CLI paths are resolved before passing the executable to the
+builder; the resolved regular file must still match the exact pinned SHA256.
+On failure, the builder prints only a fixed guard category, an allowlisted
+exception type, and its own source hash/callsite lines. Arbitrary exception
+messages, paths, HTTP bodies, credentials, and private command output are omitted.
