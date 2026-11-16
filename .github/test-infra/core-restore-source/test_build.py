@@ -31,6 +31,12 @@ class SourceCandidateGuards(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/main'", job['if'])
         self.assertEqual(job['permissions'], {'contents': 'read', 'id-token': 'write'})
         self.assertEqual(job['env']['CORE_RESTORE_POLICY_CANDIDATE'], 'true')
+        consumer = [s for s in job['steps'] if '--phase verify-provider' in s.get('run', '')]
+        self.assertEqual(len(consumer), 1)
+        upload_index = next(i for i, step in enumerate(job['steps'])
+                            if step.get('uses', '').startswith('actions/upload-artifact@'))
+        self.assertLess(job['steps'].index(consumer[0]), upload_index)
+        self.assertNotIn('continue-on-error', consumer[0])
         uploads = [s for s in job['steps'] if s.get('uses', '').startswith('actions/upload-artifact@')]
         self.assertEqual(len(uploads), 1)
         paths = uploads[0]['with']['path'].splitlines()
