@@ -229,6 +229,24 @@ class SourceCandidateGuards(unittest.TestCase):
                 B.request_oidc()
             request.assert_not_called()
 
+    def test_upstream_crd_preinstall_uses_create_without_changing_config_chart(self):
+        meta = {'components': [{'name': 'velero', 'charts': [
+            {'name': 'uds-velero-config'}, {'name': 'velero', 'serverSideApply': 'false'}]}]}
+        B.verify_chart_strategy(meta)
+        for mode in (None, 'auto', 'true', False):
+            value = copy.deepcopy(meta)
+            value['components'][0]['charts'][1]['serverSideApply'] = mode
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                B.verify_chart_strategy(value)
+        value = copy.deepcopy(meta)
+        value['components'][0]['charts'][0]['serverSideApply'] = 'false'
+        with self.assertRaises(ValueError):
+            B.verify_chart_strategy(value)
+        value = copy.deepcopy(meta)
+        value['components'][0]['charts'].append({'name': 'foreign'})
+        with self.assertRaises(ValueError):
+            B.verify_chart_strategy(value)
+
 
 if __name__ == '__main__':
     unittest.main()

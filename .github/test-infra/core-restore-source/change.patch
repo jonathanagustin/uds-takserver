@@ -68,3 +68,19 @@ index 09db579..41b6e39 100644
    - name: health-check
      actions:
        - description: Velero StatefulSet Health Check
+diff --git a/src/velero/common/zarf.yaml b/src/velero/common/zarf.yaml
+--- a/src/velero/common/zarf.yaml
++++ b/src/velero/common/zarf.yaml
+@@ -1,2 +1,2 @@
+-# Copyright 2024 Defense Unicorns
++# Copyright 2024-2026 Defense Unicorns
+ # SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Defense-Unicorns-Commercial
+@@ -41,6 +41,8 @@
+           - sourcePath: .velero.uds-velero-config
+             targetPath: .
+       - name: velero
++        # Core config owns the CRDs; preserve them when upstream CRDs already exist.
++        serverSideApply: "false"
+         namespace: velero
+         url: https://vmware-tanzu.github.io/helm-charts
+         version: 12.2.1

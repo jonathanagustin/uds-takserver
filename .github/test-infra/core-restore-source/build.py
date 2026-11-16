@@ -25,11 +25,11 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
-LOCK_SHA = '2f5e7d85e7de9d9d7e2aef81fdd5e5576cff55901c18982392d2e5a641f8e8aa'
+LOCK_SHA = '7615b970080fd48da500f1b7df6402ebded6c05e1d643b2440b1234ed8f5f3b7'
 ISSUER = 'https://token.actions.githubusercontent.com'
 IDENTITY = 'https://github.com/jonathanagustin/uds-takserver/.github/workflows/core-restore-source.yaml@refs/heads/main'
 IDENTITY_REGEXP = r'^https://github\.com/jonathanagustin/uds-takserver/\.github/workflows/core-restore-source\.yaml@refs/heads/main$'
-VERSION = '1.16.0-restore-policy.1'
+VERSION = '1.16.0-restore-policy.2'
 
 
 def require(value, message):
@@ -150,6 +150,17 @@ def apply_metadata(source, binding=None):
     path.write_text(text)
 
 
+def verify_chart_strategy(meta):
+    components = [c for c in meta['components'] if c['name'] == 'velero']
+    require(len(components) == 1, 'Velero component differs')
+    charts = components[0]['charts']
+    upstream = [c for c in charts if c['name'] == 'velero']
+    config = [c for c in charts if c['name'] == 'uds-velero-config']
+    require(len(charts) == 2 and len(upstream) == len(config) == 1 and
+            upstream[0].get('serverSideApply') == 'false' and
+            config[0].get('serverSideApply', 'auto') == 'auto', 'CRD chart apply strategy differs')
+
+
 def inspect_package(path, lock, signed, binding=None):
     import zstandard
     hashes, small, total = {}, {}, 0
@@ -191,6 +202,7 @@ def inspect_package(path, lock, signed, binding=None):
             meta['build']['architecture'] == 'amd64' and meta['build']['flavor'] == 'upstream' and
             meta['build'].get('signed', False) is signed and
             set(meta['build'].get('provenanceFiles') or []) == ({'checksums.txt', 'zarf.bundle.sig'} if signed else {'checksums.txt'}), 'package identity differs')
+    verify_chart_strategy(meta)
     annotations = meta['metadata'].get('annotations', {})
     signed_fields = {k: v for k, v in annotations.items() if k.startswith('takserver.qualification/')}
     expected_fields = ({'takserver.qualification/source-sha': binding['sourceSHA'],
@@ -289,6 +301,8 @@ def verify_corresponding_source(path, lock, binding):
             expected = lock['source_files'][name]
             if name == 'src/velero/chart/templates/crds/restores.yaml':
                 expected = lock['crd_after_sha256']
+            elif name == 'src/velero/common/zarf.yaml':
+                expected = lock['common_after_sha256']
             elif name == 'src/velero/tasks.yaml':
                 expected = lock['tasks_after_sha256']
             elif name == 'packages/backup-restore/zarf.yaml':
@@ -431,7 +445,8 @@ def build(output, cli, source_archive=None, signed=False):
         apply_metadata(output / 'source', binding if signed else None)
         source_images = inventory(output / 'source')
         changed = {n for n in source_images if source_images[n] != lock['source_files'][n]}
-        require(changed == {'src/velero/chart/templates/crds/restores.yaml', 'src/velero/tasks.yaml', 'packages/backup-restore/zarf.yaml'} and
+        require(changed == {'src/velero/chart/templates/crds/restores.yaml', 'src/velero/tasks.yaml', 'src/velero/common/zarf.yaml', 'packages/backup-restore/zarf.yaml'} and
+                source_images['src/velero/common/zarf.yaml'] == lock['common_after_sha256'] and
                 source_images['src/velero/chart/templates/crds/restores.yaml'] == lock['crd_after_sha256'], 'derived source membership differs')
         record['sourceAfterSHA256'] = source_images
         args = [cli, 'zarf', 'package', 'create', output / 'source/packages/backup-restore', '--confirm', '--flavor', 'upstream',

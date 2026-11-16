@@ -1,6 +1,7 @@
 {
-  "candidate_version": "1.16.0-restore-policy.1",
+  "candidate_version": "1.16.0-restore-policy.2",
   "cli_sha256": "31cd710a3f1154f81767a5268f2c887d9e33fe10b81e45ee4183c810dd5ad308",
+  "common_after_sha256": "78954bdb4ffa39ef2b0e96245a02dc936adf918e715943d0f18b414e11055893",
   "core_commit": "fd9769cd9e791d9b6ad86251af0f4899992a9ae5",
   "core_license_sha256": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
   "crd_after_sha256": "eb650958cfba9a0e1e951ecde2e4436062e58d80afc86db50aef48262a95fb43",
@@ -9,7 +10,7 @@
     "87f95cccca5d4149e28ba44ffe1bd35ac298d9fc09aaccf9a02a4d432aeb89d9",
     "e6a64c9f44ed17f426cb888cf651ea2f5e66927c6278d92ef3d7d29022897be5"
   ],
-  "patch_sha256": "d70c2a95789323b1dc7a05c6dd74912c303fd56733da7488aa530e408339a6af",
+  "patch_sha256": "61fe679b53e58e35ea77f0ef85416b3f05fb0220ca90452c0a22167a75fcdf77",
   "schema": 1,
   "source_files": {
     "LICENSE.md": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",

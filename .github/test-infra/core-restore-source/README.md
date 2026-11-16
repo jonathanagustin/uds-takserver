@@ -1,8 +1,8 @@
 # Core restore-policy source candidate
 
-This manual, main-only experiment builds the reviewed two-file resource-policy
+This manual, main-only experiment builds the reviewed three-file resource-policy
 patch against Core v1.16.0. It produces a repository-owned derivative named
-`1.16.0-restore-policy.1-upstream`; it does not change the deployed Core reference,
+`1.16.0-restore-policy.2-upstream`; it does not change the deployed Core reference,
 publish a registry package, or connect to a cluster.
 
 The source lock binds 34 upstream files, the patch, AGPL license, CLI binary,
@@ -95,3 +95,12 @@ UID during observation and leave no Restore objects. Public evidence records
 not qualify actual data restoration, ownership transfer or native ARM behavior.
 The default remains `upgrade`; all signature, source, cluster and quota guards
 apply to both modes.
+
+The `.2` candidate sets `serverSideApply: "false"` only on the upstream Velero
+chart. Helm 4 then creates its bundled CRDs and skips CRDs already installed by
+the preceding Core configuration chart, rather than applying the older bundled
+schema over them. The Core configuration chart retains its normal apply mode.
+The package inspector and corresponding-source verifier require these exact
+strategies and source bytes. This is a candidate fix; only a successful separate
+fresh-mode run can qualify the first installation. Upgrade and actual restore
+qualification remain separate.
