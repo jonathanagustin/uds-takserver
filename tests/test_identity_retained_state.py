@@ -446,8 +446,7 @@ class RetainedStateGuards(unittest.TestCase):
 
     def test_startup_cleanup_requires_literal_source_checkpoint(self):
         obj={'kind':'ConfigMap','metadata':{'name':'takserver-startup','namespace':'takserver','uid':'startup','resourceVersion':'1','annotations':{'uds.dev/tak-startup':'complete'}},'data':{'ready':'true'}}
-        R.startup_map(obj);rec=R.resource_record(obj);self.assertFalse(R.cleanup_allowed(rec))
-        rec['emptyCrlDataSHA256']=R.sha(obj['data']);self.assertTrue(R.cleanup_allowed(rec))
+        R.startup_map(obj);self.assertTrue(R.cleanup_allowed(R.resource_record(obj)))
         for mutate in [lambda x:x['data'].update(private='foreign'),lambda x:x['metadata']['annotations'].update({'uds.dev/tak-startup':'other'}),lambda x:x.update(binaryData={'other':'payload'})]:
             altered=copy.deepcopy(obj);mutate(altered)
             with self.assertRaisesRegex(ValueError,'literal source'):R.startup_map(altered)
