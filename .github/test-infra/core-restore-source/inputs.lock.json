@@ -1,5 +1,5 @@
 {
-  "candidate_version": "1.16.0-restore-policy.1-upstream",
+  "candidate_version": "1.16.0-restore-policy.1",
   "cli_sha256": "31cd710a3f1154f81767a5268f2c887d9e33fe10b81e45ee4183c810dd5ad308",
   "core_commit": "fd9769cd9e791d9b6ad86251af0f4899992a9ae5",
   "core_license_sha256": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",

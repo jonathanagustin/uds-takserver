@@ -22,6 +22,24 @@ spec.loader.exec_module(B)
 
 
 class SourceCandidateGuards(unittest.TestCase):
+    def test_manual_workflow_limits_signing_and_public_upload(self):
+        workflow = yaml.safe_load((B.ROOT / '.github/workflows/core-restore-source.yaml').read_text())
+        # PyYAML's YAML 1.1 parser reads the GitHub `on` key as True.
+        self.assertEqual(workflow.get('on', workflow.get(True)), {'workflow_dispatch': None})
+        self.assertEqual(workflow['permissions'], {'contents': 'read'})
+        job = workflow['jobs']['build']
+        self.assertIn("github.ref == 'refs/heads/main'", job['if'])
+        self.assertEqual(job['permissions'], {'contents': 'read', 'id-token': 'write'})
+        self.assertEqual(job['env']['CORE_RESTORE_POLICY_CANDIDATE'], 'true')
+        uploads = [s for s in job['steps'] if s.get('uses', '').startswith('actions/upload-artifact@')]
+        self.assertEqual(len(uploads), 1)
+        paths = uploads[0]['with']['path'].splitlines()
+        self.assertEqual({Path(p).name for p in paths}, {
+            'zarf-package-core-backup-restore-amd64-*.tar.zst', 'provider.json',
+            'change.patch', 'LICENSE.md', 'inputs.lock.json', 'corresponding-source.tar.gz'})
+        self.assertEqual(len(paths), 6)
+        self.assertTrue(all(p.startswith('${{ runner.temp }}/core-source-build/artifacts/') for p in paths))
+
     def test_default_verifies_without_network_or_processes(self):
         with patch.object(B.subprocess, 'run', side_effect=AssertionError('process')), patch.object(
                 B.urllib.request, 'urlopen', side_effect=AssertionError('network')):

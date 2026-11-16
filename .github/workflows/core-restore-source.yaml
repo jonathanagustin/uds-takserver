@@ -1,0 +1,58 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+name: Core restore source candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-restore-source-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'jonathanagustin/uds-takserver' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SCENARIO: velero
+      ARCHITECTURE: amd64
+      CORE_RESTORE_POLICY_CANDIDATE: 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install pinned build tools
+        uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
+        with:
+          install_args: uv aqua:defenseunicorns/uds-cli
+          cache: true
+      - name: Build and verify signed source candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-project --with pyyaml==6.0.3 --with zstandard==0.25.0 python -B \
+            .github/test-infra/core-restore-source/build.py --phase build \
+            --cli "$(command -v uds)" --output "$RUNNER_TEMP/core-source-build"
+      - name: Retain public package and corresponding source
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: core-restore-source-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/core-source-build/artifacts/zarf-package-core-backup-restore-amd64-*.tar.zst
+            ${{ runner.temp }}/core-source-build/artifacts/provider.json
+            ${{ runner.temp }}/core-source-build/artifacts/change.patch
+            ${{ runner.temp }}/core-source-build/artifacts/LICENSE.md
+            ${{ runner.temp }}/core-source-build/artifacts/inputs.lock.json
+            ${{ runner.temp }}/core-source-build/artifacts/corresponding-source.tar.gz

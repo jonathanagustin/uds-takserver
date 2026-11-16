@@ -23,11 +23,11 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
-LOCK_SHA = '4beec73e138295ad0f56e8243658c3d38bf5ef5fbe47a6316741b6fd64f42ad8'
+LOCK_SHA = '2f5e7d85e7de9d9d7e2aef81fdd5e5576cff55901c18982392d2e5a641f8e8aa'
 ISSUER = 'https://token.actions.githubusercontent.com'
-IDENTITY = 'https://github.com/jonathanagustin/uds-takserver/.github/workflows/staged-migrations.yaml@refs/heads/main'
-IDENTITY_REGEXP = r'^https://github\.com/jonathanagustin/uds-takserver/\.github/workflows/staged-migrations\.yaml@refs/heads/main$'
-VERSION = '1.16.0-restore-policy.1-upstream'
+IDENTITY = 'https://github.com/jonathanagustin/uds-takserver/.github/workflows/core-restore-source.yaml@refs/heads/main'
+IDENTITY_REGEXP = r'^https://github\.com/jonathanagustin/uds-takserver/\.github/workflows/core-restore-source\.yaml@refs/heads/main$'
+VERSION = '1.16.0-restore-policy.1'
 
 
 def require(value, message):
@@ -305,7 +305,7 @@ def verify_provider(directory, cli, verification):
     provider_path = regular(directory / 'provider.json', 256 * 1024)
     value = json.loads(provider_path.read_text(), object_pairs_hook=unique)
     validate_provider(value, binding, lock)
-    name = 'zarf-package-core-backup-restore-amd64-' + VERSION + '.tar.zst'
+    name = 'zarf-package-core-backup-restore-amd64-' + VERSION + '-upstream.tar.zst'
     expected = {name, 'provider.json', 'change.patch', 'LICENSE.md', 'inputs.lock.json', 'corresponding-source.tar.gz'}
     require({p.name for p in directory.iterdir()} == expected, 'provider file inventory differs')
     for p in directory.iterdir():
