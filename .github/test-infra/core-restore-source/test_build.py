@@ -46,7 +46,7 @@ class SourceCandidateGuards(unittest.TestCase):
         self.assertEqual(len(uploads), 1)
         paths = uploads[0]['with']['path'].splitlines()
         self.assertEqual({Path(p).name for p in paths}, {
-            'zarf-package-core-backup-restore-amd64-*.tar.zst', 'provider.json',
+            'zarf-package-core-backup-restore-${{ inputs.architecture }}-*.tar.zst', 'provider.json',
             'change.patch', 'LICENSE.md', 'inputs.lock.json', 'corresponding-source.tar.gz'})
         self.assertEqual(len(paths), 6)
         self.assertTrue(all(p.startswith('${{ runner.temp }}/core-source-build/artifacts/') for p in paths))
@@ -120,7 +120,7 @@ class SourceCandidateGuards(unittest.TestCase):
                 'GITHUB_REPOSITORY': 'jonathanagustin/uds-takserver', 'GITHUB_REF': 'refs/heads/main',
                 'GITHUB_WORKFLOW_REF': B.IDENTITY.removeprefix('https://github.com/'),
                 'SCENARIO': 'velero', 'ARCHITECTURE': 'amd64', 'CORE_RESTORE_POLICY_CANDIDATE': 'true',
-                'GITHUB_SHA': 'a' * 40, 'GITHUB_RUN_ID': '12', 'GITHUB_RUN_ATTEMPT': '1'}
+                'RUNNER_ARCH': 'X64', 'GITHUB_SHA': 'a' * 40, 'GITHUB_RUN_ID': '12', 'GITHUB_RUN_ATTEMPT': '1'}
 
     def test_only_explicit_main_amd_owner_context_can_sign(self):
         env = self.environment()
@@ -128,7 +128,7 @@ class SourceCandidateGuards(unittest.TestCase):
             self.assertEqual(B.context()['sourceSHA'], 'a' * 40)
         for field, value in [('GITHUB_ACTIONS', 'false'), ('GITHUB_EVENT_NAME', 'pull_request'),
                              ('GITHUB_REF', 'refs/heads/other'), ('GITHUB_REPOSITORY', 'foreign/repo'),
-                             ('SCENARIO', 'identities'), ('ARCHITECTURE', 'arm64'),
+                             ('SCENARIO', 'identities'), ('ARCHITECTURE', 'arm64'), ('RUNNER_ARCH', 'ARM64'),
                              ('CORE_RESTORE_POLICY_CANDIDATE', 'false'), ('GITHUB_SHA', 'bad')]:
             with self.subTest(field=field), patch.dict(os.environ, {**env, field: value}, clear=True):
                 with self.assertRaises(ValueError):
@@ -246,6 +246,65 @@ class SourceCandidateGuards(unittest.TestCase):
         value['components'][0]['charts'].append({'name': 'foreign'})
         with self.assertRaises(ValueError):
             B.verify_chart_strategy(value)
+
+    def test_selected_platform_pins_are_closed_and_separate(self):
+        values = {}
+        for arch in ('amd64', 'arm64'):
+            with patch.dict(os.environ, {'ARCHITECTURE': arch}):
+                values[arch] = B.contract()
+                self.assertEqual(B.architecture(), arch)
+                self.assertEqual(values[arch]['platforms'][arch]['cli_sha256'], values[arch]['cli_sha256'])
+        self.assertNotEqual(values['amd64']['cli_sha256'], values['arm64']['cli_sha256'])
+        self.assertTrue(set(values['amd64']['image_manifest_sha256']).isdisjoint(values['arm64']['image_manifest_sha256']))
+        self.assertEqual(values['amd64']['source_files'], values['arm64']['source_files'])
+        for bad in ('', 'aarch64', 'ppc64le'):
+            with patch.dict(os.environ, {'ARCHITECTURE': bad}), self.assertRaises(ValueError):
+                B.contract()
+
+    def test_native_host_and_runner_context_cannot_cross_architectures(self):
+        for arch, machine, runner in [('amd64', 'x86_64', 'X64'), ('arm64', 'aarch64', 'ARM64')]:
+            env = {**self.environment(), 'ARCHITECTURE': arch, 'RUNNER_ARCH': runner}
+            with patch.dict(os.environ, env, clear=True), patch.object(B.platform, 'system', return_value='Linux'), \
+                 patch.object(B.platform, 'machine', return_value=machine):
+                B.native_host(); B.context()
+                with patch.object(B.platform, 'machine', return_value='foreign'), self.assertRaises(ValueError):
+                    B.native_host()
+                with patch.object(B.platform, 'system', return_value='Darwin'), self.assertRaises(ValueError):
+                    B.native_host()
+                with patch.dict(os.environ, {'RUNNER_ARCH': 'foreign'}), self.assertRaises(ValueError):
+                    B.context()
+
+    def test_provider_architecture_cannot_be_relabelled_or_omitted(self):
+        binding = {'sourceSHA': 'a' * 40, 'runID': '12', 'runAttempt': '1'}
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'source.tar.gz'; source.write_bytes(b'fixture')
+            with patch.dict(os.environ, {'ARCHITECTURE': 'amd64'}):
+                lock = B.contract()
+                package = {'packageSHA256': 'b' * 64, 'imageManifestSHA256': lock['image_manifest_sha256'],
+                           'embeddedRestoreCrdSHA256': lock['crd_after_sha256']}
+                value = B.public_provider(binding, package, lock, source)
+                self.assertEqual(value['schema'], 2); self.assertEqual(value['architecture'], 'amd64')
+                B.validate_provider(value, binding, lock)
+                old = copy.deepcopy(value); old.pop('architecture'); old['schema'] = 1
+                with self.assertRaises(ValueError): B.validate_provider(old, binding, lock)
+            with patch.dict(os.environ, {'ARCHITECTURE': 'arm64'}):
+                lock = B.contract()
+                for relabel in (False, True):
+                    changed = copy.deepcopy(value)
+                    if relabel: changed['architecture'] = 'arm64'
+                    with self.subTest(relabel=relabel), self.assertRaises(ValueError):
+                        B.validate_provider(changed, binding, lock)
+
+    def test_both_workflow_jobs_use_selected_native_runner_and_platform(self):
+        workflow = yaml.safe_load((B.ROOT / '.github/workflows/core-restore-source.yaml').read_text())
+        inputs = workflow.get('on', workflow.get(True))['workflow_dispatch']['inputs']
+        self.assertEqual(inputs['architecture']['options'], ['amd64', 'arm64'])
+        self.assertEqual(inputs['architecture']['default'], 'amd64')
+        for name in ('build', 'api-smoke'):
+            job = workflow['jobs'][name]
+            self.assertEqual(job['env']['ARCHITECTURE'], '${{ inputs.architecture }}')
+            self.assertIn("'ubuntu-24.04-arm'", job['runs-on'])
+            self.assertIn("'ubuntu-22.04'", job['runs-on'])
 
 
 if __name__ == '__main__':

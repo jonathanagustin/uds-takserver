@@ -10,6 +10,7 @@ import importlib.util
 import io
 import json
 import os
+import platform
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -25,7 +26,7 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
-LOCK_SHA = '7615b970080fd48da500f1b7df6402ebded6c05e1d643b2440b1234ed8f5f3b7'
+LOCK_SHA = '150cc24d55dfbbfc4bc1867409567fe4f812bc101ab27e001784038173651f01'
 ISSUER = 'https://token.actions.githubusercontent.com'
 IDENTITY = 'https://github.com/jonathanagustin/uds-takserver/.github/workflows/core-restore-source.yaml@refs/heads/main'
 IDENTITY_REGEXP = r'^https://github\.com/jonathanagustin/uds-takserver/\.github/workflows/core-restore-source\.yaml@refs/heads/main$'
@@ -57,21 +58,37 @@ def unique(pairs):
     return result
 
 
+def architecture():
+    arch = os.environ.get('ARCHITECTURE', 'amd64')
+    require(arch in ('amd64', 'arm64'), 'unsupported candidate architecture')
+    return arch
+
+
+def native_host():
+    require(platform.system() == 'Linux' and
+            platform.machine() == {'amd64': 'x86_64', 'arm64': 'aarch64'}[architecture()],
+            'native candidate host differs')
+
+
 def contract():
     lock = json.loads((HERE / 'inputs.lock.json').read_text(), object_pairs_hook=unique)
     require(byte_digest(json.dumps(lock, sort_keys=True).encode()) == LOCK_SHA, 'source lock differs')
-    require(lock['schema'] == 1 and lock['candidate_version'] == VERSION and len(lock['source_files']) == 34,
+    require(lock['schema'] == 2 and lock['candidate_version'] == VERSION and len(lock['source_files']) == 34,
             'source identity differs')
     require(digest(HERE / 'change.patch') == lock['patch_sha256'] and
             digest(HERE / 'LICENSE.md') == lock['core_license_sha256'], 'source patch/license differs')
-    return lock
+    require(set(lock['platforms']) == {'amd64', 'arm64'}, 'candidate platform inventory differs')
+    selected = lock['platforms'][architecture()]
+    require(set(selected) == {'cli_sha256', 'image_manifest_sha256'}, 'candidate platform contract differs')
+    return {**lock, **selected}
 
 
 def context():
     expected = {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'workflow_dispatch',
                 'GITHUB_REPOSITORY': 'jonathanagustin/uds-takserver', 'GITHUB_REF': 'refs/heads/main',
                 'GITHUB_WORKFLOW_REF': IDENTITY.removeprefix('https://github.com/'),
-                'SCENARIO': 'velero', 'ARCHITECTURE': 'amd64', 'CORE_RESTORE_POLICY_CANDIDATE': 'true'}
+                'SCENARIO': 'velero', 'ARCHITECTURE': architecture(),
+                'RUNNER_ARCH': {'amd64': 'X64', 'arm64': 'ARM64'}[architecture()], 'CORE_RESTORE_POLICY_CANDIDATE': 'true'}
     require(all(os.environ.get(k) == v for k, v in expected.items()), 'candidate requires explicit reviewed main owner workflow')
     require(re.fullmatch('[a-f0-9]{40}', os.environ.get('GITHUB_SHA', '')) and
             all(re.fullmatch('[1-9][0-9]{0,19}', os.environ.get(k, '')) for k in ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT')),
@@ -199,7 +216,7 @@ def inspect_package(path, lock, signed, binding=None):
     require(meta['metadata']['aggregateChecksum'] == byte_digest(small['checksums.txt']) and
             meta['metadata']['name'] == 'core-backup-restore' and meta['metadata']['version'] == VERSION and
             meta['metadata']['description'].startswith('Local UDS Core source derivative') and
-            meta['build']['architecture'] == 'amd64' and meta['build']['flavor'] == 'upstream' and
+            meta['build']['architecture'] == architecture() and meta['build']['flavor'] == 'upstream' and
             meta['build'].get('signed', False) is signed and
             set(meta['build'].get('provenanceFiles') or []) == ({'checksums.txt', 'zarf.bundle.sig'} if signed else {'checksums.txt'}), 'package identity differs')
     verify_chart_strategy(meta)
@@ -215,7 +232,7 @@ def inspect_package(path, lock, signed, binding=None):
         require(pin in lock['image_manifest_sha256'], 'unreviewed image manifest')
         image = json.loads(small['images/blobs/sha256/' + pin])
         config = json.loads(small['images/blobs/sha256/' + image['config']['digest'].removeprefix('sha256:')])
-        require(config['architecture'] == 'amd64' and config['os'] == 'linux', 'image platform differs')
+        require(config['architecture'] == architecture() and config['os'] == 'linux', 'image platform differs')
         manifests.append(pin)
     require(sorted(manifests) == lock['image_manifest_sha256'], 'image inventory differs')
     with tarfile.open(fileobj=io.BytesIO(small['components/velero.tar'])) as t:
@@ -264,17 +281,17 @@ def identity_file(parent):
 
 
 def public_provider(binding, package, lock, source_archive):
-    return {'schema': 1, 'scope': 'local-core-source-candidate', **binding, 'coreCommit': lock['core_commit'],
+    return {'schema': 2, 'scope': 'local-core-source-candidate', 'architecture': architecture(), **binding, 'coreCommit': lock['core_commit'],
             'patchSHA256': lock['patch_sha256'], 'sourceLockSHA256': digest(HERE / 'inputs.lock.json'),
             'cliSHA256': lock['cli_sha256'], 'version': VERSION, 'certificateIdentity': IDENTITY,
             'certificateOIDCIssuer': ISSUER, 'signatureVerified': True, 'correspondingSourceSHA256': digest(source_archive), **package}
 
 
 def validate_provider(value, binding, lock):
-    keys = {'schema', 'scope', 'sourceSHA', 'runID', 'runAttempt', 'coreCommit', 'patchSHA256', 'sourceLockSHA256',
+    keys = {'schema', 'scope', 'architecture', 'sourceSHA', 'runID', 'runAttempt', 'coreCommit', 'patchSHA256', 'sourceLockSHA256',
             'cliSHA256', 'version', 'certificateIdentity', 'certificateOIDCIssuer', 'signatureVerified',
             'packageSHA256', 'imageManifestSHA256', 'embeddedRestoreCrdSHA256', 'correspondingSourceSHA256'}
-    require(set(value) == keys and type(value['schema']) is int and value['schema'] == 1 and value['scope'] == 'local-core-source-candidate' and
+    require(set(value) == keys and type(value['schema']) is int and value['schema'] == 2 and value['architecture'] == architecture() and value['scope'] == 'local-core-source-candidate' and
             all(value[k] == binding[k] for k in binding) and value['coreCommit'] == lock['core_commit'] and
             value['patchSHA256'] == lock['patch_sha256'] and value['sourceLockSHA256'] == digest(HERE / 'inputs.lock.json') and
             value['cliSHA256'] == lock['cli_sha256'] and value['version'] == VERSION and
@@ -331,7 +348,7 @@ def verify_provider(directory, cli, verification):
     provider_path = regular(directory / 'provider.json', 256 * 1024)
     value = json.loads(provider_path.read_text(), object_pairs_hook=unique)
     validate_provider(value, binding, lock)
-    name = 'zarf-package-core-backup-restore-amd64-' + VERSION + '-upstream.tar.zst'
+    name = 'zarf-package-core-backup-restore-' + architecture() + '-' + VERSION + '-upstream.tar.zst'
     expected = {name, 'provider.json', 'change.patch', 'LICENSE.md', 'inputs.lock.json', 'corresponding-source.tar.gz'}
     require({p.name for p in directory.iterdir()} == expected, 'provider file inventory differs')
     for p in directory.iterdir():
@@ -347,6 +364,7 @@ def verify_provider(directory, cli, verification):
     require(all(value[k] == v for k, v in observed.items()), 'provider package differs')
     cli = regular(cli, 256 * 1024**2)
     require(digest(cli) == lock['cli_sha256'], 'unreviewed UDS CLI payload')
+    native_host()
     verification = Path(verification).absolute()
     require(not any(p.is_symlink() for p in (verification, *verification.parents)) and verification.parent.is_dir() and
             not verification.exists() and not verification.is_relative_to(ROOT) and not ROOT.is_relative_to(verification) and
@@ -380,7 +398,7 @@ def verify_recipe(binding):
     if 'HOME' in os.environ:
         env['HOME'] = os.environ['HOME']
     for path in (Path(__file__), HERE / 'inputs.lock.json', HERE / 'change.patch', HERE / 'LICENSE.md',
-                 ROOT / 'takx/native-commoncommo/runner.py'):
+                 ROOT / 'takx/native-commoncommo/runner.py', ROOT / '.github/workflows/core-restore-source.yaml'):
         relative = str(path.relative_to(ROOT))
         result = subprocess.run(['/usr/bin/git', '--no-replace-objects', '-C', str(ROOT), 'show', binding['sourceSHA'] + ':' + relative],
                                 env=env, timeout=20, check=True, capture_output=True)
@@ -394,6 +412,7 @@ def build(output, cli, source_archive=None, signed=False):
         verify_recipe(binding)
     cli = regular(cli, 256 * 1024**2)
     require(digest(cli) == lock['cli_sha256'], 'unreviewed UDS CLI payload')
+    native_host()
     output = Path(output).absolute()
     require(not any(p.is_symlink() for p in (output, *output.parents)) and output.parent.is_dir() and not output.exists() and
             output != ROOT and not output.is_relative_to(ROOT) and not ROOT.is_relative_to(output), 'fresh disjoint output required')
@@ -412,7 +431,7 @@ def build(output, cli, source_archive=None, signed=False):
     started = time.monotonic()
     record = {'completed': False, 'accepted': False, 'scope': 'source package only; no API/restore acceptance', 'commands': [],
               'inputs': {str(p): digest(p) for p in (Path(__file__), HERE / 'inputs.lock.json', HERE / 'change.patch',
-                         HERE / 'LICENSE.md', Path(runner.__file__), cli)}}
+                         HERE / 'LICENSE.md', ROOT / '.github/workflows/core-restore-source.yaml', Path(runner.__file__), cli)}}
     write = lambda: (output / 'PRIVATE-build-receipt.json').write_text(json.dumps(record, indent=2) + '\n')
     write()
     def command(label, args, seconds):
@@ -450,14 +469,14 @@ def build(output, cli, source_archive=None, signed=False):
                 source_images['src/velero/chart/templates/crds/restores.yaml'] == lock['crd_after_sha256'], 'derived source membership differs')
         record['sourceAfterSHA256'] = source_images
         args = [cli, 'zarf', 'package', 'create', output / 'source/packages/backup-restore', '--confirm', '--flavor', 'upstream',
-                '--architecture', 'amd64', '--cache', output / 'cache', '--tmpdir', output / 'tmp', '--output', output / 'artifacts', '--no-color']
+                '--architecture', architecture(), '--cache', output / 'cache', '--tmpdir', output / 'tmp', '--output', output / 'artifacts', '--no-color']
         if signed:
             with identity_file(output.parent) as token_file:
                 command('create-signed', [*args, '--keyless', '--identity-token', token_file], 1500)
         else:
             command('create-local', args, 1500)
         require(inventory(output / 'source') == source_images, 'source changed during build')
-        packages = list((output / 'artifacts').glob('zarf-package-core-backup-restore-amd64-*.tar.zst'))
+        packages = list((output / 'artifacts').glob('zarf-package-core-backup-restore-' + architecture() + '-*.tar.zst'))
         require(len(packages) == 1, 'candidate archive inventory differs')
         package = inspect_package(packages[0], lock, signed, binding if signed else None)
         require(all(digest(p) == pin for p, pin in record['inputs'].items()), 'builder input changed')
@@ -496,6 +515,10 @@ def failure_summary(error):
         'fresh disjoint output required': 'output-shape',
         'producer recipe differs from workflow source': 'source-recipe',
         'source lock differs': 'source-lock',
+        'unsupported candidate architecture': 'platform-context',
+        'native candidate host differs': 'native-host',
+        'candidate platform inventory differs': 'source-lock',
+        'candidate platform contract differs': 'source-lock',
         'source patch/license differs': 'source-lock',
         'job identity capability missing': 'oidc-capability',
         'job identity endpoint differs': 'oidc-endpoint',

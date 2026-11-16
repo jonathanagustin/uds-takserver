@@ -6,7 +6,7 @@ patch against Core v1.16.0. It produces a repository-owned derivative named
 publish a registry package, or connect to a cluster.
 
 The source lock binds 34 upstream files, the patch, AGPL license, CLI binary,
-three native AMD64 image manifests, and the resulting CRD. The builder checks
+three native image manifests per selected platform, and the resulting CRD. The builder checks
 its recipe against the workflow commit, uses a fresh output directory, and
 bounds disk use, command output, and execution time. Default invocation only
 checks the local contract.
@@ -30,7 +30,7 @@ A successful package build establishes package provenance and structure only.
 Core-owned API upgrade testing, actual restore behavior, ARM qualification, and
 owner acceptance remain separate requirements for the restore-policy PR.
 
-The optional `run_api_smoke` input adds a separate AMD64 job with read-only
+The optional `run_api_smoke` input adds a separate native job with read-only
 GitHub permissions. It downloads only the same attempt's candidate, repeats
 provider/signature/source verification, and refuses a remote Docker daemon or
 an existing test cluster. The established checkpoint helper creates the fresh
@@ -104,3 +104,18 @@ The package inspector and corresponding-source verifier require these exact
 strategies and source bytes. This is a candidate fix; only a successful separate
 fresh-mode run can qualify the first installation. Upgrade and actual restore
 qualification remain separate.
+
+
+The manual `architecture` choice defaults to `amd64` and also accepts `arm64`.
+Both producer and API jobs use the corresponding native Linux runner, exact CLI
+binary hash and three image manifests. Signing requires a matching GitHub runner
+architecture; building and signature consumption also require the matching native
+Linux host. Neither emulation nor architecture-check bypass flags are used.
+Artifact names include the selected platform and the same run/attempt binding.
+
+Source-lock, provider and API-proof schema 2 make the architecture explicit. A reader
+rejects missing, mismatched or relabelled provider platforms, even if the version
+matches. Schema 1 artifacts retain their original source-specific verifier;
+they are not silently upgraded. The `.2` source patch, Core base, license and
+image indexes are unchanged. ARM native build/API acceptance requires successful
+protected ARM runs; source pins and offline tests alone do not establish it.

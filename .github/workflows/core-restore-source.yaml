@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       run_api_smoke:
-        description: Test only the Restore API in a disposable AMD64 cluster
+        description: Test only the Restore API in a disposable native cluster
         type: boolean
         default: false
 
@@ -18,24 +18,32 @@ on:
           - fresh
         default: upgrade
 
+      architecture:
+        description: Native runner, CLI and image platform for the candidate
+        type: choice
+        options:
+          - amd64
+          - arm64
+        default: amd64
+
 permissions:
   contents: read
 
 concurrency:
-  group: core-restore-source-${{ github.ref }}
+  group: core-restore-source-${{ github.ref }}-${{ inputs.architecture }}
   cancel-in-progress: false
 
 jobs:
   build:
     if: github.repository == 'jonathanagustin/uds-takserver' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-22.04
+    runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-22.04' }}
     timeout-minutes: 40
     permissions:
       contents: read
       id-token: write
     env:
       SCENARIO: velero
-      ARCHITECTURE: amd64
+      ARCHITECTURE: ${{ inputs.architecture }}
       CORE_RESTORE_POLICY_CANDIDATE: 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -67,11 +75,11 @@ jobs:
       - name: Retain public package and corresponding source
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: core-restore-source-${{ github.run_id }}-${{ github.run_attempt }}
+          name: core-restore-source-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.architecture }}
           if-no-files-found: error
           retention-days: 14
           path: |
-            ${{ runner.temp }}/core-source-build/artifacts/zarf-package-core-backup-restore-amd64-*.tar.zst
+            ${{ runner.temp }}/core-source-build/artifacts/zarf-package-core-backup-restore-${{ inputs.architecture }}-*.tar.zst
             ${{ runner.temp }}/core-source-build/artifacts/provider.json
             ${{ runner.temp }}/core-source-build/artifacts/change.patch
             ${{ runner.temp }}/core-source-build/artifacts/LICENSE.md
@@ -81,7 +89,7 @@ jobs:
   api-smoke:
     if: inputs.run_api_smoke && github.repository == 'jonathanagustin/uds-takserver' && github.ref == 'refs/heads/main'
     needs: build
-    runs-on: ubuntu-22.04
+    runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-22.04' }}
     timeout-minutes: 125
     permissions:
       contents: read
@@ -89,7 +97,7 @@ jobs:
       packages: read
     env:
       SCENARIO: velero
-      ARCHITECTURE: amd64
+      ARCHITECTURE: ${{ inputs.architecture }}
       CORE_RESTORE_POLICY_CANDIDATE: 'true'
       CORE_RESTORE_API_SMOKE: 'true'
       CORE_RESTORE_API_MODE: ${{ inputs.api_mode }}
@@ -108,7 +116,7 @@ jobs:
       - name: Download this attempt's verified public candidate
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: core-restore-source-${{ github.run_id }}-${{ github.run_attempt }}
+          name: core-restore-source-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.architecture }}
           path: ${{ runner.temp }}/core-source-provider
       - name: Expose the pinned Kubernetes client
         run: |
@@ -136,7 +144,7 @@ jobs:
           ./.github/scripts/trim-runner.sh
           ./.github/scripts/add-runner-swap.sh
           printf '%s\n' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-      - name: Run the Core-owned API upgrade smoke
+      - name: Run the selected Core-owned API smoke
         shell: bash
         run: |
           set -euo pipefail
@@ -148,7 +156,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: core-restore-api-${{ github.run_id }}-${{ github.run_attempt }}
+          name: core-restore-api-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.architecture }}
           if-no-files-found: error
           retention-days: 14
           path: |

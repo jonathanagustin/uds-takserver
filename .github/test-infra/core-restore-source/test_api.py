@@ -47,7 +47,7 @@ class ApiGuards(unittest.TestCase):
         self.assertEqual(job['permissions'], {'contents': 'read', 'actions': 'read', 'packages': 'read'})
         self.assertEqual(job['env']['CORE_RESTORE_API_SMOKE'], 'true')
         download = next(s for s in job['steps'] if s.get('uses', '').startswith('actions/download-artifact@'))
-        self.assertEqual(download['with']['name'], 'core-restore-source-${{ github.run_id }}-${{ github.run_attempt }}')
+        self.assertEqual(download['with']['name'], 'core-restore-source-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.architecture }}')
         upload = next(s for s in job['steps'] if s.get('uses', '').startswith('actions/upload-artifact@'))
         self.assertEqual({Path(p).name for p in upload['with']['path'].splitlines()},
                          {'public-result.json', 'baseline-review.json', 'candidate-review.json'})
@@ -369,3 +369,16 @@ class ApiGuards(unittest.TestCase):
             argv = observer.command.call_args.args[0]
             self.assertEqual(argv[argv.index('--retries') + 1], '1')
             self.assertEqual(observer.command.call_count, 1)
+
+    def test_arm_fresh_proof_is_explicit_and_upgrade_refuses_cross_architecture_baseline(self):
+        binding = {'sourceSHA': 'a' * 40, 'runID': '12', 'runAttempt': '1'}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch.dict(A.os.environ, {'ARCHITECTURE': 'arm64'}):
+                value = self.observer(root, 'candidate').observe('candidate', schema(True), binding,
+                                                                'b' * 64, mode='fresh')
+                self.assertEqual(value['architecture'], 'arm64')
+                self.assertEqual(value['schema'], 2)
+                baseline = self.observer(root, 'baseline').observe('baseline', schema(False), binding, 'b' * 64)
+            with patch.dict(A.os.environ, {'ARCHITECTURE': 'amd64'}), self.assertRaisesRegex(ValueError, 'baseline receipt differs'):
+                self.observer(root, 'candidate').observe('candidate', schema(True), binding, 'b' * 64, baseline)

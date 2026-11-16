@@ -1,17 +1,29 @@
 {
   "candidate_version": "1.16.0-restore-policy.2",
-  "cli_sha256": "31cd710a3f1154f81767a5268f2c887d9e33fe10b81e45ee4183c810dd5ad308",
   "common_after_sha256": "78954bdb4ffa39ef2b0e96245a02dc936adf918e715943d0f18b414e11055893",
   "core_commit": "fd9769cd9e791d9b6ad86251af0f4899992a9ae5",
   "core_license_sha256": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
   "crd_after_sha256": "eb650958cfba9a0e1e951ecde2e4436062e58d80afc86db50aef48262a95fb43",
-  "image_manifest_sha256": [
-    "7f4298192ac4482d233fe62dd56d0a807606687724e8c1a549886508e5e2c346",
-    "87f95cccca5d4149e28ba44ffe1bd35ac298d9fc09aaccf9a02a4d432aeb89d9",
-    "e6a64c9f44ed17f426cb888cf651ea2f5e66927c6278d92ef3d7d29022897be5"
-  ],
   "patch_sha256": "61fe679b53e58e35ea77f0ef85416b3f05fb0220ca90452c0a22167a75fcdf77",
-  "schema": 1,
+  "platforms": {
+    "amd64": {
+      "cli_sha256": "31cd710a3f1154f81767a5268f2c887d9e33fe10b81e45ee4183c810dd5ad308",
+      "image_manifest_sha256": [
+        "7f4298192ac4482d233fe62dd56d0a807606687724e8c1a549886508e5e2c346",
+        "87f95cccca5d4149e28ba44ffe1bd35ac298d9fc09aaccf9a02a4d432aeb89d9",
+        "e6a64c9f44ed17f426cb888cf651ea2f5e66927c6278d92ef3d7d29022897be5"
+      ]
+    },
+    "arm64": {
+      "cli_sha256": "fc0bcf3ea0a512a5fcb158547ae6c388cde0759152dca41eb200c6dbca9b93d3",
+      "image_manifest_sha256": [
+        "70edc40da1926e674741fd48d2947b638200ea49b930a87c78e8b16bb47ac8f4",
+        "74bc6b9ac4b8ac3de30c4630b9c272d6d2ce7594f0f306cab8a71bec1ad9e966",
+        "858b3a0ac3d5bc4cf3390495d154a6c3d00ae6a30ace2e2394a2e47d26254e7a"
+      ]
+    }
+  },
+  "schema": 2,
   "source_files": {
     "LICENSE.md": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
     "packages/backup-restore/README.md": "0940c3f081dede2c45583df2942835f2b5d08462cceba49fed5daa7c32c9fc7b",
