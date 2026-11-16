@@ -329,7 +329,7 @@
                  return NULL;
              return JLONG_TO_INTPTR(T, pointer);
          }
-@@ -91,19 +112,28 @@
+@@ -91,19 +112,27 @@
          template<class T>
          inline T *Pointer_get(JNIEnv *env, jobject jpointer) NOTHROWS
          {
@@ -349,7 +349,6 @@
 +            if(!mpointer) return TE_InvalidArg;
 +            T *raw = Pointer_get<T>(env, mpointer);
 +            if(env.ExceptionCheck()) return TE_Err;
-+            if(!raw) return TE_InvalidArg;
 +            if(!Pointer_isShared<T>(&env, mpointer)) {
 +                if(env.ExceptionCheck() || !Pointer_makeShared<T>(&env, mpointer)) return TE_Err;
 +            }
@@ -360,27 +359,28 @@
 +            if(env.ExceptionCheck()) return TE_Err;
 +            if(!ptr) return TE_InvalidArg;
 +            const std::shared_ptr<T> &candidate = *JLONG_TO_INTPTR(std::shared_ptr<T>, ptr);
-+            if(!candidate || candidate.get() != raw) return TE_InvalidArg;
++            if(candidate.get() != raw) return TE_InvalidArg;
 +            value = candidate;
 +            return TE_Ok;
          }
  
          template<class T>
-@@ -160,34 +190,51 @@
+@@ -160,34 +189,52 @@
          template<class T>
          inline bool Pointer_makeShared(JNIEnv *env, jobject mpointer) NOTHROWS
          {
 +            if(!env || env->ExceptionCheck() || !mpointer) return false;
 +            T *raw = Pointer_get<T>(*env, mpointer);
-+            if(env->ExceptionCheck() || !raw) return false;
++            if(env->ExceptionCheck()) return false;
              jint type = env->GetIntField(mpointer, Pointer_class.type);
 +            if(env->ExceptionCheck()) return false;
              jlong ptr = env->GetLongField(mpointer, Pointer_class.value);
 +            if(env->ExceptionCheck() || !ptr) return false;
 +            if(type == com_atakmap_interop_Pointer_SHARED) {
 +                const std::shared_ptr<T> &model = *JLONG_TO_INTPTR(std::shared_ptr<T>, ptr);
-+                return model && model.get() == raw;
++                return model.get() == raw;
 +            }
++            if(!raw) return false;
 +            if(type != com_atakmap_interop_Pointer_UNIQUE && type != com_atakmap_interop_Pointer_RAW)
 +                return false;
 +            if(JLONG_TO_INTPTR(T, ptr) != raw) return false;
@@ -426,14 +426,14 @@
          {
 +            if(!env || env->ExceptionCheck() || !mpointer) return false;
 +            T *raw = Pointer_get<T>(*env, mpointer);
-+            if(env->ExceptionCheck() || !raw) return false;
++            if(env->ExceptionCheck()) return false;
              jint type = env->GetIntField(mpointer, Pointer_class.type);
 -            return (type == com_atakmap_interop_Pointer_SHARED);
 +            if(env->ExceptionCheck() || type != com_atakmap_interop_Pointer_SHARED) return false;
 +            jlong ptr = env->GetLongField(mpointer, Pointer_class.value);
 +            if(env->ExceptionCheck() || !ptr) return false;
 +            const std::shared_ptr<T> &model = *JLONG_TO_INTPTR(std::shared_ptr<T>, ptr);
-+            return model && model.get() == raw;
++            return model.get() == raw;
          }
      }
  }
