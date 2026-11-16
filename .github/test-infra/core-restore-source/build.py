@@ -4,6 +4,7 @@
 """Closed Core source-package experiment; default verification launches nothing."""
 import argparse
 import base64
+from contextlib import contextmanager
 import hashlib
 import importlib.util
 import io
@@ -240,6 +241,16 @@ def request_oidc():
     return token
 
 
+@contextmanager
+def identity_file(parent):
+    """Keep the short-lived identity outside artifacts and remove it on every exit."""
+    with tempfile.TemporaryDirectory(prefix='core-oidc-', dir=parent) as private:
+        path = Path(private) / 'identity.jwt'
+        with open(path, 'x', opener=lambda name, flags: os.open(name, flags, 0o600)) as stream:
+            stream.write(request_oidc())
+        yield path
+
+
 def public_provider(binding, package, lock, source_archive):
     return {'schema': 1, 'scope': 'local-core-source-candidate', **binding, 'coreCommit': lock['core_commit'],
             'patchSHA256': lock['patch_sha256'], 'sourceLockSHA256': digest(HERE / 'inputs.lock.json'),
@@ -426,10 +437,7 @@ def build(output, cli, source_archive=None, signed=False):
         args = [cli, 'zarf', 'package', 'create', output / 'source/packages/backup-restore', '--confirm', '--flavor', 'upstream',
                 '--architecture', 'amd64', '--cache', output / 'cache', '--tmpdir', output / 'tmp', '--output', output / 'artifacts', '--no-color']
         if signed:
-            with tempfile.TemporaryDirectory(prefix='core-oidc-', dir=output.parent) as private:
-                token_file = Path(private) / 'identity.jwt'
-                with token_file.open('x', opener=lambda p, f: os.open(p, f, 0o600)) as stream:
-                    stream.write(request_oidc())
+            with identity_file(output.parent) as token_file:
                 command('create-signed', [*args, '--keyless', '--identity-token', token_file], 1500)
         else:
             command('create-local', args, 1500)
@@ -483,7 +491,7 @@ def failure_summary(error):
         'owned output quota exceeded': 'owned-command-disk-quota',
         'candidate aggregate deadline': 'aggregate-deadline',
     }
-    allowed_types = {'ValueError', 'TimeoutError', 'CalledProcessError', 'FileNotFoundError',
+    allowed_types = {'ValueError', 'TypeError', 'TimeoutError', 'CalledProcessError', 'FileNotFoundError',
                      'HTTPError', 'URLError', 'JSONDecodeError', 'PermissionError', 'OSError'}
     lines, current = [], error.__traceback__
     while current:

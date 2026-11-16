@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import tarfile
 import tempfile
 import unittest
@@ -49,6 +50,31 @@ class SourceCandidateGuards(unittest.TestCase):
             'change.patch', 'LICENSE.md', 'inputs.lock.json', 'corresponding-source.tar.gz'})
         self.assertEqual(len(paths), 6)
         self.assertTrue(all(p.startswith('${{ runner.temp }}/core-source-build/artifacts/') for p in paths))
+
+    def test_private_identity_file_permissions_and_cleanup_on_every_exit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            parent = Path(temp)
+            with patch.object(B, 'request_oidc', return_value='synthetic-identity-fixture') as request:
+                with B.identity_file(parent) as path:
+                    self.assertEqual(path.read_text(), 'synthetic-identity-fixture')
+                    self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+                    self.assertEqual(stat.S_IMODE(path.parent.stat().st_mode), 0o700)
+                    self.assertEqual(path.parent.parent, parent)
+                    self.assertEqual(list(path.parent.iterdir()), [path])
+                request.assert_called_once_with()
+                self.assertFalse(path.exists())
+                self.assertEqual(list(parent.iterdir()), [])
+            with patch.object(B, 'request_oidc', side_effect=ValueError('identity refused')):
+                with self.assertRaisesRegex(ValueError, 'identity refused'):
+                    with B.identity_file(parent):
+                        self.fail('identity refusal yielded a file')
+                self.assertEqual(list(parent.iterdir()), [])
+            with patch.object(B, 'request_oidc', return_value='synthetic-identity-fixture'):
+                with self.assertRaisesRegex(RuntimeError, 'signing failed'):
+                    with B.identity_file(parent) as path:
+                        raise RuntimeError('signing failed')
+                self.assertFalse(path.exists())
+                self.assertEqual(list(parent.iterdir()), [])
 
     def test_failure_diagnostic_never_publishes_arbitrary_error_text(self):
         error = ValueError('credential-sentinel private source details')
