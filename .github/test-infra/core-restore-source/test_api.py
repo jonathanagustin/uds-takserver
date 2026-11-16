@@ -323,7 +323,7 @@ class ApiGuards(unittest.TestCase):
                     ([{'spec': {'group': 'velero.io'}}], b'', False),
                     ([], b'{"metadata": {"name": "velero"}}', False)]:
                 with self.subTest(items=items, namespace=namespace):
-                    observer.k = Mock(side_effect=[(True, json.dumps({'items': items}).encode()), (True, namespace)])
+                    observer.k = Mock(side_effect=[(True, '\n'.join(item['spec']['group'] for item in items).encode()), (True, namespace)])
                     if accepts:
                         self.assertEqual(observer.require_fresh_velero(),
                             {'veleroCrdsAbsent': True, 'veleroNamespaceAbsent': True})

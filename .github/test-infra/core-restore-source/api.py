@@ -236,8 +236,9 @@ class Observer:
             '--no-progress', '--no-log-file'], label, timeout=1500)
 
     def require_fresh_velero(self):
-        _, raw = self.k('get', 'crds', '-o', 'json', label='fresh-empty-crds')
-        B.require(not any(item['spec']['group'] == 'velero.io' for item in json.loads(raw)['items']),
+        _, raw = self.k('get', 'crds', '-o',
+                        'jsonpath={range .items[*]}{.spec.group}{"\\n"}{end}', label='fresh-empty-crds')
+        B.require(b'velero.io' not in raw.splitlines(),
                   'fresh candidate requires no Velero CRDs or namespace')
         _, raw = self.k('get', 'namespace', 'velero', '--ignore-not-found', '-o', 'json',
                         label='fresh-empty-namespace')
