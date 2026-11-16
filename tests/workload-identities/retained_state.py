@@ -23,6 +23,8 @@ GENERATED_SECRETS={'takserver-ca-key','takserver-certs','tak-health-client'}
 SOURCE_CLEANUP={(ns,'Secret',name) for ns,name in [('takserver',name) for name in GENERATED_SECRETS|{'takserver-keystore','takclient-enrollment','takserver-crl'}]+[('cloudtak','cloudtak-tak-admin')]}|{('takserver','ConfigMap','cert-migration'),('takserver','ConfigMap','takserver-startup')}
 
 def cleanup_allowed(rec):
+    if (rec.get('namespace'),rec.get('kind'),rec.get('name'))==('takserver','Secret','takserver-crl'):
+        return isinstance(rec.get('emptyCrlDataSHA256'),str) and bool(re.fullmatch('[a-f0-9]{64}',rec['emptyCrlDataSHA256']))
     return rec['namespace'] in APP_RELEASES and (rec['kind']=='PersistentVolumeClaim' and 'parent' in rec or (rec['namespace'],rec['kind'],rec['name']) in SOURCE_CLEANUP)
 
 def require(value,message):
@@ -336,7 +338,9 @@ def capture(driver):
             extra=(namespace,name) in {('cloudtak','cloudtak-tak-admin'),('takserver','takclient-enrollment'),('takserver','takserver-crl')}
             if extra:generated_secret(driver,secret)
             if name in referenced or namespace=='takserver' and name in GENERATED_SECRETS|{'takserver-keystore'} or extra:
-                rec=resource_record(secret);rec['dataSHA256']=sha(secret.get('data',{}));rec['recreatedHook']=namespace=='takserver' and name=='takserver-keystore';records.append(rec)
+                rec=resource_record(secret);rec['dataSHA256']=sha(secret.get('data',{}));rec['recreatedHook']=namespace=='takserver' and name=='takserver-keystore'
+                if namespace=='takserver' and name=='takserver-crl':rec['emptyCrlDataSHA256']=rec['dataSHA256']
+                records.append(rec)
     for config in driver.get('configmaps')['items']:
         if config['metadata']['name']=='takserver-startup':startup_map(config)
         if config['metadata']['name'] in ('cert-migration','takserver-startup'):
@@ -378,6 +382,9 @@ def cleanup_snapshot(driver,proof):
             if rec['name']=='takserver-startup':startup_map(current)
             if rec['name'] in ('cloudtak-tak-admin','takclient-enrollment','takserver-crl'):generated_secret(driver,current,cleanup=True)
             item=resource_record(current);item['origin']=proof['source']
+            if rec['namespace']=='takserver' and rec['name']=='takserver-crl':
+                require(sha(current.get('data',{}))==rec['emptyCrlDataSHA256'],'verified empty CRL data changed')
+                item['emptyCrlDataSHA256']=rec['emptyCrlDataSHA256']
             if rec['kind']=='PersistentVolumeClaim':
                 require(item['uid']==rec['uid'],'verified PVC replaced before cleanup snapshot')
                 item['parent']=claim_parent(driver,current)
@@ -758,6 +765,8 @@ def conditional_delete(driver,rec):
     if observed!=expected:
         capture_cleanup_drift(driver,rec,current)
         raise ValueError('retained resource identity/metadata changed')
+    if (rec['namespace'],rec['kind'],rec['name'])==('takserver','Secret','takserver-crl'):
+        require(sha(current.get('data',{}))==rec['emptyCrlDataSHA256'],'verified empty CRL data changed')
     if rec['kind']=='PersistentVolumeClaim':
         volume=driver.get('persistentvolume',rec['parent']['volumeName'],namespace='default')
         require(volume['metadata']['uid']==rec['parent']['volumeUID'] and volume['spec']['claimRef']['uid']==rec['uid'] and volume['spec']['claimRef']['namespace']==rec['namespace'] and volume['spec']['claimRef']['name']==rec['name'],'retained PVC volume ownership changed')

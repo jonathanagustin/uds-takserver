@@ -446,7 +446,8 @@ class RetainedStateGuards(unittest.TestCase):
 
     def test_startup_cleanup_requires_literal_source_checkpoint(self):
         obj={'kind':'ConfigMap','metadata':{'name':'takserver-startup','namespace':'takserver','uid':'startup','resourceVersion':'1','annotations':{'uds.dev/tak-startup':'complete'}},'data':{'ready':'true'}}
-        R.startup_map(obj);self.assertTrue(R.cleanup_allowed(R.resource_record(obj)))
+        R.startup_map(obj);rec=R.resource_record(obj);self.assertFalse(R.cleanup_allowed(rec))
+        rec['emptyCrlDataSHA256']=R.sha(obj['data']);self.assertTrue(R.cleanup_allowed(rec))
         for mutate in [lambda x:x['data'].update(private='foreign'),lambda x:x['metadata']['annotations'].update({'uds.dev/tak-startup':'other'}),lambda x:x.update(binaryData={'other':'payload'})]:
             altered=copy.deepcopy(obj);mutate(altered)
             with self.assertRaisesRegex(ValueError,'literal source'):R.startup_map(altered)
@@ -750,7 +751,8 @@ class EmptyCrlGuards(unittest.TestCase):
     def test_real_empty_signed_crl_accepts_and_source_data_is_not_modified(self):
         obj,ca=self.fixture();before=copy.deepcopy(obj)
         self.assertTrue(R.empty_crl(obj,ca));self.assertEqual(obj,before)
-        self.assertTrue(R.cleanup_allowed(R.resource_record(obj)))
+        rec=R.resource_record(obj);self.assertFalse(R.cleanup_allowed(rec))
+        rec['emptyCrlDataSHA256']=R.sha(obj['data']);self.assertTrue(R.cleanup_allowed(rec))
 
     def test_wrong_signer_and_real_revocation_cannot_hide_behind_empty_json(self):
         import hashlib,ssl
@@ -787,6 +789,7 @@ class EmptyCrlGuards(unittest.TestCase):
         helper=RetainedStateGuards()
         for name in ('takserver-crl','takserver-ca-key','takserver-certs','tak-health-client'):
             obj['metadata']['name']=name;rec=helper.record(obj)
+            if name=='takserver-crl':rec['emptyCrlDataSHA256']=R.sha(obj['data'])
             driver.guard=lambda:None;driver.core_unchanged=lambda:None
             with patch.object(R,'consumers_gone'),patch.object(R,'delete_record') as delete:
                 with self.assertRaisesRegex(ValueError,'active clients'):R.conditional_delete(driver,rec)
@@ -806,3 +809,16 @@ class EmptyCrlGuards(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'inventory unavailable'):R.no_live_clients(driver)
         driver.kube=lambda *a:(_ for _ in ()).throw(ValueError('query failed'))
         with self.assertRaises(ValueError):R.no_live_clients(driver)
+
+    def test_conditional_delete_requires_captured_empty_payload_hash(self):
+        obj,ca=self.fixture();helper=RetainedStateGuards();rec=helper.record(obj);driver=helper.driver(obj)
+        with patch.object(R,'delete_record') as delete:
+            with self.assertRaisesRegex(ValueError,'outside exact'):R.conditional_delete(driver,rec)
+            delete.assert_not_called()
+        rec['emptyCrlDataSHA256']='0'*64
+        with patch.object(R,'delete_record') as delete:
+            with self.assertRaisesRegex(ValueError,'verified empty CRL data changed'):R.conditional_delete(driver,rec)
+            delete.assert_not_called()
+        rec['emptyCrlDataSHA256']=R.sha(obj['data'])
+        with patch.object(R,'delete_record') as delete:
+            R.conditional_delete(driver,rec);delete.assert_called_once_with(driver,rec)
