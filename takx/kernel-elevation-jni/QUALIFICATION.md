@@ -1,3 +1,5 @@
+# Scoped full native composition results
+
 ## Current component review
 
 The checked three-file source patch is ready as a bounded component. A review
@@ -24,7 +26,7 @@ concurrency, portable native-builder integration and full elevation/renderer/SDK
 client acceptance remain independent open work. Source preparation alone grants
 none of those acceptance claims.
 
-# Scoped full native composition results
+## Earlier Native07 qualification
 
 The fresh Native07 composition consumes the full original 815-unit graph
 (483 core, 159 JNI, 173 Cesium), all 1,238 parent Java sources and 119 JNI headers.
