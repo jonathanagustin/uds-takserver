@@ -15,6 +15,7 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
+import zlib
 from pathlib import Path
 import yaml
 
@@ -917,6 +918,50 @@ def ignite_jar(obj):
     return hashlib.sha256(raw).hexdigest()
 
 
+def zarf_image_reference(registry,image):
+    """Zarf v0.89.0 transform for fully-qualified TAK tag/digest references."""
+    authority=r'[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?'
+    require(isinstance(registry,str) and re.fullmatch(authority,registry),'unsupported Zarf registry authority')
+    require(isinstance(image,str) and len(image)<=1024 and image.count('@')<=1,'unsupported source image')
+    name_tag,_,digest=image.partition('@')
+    slash=name_tag.rfind('/');colon=name_tag.rfind(':')
+    name,tag=(name_tag[:colon],name_tag[colon+1:]) if colon>slash else (name_tag,'latest')
+    host,separator,path=name.partition('/')
+    require(separator and re.fullmatch(authority,host) and ('.' in host or ':' in host or host=='localhost') and
+            host not in ('docker.io','index.docker.io') and
+            re.fullmatch(r'[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*',path) and
+            re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}',tag) and
+            (not digest or re.fullmatch(r'sha256:[a-f0-9]{64}',digest)), 'unsupported source image')
+    if registry.startswith(host):return image
+    if digest:return registry+'/'+path+'@'+digest
+    return registry+'/'+path+':'+tag+'-zarf-'+str(zlib.crc32(name.encode()))
+
+
+def zarf_image_binding(driver,pod,main,pod_image):
+    # hooks/pods.go records the original image and marks its mutation. The
+    # registry credential is generated from the same retained Zarf authority.
+    key='zarf.dev/'+('original-image-'+main['name'])[:63].rstrip('-')
+    meta=pod['metadata']
+    require(meta.get('labels',{}).get('zarf-agent')=='patched' and
+            meta.get('annotations',{}).get(key)==main['image'] and
+            isinstance(pod_image,str) and '/' in pod_image,'Pod image has no exact Zarf source marker')
+    source=driver.get('secret','private-registry',namespace='zarf')
+    source_hash=registry_secret_digest(source,'zarf')
+    raw=base64.b64decode(source['data']['.dockerconfigjson'],validate=True)
+    require(len(raw)<=64*1024,'Zarf registry credential bound differs')
+    def unique(pairs):
+        value={}
+        for k,v in pairs:
+            require(k not in value,'duplicate Zarf registry field');value[k]=v
+        return value
+    config=json.loads(raw,object_pairs_hook=unique);auths=config.get('auths')
+    registry=pod_image.split('/',1)[0]
+    require(set(config)=={'auths'} and isinstance(auths,dict) and 1<=len(auths)<=64 and
+            registry in auths and pod_image==zarf_image_reference(registry,main['image']),
+            'Pod image differs from the bound Zarf registry transform')
+    return source_hash
+
+
 def ignite_image(driver):
     """Resolve one Ready config container through the frozen Deployment UID."""
     deployment=driver.get('deployment','takserver-config',namespace='takserver')
@@ -934,14 +979,17 @@ def ignite_image(driver):
         if len(owners)!=1 or owners[0].get('kind')!='ReplicaSet' or owners[0].get('uid') not in replicasets:continue
         if pod['metadata'].get('deletionTimestamp') or pod.get('status',{}).get('phase')!='Running':continue
         if not any(c.get('type')=='Ready' and c.get('status')=='True' for c in pod['status'].get('conditions',[])):continue
-        matches=[c for c in pod['spec']['containers'] if c['name']==main['name'] and c.get('image')==main['image']]
+        matches=[c for c in pod['spec']['containers'] if c['name']==main['name']]
         states=[c for c in pod['status'].get('containerStatuses',[]) if c['name']==main['name'] and c.get('ready') is True and c.get('state',{}).get('running')]
         if len(matches)!=1 or len(states)!=1:continue
+        pod_image=matches[0].get('image')
+        registry_source=(zarf_image_binding(driver,pod,main,pod_image) if pod_image!=main['image'] else None)
         require(not any(m.get('mountPath','').rstrip('/') in ('','/ignite-extensions.jar') for m in matches[0].get('volumeMounts',[])),'Ignite source file is volume-mounted')
         image_id=states[0].get('imageID','')
         require(bool(re.search(r'(?:^|@|://)sha256:[a-f0-9]{64}$',image_id)),'Ignite image has no immutable runtime identity')
         candidates.append({'pod':pod['metadata']['name'],'podUID':pod['metadata']['uid'],'ownerUID':owners[0]['uid'],
-            'container':main['name'],'deploymentUID':uid,'image':main['image'],'imageID':image_id})
+            'container':main['name'],'deploymentUID':uid,'image':main['image'],'imageID':image_id,
+            'podImage':pod_image,'registrySourceSHA256':registry_source})
     require(len(candidates)==1,'Ignite source config Pod is not uniquely Ready')
     return candidates[0]
 
@@ -952,7 +1000,7 @@ def ignite_binding(driver,obj):
     require(result.returncode==0 and not result.stderr.strip() and
             result.stdout.strip()==jar+'  /ignite-extensions.jar','Ignite map differs from bound config image binary')
     require(ignite_image(driver)==before,'Ignite source changed during binary observation')
-    return {'imageBoundJarSHA256':jar,'imageSourceSHA256':sha({k:before[k] for k in ('deploymentUID','image','imageID','container')})}
+    return {'imageBoundJarSHA256':jar,'imageSourceSHA256':sha({k:before[k] for k in ('deploymentUID','image','imageID','container','podImage','registrySourceSHA256')})}
 
 
 def trust_binding(driver,obj):

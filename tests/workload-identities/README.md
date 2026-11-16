@@ -552,3 +552,36 @@ clean-state observation rechecks both the copy and retained authority. An empty
 CRL value is permitted only when that exact authority is also empty. Missing
 keys, added payload, changed authority or changed metadata still reject the trial.
 Neither this map nor any other Core resource is added to application cleanup.
+
+
+### Bind Zarf's Pod image rewrite
+
+Pilot `43798298987` stopped at the Ignite guard requiring one uniquely Ready
+config Pod. Its public source frames and proof hashes verify, but it contains no
+private Pod snapshot, so it does not establish which candidate predicate failed.
+The failed run is retained and is not rerun unchanged.
+
+A separate source-backed control demonstrates a valid case rejected by the old
+guard: Zarf v0.89.0's `src/internal/agent/hooks/pods.go` rewrites each Pod image,
+sets `zarf-agent=patched`, and records the original image in the container-specific
+`zarf.dev/original-image-*` annotation. The Deployment image remains the source
+reference. `src/pkg/transform/image.go` replaces the registry, retaining digest
+references or appending the original image-name CRC32 to a tag.
+
+The guard now accepts that exact rewrite only with its original-image annotation
+and mutation label, the expected transformed image, and a registry host present
+in the retained `zarf/private-registry` credential. The credential's whole-object
+digest is captured in the image-source binding and rechecked during observation
+and later verification. The supported source references are fully qualified TAK
+registry names with explicit tags or SHA256 digests; unknown forms reject.
+No credentials, image references or Pod names enter public proofs. The immutable
+runtime image ID, Deployment/ReplicaSet/Ready Pod chain, actual JAR checksum,
+source-file mount refusal and pre/post observation checks remain required.
+
+Upstream-published CRC suffix controls pass. A deterministic fixture reproduces
+the old unique-Pod rejection and accepts only the exact bound rewrite with the
+new guard. That review's SHA256 is
+`437c5bd9746e6c9d854ece9b287b75f7954f543c02b34817b306a19a5e4e18ca`.
+This validates the documented source-managed case, not a reconstruction of the
+failed run's unpublished Pod fields. A new source-bound package pilot is still
+required for fresh-strict acceptance.

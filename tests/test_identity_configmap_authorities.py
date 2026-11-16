@@ -78,6 +78,55 @@ class ConfigMapAuthorities(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Ignite binary changed'):R.conditional_delete(driver,rec)
             delete.assert_not_called()
 
+    def zarf_fixture(self):
+        obj,driver,data=self.fixture()
+        original='ghcr.io/stefanprodan/podinfo:6.3.3'
+        rewritten='127.0.0.1:31999/stefanprodan/podinfo:6.3.3-zarf-2985051089'
+        data['deployment']['spec']['template']['spec']['containers'][0]['image']=original
+        pod=data['pods']['items'][0];pod['spec']['containers'][0]['image']=rewritten
+        pod['metadata'].update(labels={'zarf-agent':'patched'},annotations={'zarf.dev/original-image-config':original})
+        config={'auths':{'127.0.0.1:31999':{'auth':'Zml4dHVyZQ=='}}}
+        data['secret']={'apiVersion':'v1','kind':'Secret','type':'kubernetes.io/dockerconfigjson',
+            'metadata':{'name':'private-registry','namespace':'zarf','uid':'registry','labels':{'app.kubernetes.io/managed-by':'zarf'}},
+            'data':{'.dockerconfigjson':base64.b64encode(json.dumps(config).encode()).decode()}}
+        return obj,driver,data
+
+    def test_source_published_zarf_transform_vectors(self):
+        # CRC suffixes from Zarf v0.89.0's upstream image_test.go.
+        self.assertEqual(R.zarf_image_reference('registry.local:5000','ghcr.io/stefanprodan/podinfo:6.3.3'),
+            'registry.local:5000/stefanprodan/podinfo:6.3.3-zarf-2985051089')
+        self.assertEqual(R.zarf_image_reference('registry.local:5000','registry1.dso.mil/ironbank/opensource/zarf-dev/zarf/zarf-agent:v0.25.0'),
+            'registry.local:5000/ironbank/opensource/zarf-dev/zarf/zarf-agent:v0.25.0-zarf-1211467612')
+        digest='sha256:'+'a'*64
+        self.assertEqual(R.zarf_image_reference('registry.local:5000','ghcr.io/example/config:tag@'+digest),
+            'registry.local:5000/example/config@'+digest)
+        for bad in ('i am not a ref','http://ghcr.io/example/config:tag','nginx:latest','ghcr.io/example/config@sha256:bad'):
+            with self.assertRaises(ValueError):R.zarf_image_reference('registry.local:5000',bad)
+
+    def test_zarf_rewritten_image_retains_exact_image_file_and_authority_binding(self):
+        obj,driver,data=self.zarf_fixture();rec=R.ignite_binding(driver,obj)
+        self.assertTrue(R.ignite_image(driver)['registrySourceSHA256'])
+        data['secret']['metadata']['uid']='replacement'
+        self.assertNotEqual(R.ignite_binding(driver,obj),rec)
+
+    def test_rewrite_requires_original_annotation_crc_and_retained_registry(self):
+        mutations=[lambda d:d['pods']['items'][0]['metadata']['labels'].clear(),
+            lambda d:d['pods']['items'][0]['metadata']['annotations'].clear(),
+            lambda d:d['pods']['items'][0]['metadata']['annotations'].update({'zarf.dev/original-image-config':'ghcr.io/other/config:tag'}),
+            lambda d:d['pods']['items'][0]['spec']['containers'][0].update(image='127.0.0.1:31999/stefanprodan/podinfo:6.3.3-zarf-1'),
+            lambda d:d['pods']['items'][0]['spec']['containers'][0].update(image='foreign.local/stefanprodan/podinfo:6.3.3-zarf-2985051089'),
+            lambda d:d['secret']['metadata']['labels'].clear(),
+            lambda d:d['secret']['metadata'].update(namespace='foreign')]
+        for mutate in mutations:
+            obj,driver,data=self.zarf_fixture();mutate(data)
+            with self.assertRaises(ValueError):R.ignite_binding(driver,obj)
+        obj,driver,data=self.zarf_fixture();old=driver.exec
+        def replace_source(*a,**k):
+            data['secret']['metadata']['uid']='replacement'
+            return old(*a,**k)
+        driver.exec=replace_source
+        with self.assertRaisesRegex(ValueError,'during binary observation'):R.ignite_binding(driver,obj)
+
     def test_istio_crl_empty_or_nonempty_requires_exact_core_authority(self):
         for value in ('','public CRL'):
             source={'metadata':{'uid':'core-crl'},'data':{'ca-crl.pem':value}}
