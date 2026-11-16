@@ -329,7 +329,7 @@
                  return NULL;
              return JLONG_TO_INTPTR(T, pointer);
          }
-@@ -91,19 +112,27 @@
+@@ -91,19 +112,30 @@
          template<class T>
          inline T *Pointer_get(JNIEnv *env, jobject jpointer) NOTHROWS
          {
@@ -347,6 +347,9 @@
 +            using namespace TAK::Engine::Util;
 +            if(env.ExceptionCheck()) return TE_Err;
 +            if(!mpointer) return TE_InvalidArg;
++            jlong holder = env.GetLongField(mpointer, Pointer_class.value);
++            if(env.ExceptionCheck()) return TE_Err;
++            if(!holder) return TE_InvalidArg;
 +            T *raw = Pointer_get<T>(env, mpointer);
 +            if(env.ExceptionCheck()) return TE_Err;
 +            if(!Pointer_isShared<T>(&env, mpointer)) {
@@ -365,7 +368,7 @@
          }
  
          template<class T>
-@@ -160,34 +189,52 @@
+@@ -160,34 +192,52 @@
          template<class T>
          inline bool Pointer_makeShared(JNIEnv *env, jobject mpointer) NOTHROWS
          {

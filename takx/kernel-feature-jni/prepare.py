@@ -45,7 +45,7 @@ def contract():
     lock = json.loads(regular(HERE / 'inputs.lock.json'))
     patch = regular(HERE / 'checked-feature-callbacks.patch')
     require(type(lock['schema']) is int and lock['schema'] == 1 and
-            lock['profile'] == 'native07-checked-feature-callbacks-v10' and
+            lock['profile'] == 'native07-checked-feature-callbacks-v11' and
             lock['official_revision'] == '9f6893dd657feacc35ec5de03dad721c2e44170e' and
             lock['actual_kernel_version'] == '8.30.5' and set(lock['files']) == FILES and lock['parent_native_sha256'] == '54630be999ac532f4724e0c62a5197e42f16f3244e1063022d6121e09cd8990e',
             'source identity differs')

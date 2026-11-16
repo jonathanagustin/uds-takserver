@@ -1,6 +1,6 @@
 # Checked feature-renderer JNI source profile
 
-Version 8 stages eight exact C++ files and two interop headers from the frozen
+Version 11 stages eight exact C++ files and two interop headers from the frozen
 Native07 Kernel composition. It adds checked callback boundaries, prevents
 publication of a failed wrapper, rolls back failed datastore listener registration, and
 preserves the first Java exception while clearing a disposed native pointer.
@@ -8,7 +8,7 @@ Actual Kernel version is 8.30.5; the composed parent is not pristine upstream.
 
 The exact parent receipt is
 `54630be999ac532f4724e0c62a5197e42f16f3244e1063022d6121e09cd8990e`.
-All ten pre/postimages, patch bytes and thirteen owned diagnostic sources must match
+All ten pre/postimages, patch bytes and seventeen owned diagnostic sources must match
 the closed lock. Source preparation grants no runtime or SDK acceptance.
 
 ## Use
@@ -455,6 +455,29 @@ listener events on each side and zero hidden pixels, but is rejected for three
 strict-JNI warnings in native layer listener registration and repeated wrapping.
 The additional observer changes lifetime/timing; it does not establish why the
 uninstrumented replay13 kept pixels. Both failures remain retained.
+
+## Direct pointer ownership checks
+
+Version 11 checks direct raw/shared pointer access, promotion and shared-holder
+inspection before touching Java fields or native ownership. Null objects,
+disposed holders and pending Java exceptions are rejected without replacing an
+existing output owner. Failed allocation during unique-to-shared promotion
+leaves Java ownership intact so a later retry succeeds. A valid empty shared
+holder remains supported; a disposed holder has no holder address.
+
+An independently recompiled before/after probe reproduces fourteen baseline
+failures and passes all eighteen candidate cases with zero strict-JNI diagnostics.
+The receipt SHA256 is
+`aa485e5e42cfd089836fdfb4f1f8fe4f7b9adc867ff370577babba64094bbfb7`.
+A separate real `NewPointer(empty shared_ptr)` probe checks get, shared inspection
+and promotion against both headers. It preserves the upstream result and output
+ownership. These direct-header controls use unchanged Native14 provider libraries;
+they do not replace a complete candidate native rebuild or concurrency testing.
+
+The rejected version-9 candidate refused valid empty shared holders. Version 10
+restored those holders but returned the wrong status for disposed pointers.
+Both failed candidates and partial native rebuilds are retained; neither is
+accepted.
 
 ## Remaining gates
 

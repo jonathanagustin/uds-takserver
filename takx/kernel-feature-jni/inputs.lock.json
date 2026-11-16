@@ -1,10 +1,10 @@
 {
   "schema": 1,
-  "profile": "native07-checked-feature-callbacks-v10",
+  "profile": "native07-checked-feature-callbacks-v11",
   "actual_kernel_version": "8.30.5",
   "official_revision": "9f6893dd657feacc35ec5de03dad721c2e44170e",
   "parent_native_sha256": "54630be999ac532f4724e0c62a5197e42f16f3244e1063022d6121e09cd8990e",
-  "scope": "ten-file source preparation; checked direct Pointer helpers reject null/disposed/pending state and preserve unique ownership on promotion allocation failure; prior inbound/outbound callback guards; no full SDK/client acceptance; valid empty shared holders retain upstream get/isShared/makeShared behavior",
+  "scope": "ten-file source preparation; checked direct Pointer helpers reject null/disposed/pending state and preserve unique ownership on promotion allocation failure; prior inbound/outbound callback guards; no full SDK/client acceptance; valid empty shared holders retain upstream get/isShared/makeShared behavior; valid empty shared holders retain upstream get/isShared/makeShared behavior",
   "files": {
     "takkernel/engine/src/main/jni/interop/InterfaceMarshalContext.h": {
       "before": "c8c17f62f18bf771794b114f3826e22f612354121f6eff3340f90dc1992ed35c",
@@ -12,7 +12,7 @@
     },
     "takkernel/engine/src/main/jni/interop/Pointer.h": {
       "before": "cfdc92703ec3cf4e6d241408c59f790f008805e23bd08e2bd49477ea6f041134",
-      "after": "99656e42bda4dc65e3f5a505ff1483fdd927cb41efae25cbac910773992e1570"
+      "after": "48bbe27a980aa07276a90ee28ee59da5caade339ab502afd560bee0c14741983"
     },
     "takkernel/engine/src/main/jni/interop/core/ManagedLayer.cpp": {
       "before": "144a76c46acd31dd48feeeff096e7189ac3361a13b56718bf563972ea7e3b465",
@@ -47,7 +47,7 @@
       "after": "5bcdde1a6caaae6cef1c7ac49a7d3aa23c75dedee1531589ca936073dd338fed"
     }
   },
-  "patch_sha256": "d635f00658965454ae50b3b0a85387a715d202b3b7c8aa16eaa120b50262da7e",
+  "patch_sha256": "37f043203d2ab00b6b69826d06bb2f3499d4987beec165165671e7f76a970c43",
   "owned_controls": {
     "tests/ContourDrawProbe.java": "3cf86613bd0bb13b0e1278f62e86ae330ee7d82ab25543bafe89d95f6278b45e",
     "tests/LayerConstructorFault.java": "209fa9c9d87c60a5011458a9de6bedfb34804e2302bcb5ab9a9bcc79a9e0448d",
