@@ -47,7 +47,10 @@ def read(kind, name):
 try:
     os.umask(0o077)
     dest = Path(sys.argv[1]).absolute()
-    require(not any(p.is_symlink() for p in (dest, *dest.parents)))
+    require(not dest.is_symlink())
+    # macOS exposes /tmp through a system symlink. Resolve parent aliases,
+    # while still refusing a symlink at the requested destination itself.
+    dest = dest.resolve()
     dest.mkdir(parents=True, exist_ok=True, mode=0o700)
     require(dest.is_dir() and dest.stat().st_uid == os.getuid())
     dest.chmod(0o700)

@@ -102,6 +102,17 @@ if p.exists():print(p.read_text())
                 self.assertEqual((self.dest / 'admin.key').read_bytes(), b'key-A')
                 self.assertEqual((self.dest / 'admin.pem').read_bytes(), b'certificate-A')
 
+    def test_parent_alias_like_macos_tmp_uses_private_canonical_destination(self):
+        actual = self.root / 'actual'; actual.mkdir()
+        alias = self.root / 'alias'; alias.symlink_to(actual, target_is_directory=True)
+        self.dest = alias / 'certs'
+        self.write(source())
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), str(actual / 'certs'))
+        self.assertEqual((actual / 'certs/admin.key').read_bytes(), b'key-A')
+        self.assertEqual(stat.S_IMODE((actual / 'certs').stat().st_mode), 0o700)
+
     def test_symlink_destination_is_refused_before_api_read(self):
         elsewhere = self.root / 'elsewhere'; elsewhere.mkdir()
         self.dest.symlink_to(elsewhere, target_is_directory=True)
