@@ -30,7 +30,7 @@ def schema(policy):
 def crd(policy):
     return {'apiVersion': 'apiextensions.k8s.io/v1', 'kind': 'CustomResourceDefinition',
             'metadata': {'name': 'restores.velero.io', 'uid': '12345678-1234-1234-1234-123456789abc',
-                'labels': {'app.kubernetes.io/managed-by': 'Helm'},
+                'labels': {'app.kubernetes.io/managed-by': 'Helm', 'component': 'velero'},
                 'annotations': {'meta.helm.sh/release-name': 'uds-velero-config',
                                 'meta.helm.sh/release-namespace': 'velero'}}, 'spec': schema(policy),
             'status': {'conditions': [{'type': 'Established', 'status': 'True'},
@@ -130,6 +130,91 @@ class ApiGuards(unittest.TestCase):
         observer.k = Mock()
         self.assertEqual(observer.failure_status(), {'status': 'cluster-guard-refused'})
         observer.k.assert_not_called()
+
+    def test_bootstrap_accepts_only_exact_source_and_absent_or_correct_tracking(self):
+        good = crd(False)
+        self.assertEqual(A.bootstrap_crd(good, schema(False))['trackingFieldsPresent'], 3)
+        missing = copy.deepcopy(good)
+        missing['metadata']['labels'].pop('app.kubernetes.io/managed-by')
+        missing['metadata']['annotations'] = {}
+        self.assertEqual(A.bootstrap_crd(missing, schema(False))['trackingFieldsPresent'], 0)
+        for field, value in [('uid', ''), ('ownerReferences', [{}]), ('deletionTimestamp', 'now')]:
+            bad = copy.deepcopy(missing); bad['metadata'][field] = value
+            with self.assertRaises(ValueError):
+                A.bootstrap_crd(bad, schema(False))
+        foreign = copy.deepcopy(missing)
+        foreign['metadata']['annotations']['meta.helm.sh/release-name'] = 'foreign'
+        with self.assertRaisesRegex(ValueError, 'conflicting tracking metadata'):
+            A.bootstrap_crd(foreign, schema(False))
+        with self.assertRaisesRegex(ValueError, 'source differs'):
+            A.bootstrap_crd(crd(True), schema(False))
+
+    def test_normal_baseline_reconciliation_requires_empty_inventory_and_stable_uid(self):
+        missing = crd(False)
+        missing['metadata']['labels'].pop('app.kubernetes.io/managed-by')
+        missing['metadata']['annotations'] = {}
+        observer = A.Observer('/pinned/uds', Path('/owned'), lambda: None, {})
+        observer.deploy_bundle = Mock()
+        observer.k = Mock(side_effect=[(True, json.dumps(v).encode())
+                         for v in (missing, {'items': []}, {'items': []}, crd(False))])
+        result = observer.reconcile_baseline(Path('/owned/bundle'), 'a' * 64, schema(False))
+        observer.deploy_bundle.assert_called_once_with(Path('/owned/bundle'), 'a' * 64, 'baseline-reconcile')
+        self.assertTrue(result['performed'])
+        self.assertTrue(result['crdUidStable'])
+        self.assertEqual(result['initialTrackingFieldsPresent'], 0)
+        for objects in ({'items': [{}]},):
+            observer.deploy_bundle.reset_mock()
+            observer.k = Mock(side_effect=[(True, json.dumps(v).encode()) for v in (missing, objects)])
+            with self.assertRaisesRegex(ValueError, 'no backup or restore'):
+                observer.reconcile_baseline(Path('/owned/bundle'), 'a' * 64, schema(False))
+            observer.deploy_bundle.assert_not_called()
+        replaced = crd(False); replaced['metadata']['uid'] = 'abcdefab-1234-1234-1234-123456789abc'
+        observer.k = Mock(side_effect=[(True, json.dumps(v).encode())
+                         for v in (missing, {'items': []}, {'items': []}, replaced)])
+        with self.assertRaisesRegex(ValueError, 'replaced the CRD'):
+            observer.reconcile_baseline(Path('/owned/bundle'), 'a' * 64, schema(False))
+
+    def test_reconciliation_does_not_adopt_foreign_or_accept_still_missing_owner(self):
+        missing = crd(False)
+        missing['metadata']['labels'].pop('app.kubernetes.io/managed-by')
+        missing['metadata']['annotations'] = {}
+        observer = A.Observer('/pinned/uds', Path('/owned'), lambda: None, {})
+        observer.deploy_bundle = Mock()
+        foreign = copy.deepcopy(missing)
+        foreign['metadata']['labels']['app.kubernetes.io/managed-by'] = 'foreign'
+        observer.k = Mock(return_value=(True, json.dumps(foreign).encode()))
+        with self.assertRaisesRegex(ValueError, 'conflicting tracking metadata'):
+            observer.reconcile_baseline(Path('/owned/bundle'), 'a' * 64, schema(False))
+        observer.deploy_bundle.assert_not_called()
+        observer.k = Mock(side_effect=[(True, json.dumps(v).encode())
+                         for v in (missing, {'items': []}, {'items': [{}]})])
+        with self.assertRaisesRegex(ValueError, 'no backup or restore'):
+            observer.reconcile_baseline(Path('/owned/bundle'), 'a' * 64, schema(False))
+        observer.deploy_bundle.assert_not_called()
+        observer.k = Mock(side_effect=[(True, json.dumps(v).encode())
+                         for v in (missing, {'items': []}, {'items': []}, missing)])
+        with self.assertRaisesRegex(ValueError, 'CRD ownership differs'):
+            observer.reconcile_baseline(Path('/owned/bundle'), 'a' * 64, schema(False))
+        observer.deploy_bundle.assert_called_once()
+        observer.deploy_bundle.reset_mock()
+        observer.k = Mock(return_value=(True, json.dumps(crd(False)).encode()))
+        result = observer.reconcile_baseline(Path('/owned/bundle'), 'a' * 64, schema(False))
+        self.assertFalse(result['performed'])
+        observer.deploy_bundle.assert_not_called()
+
+    def test_bundle_deployment_refuses_changed_bytes_and_wrong_cluster(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'bundle'; path.write_bytes(b'fixture')
+            guard = Mock()
+            observer = A.Observer('/pinned/uds', Path(temp), guard, {})
+            observer.command = Mock()
+            with self.assertRaisesRegex(ValueError, 'bundle changed'):
+                observer.deploy_bundle(path, 'a' * 64, 'baseline-reconcile')
+            observer.command.assert_not_called()
+            guard.side_effect = ValueError('cluster changed')
+            with self.assertRaisesRegex(ValueError, 'cluster changed'):
+                observer.deploy_bundle(path, A.B.digest(path), 'baseline-reconcile')
+            observer.command.assert_not_called()
 
     def test_default_and_off_context_launch_nothing(self):
         with patch.object(A.B.subprocess, 'run', side_effect=AssertionError('process')), patch.object(

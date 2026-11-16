@@ -73,3 +73,14 @@ specification hash, and whether the v1 schema contains `resourcePolicy`. They do
 not publish observed owner/manager names or alter the required Core Helm owner.
 These facts distinguish a metadata mismatch from a schema replacement while
 preserving the same acceptance rules.
+
+The API-only bootstrap can reconcile missing Helm tracking metadata by deploying
+the same verified official baseline bundle once more through its normal Core
+hooks and charts. Before that mutation, the live CRD must have the exact locked
+baseline schema/component, a stable valid UID, no deletion or owner references,
+and only correct or absent tracking fields. Conflicting values and existing
+Backup/Restore objects refuse reconciliation. The final full Core owner/schema
+check and unchanged UID are mandatory before any baseline API evidence is taken.
+No direct metadata patch, force-conflict flag or ownership bypass is introduced.
+This qualifies an upgrade from the reconciled baseline, not fresh derivative
+installation or actual restore behavior.

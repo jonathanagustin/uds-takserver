@@ -81,6 +81,25 @@ def validate_crd(value, expected):
     return hashlib.sha256(meta['uid'].encode()).hexdigest()
 
 
+def bootstrap_crd(value, expected):
+    """Recognize only the exact baseline with correct or absent tracking fields."""
+    B.require(value.get('kind') == 'CustomResourceDefinition' and
+              value.get('apiVersion') == 'apiextensions.k8s.io/v1', 'bootstrap CRD API differs')
+    facts = crd_owner_facts(value)
+    B.require(all(facts[key] for key in ('nameMatches', 'notDeleting', 'uidShapeMatches', 'ownerReferencesAbsent')),
+              'bootstrap CRD identity differs')
+    meta = value['metadata']
+    B.require(meta.get('labels', {}).get('component') == 'velero' and crd_spec(value['spec']) == expected,
+              'bootstrap CRD source differs')
+    fields = [(meta.get('labels', {}), 'app.kubernetes.io/managed-by', 'Helm'),
+              (meta.get('annotations', {}), 'meta.helm.sh/release-name', 'uds-velero-config'),
+              (meta.get('annotations', {}), 'meta.helm.sh/release-namespace', 'velero')]
+    B.require(all(key not in data or data[key] == required for data, key, required in fields),
+              'bootstrap CRD has conflicting tracking metadata')
+    return {'crdUidSHA256': hashlib.sha256(meta['uid'].encode()).hexdigest(),
+            'trackingFieldsPresent': sum(key in data for data, key, _ in fields)}
+
+
 def probe(policy=True, unknown=False, missing=None):
     spec = {'backupName': 'schema-validation-only'}
     if policy:
@@ -130,6 +149,13 @@ def failure_diagnostic(error, observer=None):
         'CRD changed during observation': 'crd-changed',
         'API bundle inventory differs': 'bundle-inventory',
         'API trial cluster changed': 'cluster-identity',
+        'bootstrap CRD API differs': 'bootstrap-api',
+        'bootstrap CRD identity differs': 'bootstrap-identity',
+        'bootstrap CRD source differs': 'bootstrap-source',
+        'bootstrap CRD has conflicting tracking metadata': 'bootstrap-foreign-owner',
+        'baseline reconciliation requires no backup or restore objects': 'bootstrap-active-operations',
+        'baseline reconciliation replaced the CRD': 'bootstrap-crd-replaced',
+        'deployment bundle changed': 'deployment-input',
     }
     files = {str(Path(path).resolve()): str(Path(path).resolve().relative_to(B.ROOT))
              for path in (__file__, B.__file__, E.__file__, R.__file__)}
@@ -143,7 +169,8 @@ def failure_diagnostic(error, observer=None):
               'category': categories.get(str(error), summary['category']),
               'exceptionType': summary['exceptionType'], 'frames': frames[-8:]}
     if observer is not None:
-        allowed = {'checkpoint', 'verified-official-pull'}
+        allowed = {'checkpoint', 'verified-official-pull', 'baseline-bootstrap-crd', 'baseline-empty-backups',
+                   'baseline-empty-restores', 'baseline-reconcile', 'baseline-reconciled-crd'}
         for variant in ('baseline', 'candidate'):
             allowed.update(variant + '-' + suffix for suffix in ('create', 'deploy', 'valid', 'unknown', 'kind', 'name'))
             allowed.update(prefix + '-' + variant for prefix in ('read-crd', 'reread-crd', 'before-restores', 'after-restores'))
@@ -197,6 +224,31 @@ class Observer:
         return self.command([self.cli, 'zarf', 'tools', 'kubectl', '--context', E.CONTEXT,
                              '--request-timeout=30s', *args], label, failure=failure)
 
+    def deploy_bundle(self, path, pin, label):
+        B.require(label in ('baseline-deploy', 'baseline-reconcile', 'candidate-deploy'),
+                  'deployment role differs')
+        self.guard()
+        B.require(B.digest(B.regular(path, 512 * 1024**2)) == pin, 'deployment bundle changed')
+        return self.command([self.cli, 'deploy', path, '--packages', 'core-backup-restore', '--confirm',
+            '--retries', '1', '--tmpdir', self.output / 'tmp', '--uds-cache', self.output / 'uds-cache',
+            '--no-progress', '--no-log-file'], label, timeout=1500)
+
+    def reconcile_baseline(self, path, pin, expected):
+        _, raw = self.k('get', 'crd', 'restores.velero.io', '-o', 'json', label='baseline-bootstrap-crd')
+        before = bootstrap_crd(json.loads(raw), expected)
+        performed = before['trackingFieldsPresent'] < 3
+        if performed:
+            for resource in ('backups.velero.io', 'restores.velero.io'):
+                _, raw = self.k('get', resource, '-n', 'velero', '-o', 'json',
+                                label='baseline-empty-' + resource.split('.')[0])
+                B.require(json.loads(raw)['items'] == [], 'baseline reconciliation requires no backup or restore objects')
+            self.deploy_bundle(path, pin, 'baseline-reconcile')
+        _, raw = self.k('get', 'crd', 'restores.velero.io', '-o', 'json', label='baseline-reconciled-crd')
+        B.require(validate_crd(json.loads(raw), expected) == before['crdUidSHA256'],
+                  'baseline reconciliation replaced the CRD')
+        return {'performed': performed, 'initialTrackingFieldsPresent': before['trackingFieldsPresent'],
+                'sameSignedBundle': True, 'crdUidStable': True}
+
     def failure_status(self):
         """Read only the owned trial; emit fixed counters/patterns, not object names."""
         try:
@@ -212,6 +264,7 @@ class Observer:
                 B.require(crd.get('kind') == 'CustomResourceDefinition' and
                           crd.get('metadata', {}).get('name') == 'restores.velero.io', 'diagnostic CRD differs')
                 result['crdOwnership'] = crd_owner_facts(crd)
+                result['crdComponentMatchesVelero'] = crd['metadata'].get('labels', {}).get('component') == 'velero'
                 result['crdReleaseMatchesVeleroServer'] = crd['metadata'].get('annotations', {}).get('meta.helm.sh/release-name') == 'velero'
                 result['crdSpecSHA256'] = canonical(crd_spec(crd['spec']))
                 versions = crd['spec']['versions']
@@ -392,10 +445,12 @@ def execute(directory, cli, output):
             guard()
             B.require(B.digest(built[0]) == bundle_pin and B.digest(archives[0]) == baseline_pin,
                       'API deployment input changed')
-            observer.command([cli, 'deploy', built[0], '--packages', 'core-backup-restore', '--confirm',
-                '--retries', '1', '--tmpdir', output / 'tmp', '--uds-cache', output / 'uds-cache',
-                '--no-progress', '--no-log-file'], variant + '-deploy', timeout=1500)
+            observer.deploy_bundle(built[0], bundle_pin, variant + '-deploy')
+            reconciliation = (observer.reconcile_baseline(built[0], bundle_pin, expected['baseline'])
+                              if variant == 'baseline' else None)
             result = observer.observe(variant, expected[variant], binding, provider_sha, baseline)
+            if reconciliation is not None:
+                result['bootstrapReconciliation'] = reconciliation
             result.update(clusterIdentitySHA256=cluster, bundleSHA256=bundle_pin,
                           candidatePackageSHA256=provider['packageSHA256'],
                           officialIndexDigest=BASELINE_DIGEST, officialArchiveSHA256=baseline_pin)
