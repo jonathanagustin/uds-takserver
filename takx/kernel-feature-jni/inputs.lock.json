@@ -64,8 +64,8 @@
     "tests/LayerInboundControls.cpp": "d81d5e5f6fd4a6c7f4dde3973543c65f339e7752c59ee1d19df59980d34f622e",
     "tests/PointerLifetimeControls.cpp": "3bcc6cc5963708f279611aee3d6426ecb945ba9ed4e11de0d0b7489b8faf4fd1",
     "tests/PointerLifetimeControls.java": "b3baf3acf1a15c12110cbc775809c45bfbd531ccb2f62fec6d1cdb9d036bc6bd",
-    "tests/PointerEmptyControls.cpp": "91ba1880907c409cd311d0cd02414be88e327acc90ef325082c9a1c54c5226d9",
-    "tests/PointerEmptyControls.java": "d591b6d6c65a9fd921f27a05e82f069f2a5fc26ace4bd65e6db6e7ff95f2e593"
+    "tests/PointerEmptyControls.cpp": "9d2605a5cabd5b81de7b52d75ce8a4e213523c9d1412d52d66a9a15bf63045eb",
+    "tests/PointerEmptyControls.java": "b7221e4b3a7a677c111096a3e34be69da036953d430b415c3e10713a9c69fcdc"
   },
   "native_builder_integration": false,
   "strict_callback_accepted": false,

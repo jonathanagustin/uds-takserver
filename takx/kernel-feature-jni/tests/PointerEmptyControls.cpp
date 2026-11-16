@@ -1,3 +1,5 @@
+// Copyright 2026 uds-takserver authors
+// SPDX-License-Identifier: GPL-3.0-only
 #include "core/AbstractLayer.h"
 #include "interop/Pointer.h"
 #include "common.h"

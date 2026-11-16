@@ -1,3 +1,5 @@
+// Copyright 2026 uds-takserver authors
+// SPDX-License-Identifier: GPL-3.0-only
 package com.atakmap.map.layer;
 import java.nio.file.*;
 import java.util.*;

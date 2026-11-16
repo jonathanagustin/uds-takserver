@@ -31,7 +31,10 @@ the scoped pipeline receipt is
 The eighteen direct-pointer cases and valid-empty-holder compatibility probe also
 pass on Native17, with zero strict-JNI diagnostics. All four additional Java/probe
 artifacts reproduce byte for byte; that review receipt is
-`d1de8e768c889898e8910f68f01c46bf4070b611adecc30640e6887e5759a5b0`.
+`a263b107e38a75b8b906b2a16e5d1735a30ba20cd22d86ef17901d2fe74419f8`.
+This review includes the final license-header additions to the empty-holder
+probes. Their runtime result remains unchanged; all ten native postimages and
+the native patch bytes still exactly match the complete Native17 rebuild.
 These results qualify the closed ten-file source patch for the tested composition
 and sequential paths. They do not establish full renderer/SDK/client acceptance,
 stock-JDK or hardware rendering, arbitrary concurrent disposal, or portable
