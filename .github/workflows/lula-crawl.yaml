@@ -80,23 +80,7 @@ jobs:
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NPM_CONFIG_USERCONFIG: /dev/null
         shell: bash
-        run: |
-          set -euo pipefail
-          archive="${RUNNER_TEMP}/lula2-0.9.5.tgz"
-          curl --fail --silent --show-error --location --max-time 60 --max-filesize 4194304 \
-            https://registry.npmjs.org/lula2/-/lula2-0.9.5.tgz -o "${archive}"
-          python3 - "${archive}" <<'PY'
-          import importlib.util, pathlib, sys
-          spec = importlib.util.spec_from_file_location("patch", ".github/lula/patch_crawl.py")
-          module = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(module)
-          module.verify_archive(pathlib.Path(sys.argv[1]))
-          PY
-          npm install --ignore-scripts --no-bin-links --no-audit --no-fund \
-            --prefix "${RUNNER_TEMP}/lula-tools" "${archive}"
-          python3 .github/lula/patch_crawl.py --archive "${archive}" \
-            "${RUNNER_TEMP}/lula-tools/node_modules/lula2/dist/index.js" \
-            "${RUNNER_TEMP}/lula-tools/node_modules/lula2/dist/index.safe.mjs"
+        run: bash .github/lula/prepare-runtime.sh
 
       - name: Comment with complete analysis and safe bot-owned replacement
         if: steps.preflight.outputs.ready == 'true'
@@ -108,4 +92,4 @@ jobs:
           export OWNER="${GITHUB_REPOSITORY%%/*}" REPO="${GITHUB_REPOSITORY#*/}"
           LULA_PREFLIGHT_JSON="$(cat "${RUNNER_TEMP}/lula-preflight.json")"
           export LULA_PREFLIGHT_JSON
-          node "${RUNNER_TEMP}/lula-tools/node_modules/lula2/dist/index.safe.mjs" crawl --post-mode=comment
+          node "${RUNNER_TEMP}/lula-tools/crawl.mjs" --post-mode=comment
