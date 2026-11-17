@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "source_commit": "3415a69bfd52d4210d8c7308f51f77d29a358f94",
+  "run_id": "43088282608",
+  "subject_digest": "sha256:0af201d0e28cb089f11497b211c337db084d13b662012c27953ee3dcfa1f0d2c",
+  "input_key": "registry-v2-cbd008864ed102ca31f168f53629540482d70603297626c25d1e1e505cd7ed4b",
+  "capsule_sha256": "86cfa7ac0071b95238828d82dcdb227154434b15f0f9efd5c2edaef6a6b6729d"
+}

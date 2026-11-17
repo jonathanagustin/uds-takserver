@@ -15,6 +15,9 @@ on:
       - .github/container-and-chart/**
       - .github/workflows/container.yaml
       - .github/scripts/merge-image-manifests.sh
+      - .github/scripts/copa-patch.sh
+      - .github/scripts/copa-evidence.py
+      - tests/test_copa_evidence.py
       - .github/actions/attest-images/**
       - .gitmodules
       - upstream/takserver
@@ -27,6 +30,9 @@ on:
       - .github/container-and-chart/**
       - .github/workflows/container.yaml
       - .github/scripts/merge-image-manifests.sh
+      - .github/scripts/copa-patch.sh
+      - .github/scripts/copa-evidence.py
+      - tests/test_copa_evidence.py
       - .github/actions/attest-images/**
       - .gitmodules
       - upstream/takserver
@@ -159,7 +165,17 @@ jobs:
         env:
           IMAGE_TAG: ${{ needs.plan.outputs.tag }}-${{ matrix.arch }}
           PUSHED_REFS: ${{ runner.temp }}/pushed-refs.txt
+          COPA_EVIDENCE_DIR: ${{ runner.temp }}/copa-evidence
         run: ./.github/container-and-chart/docker/build.sh
+
+      - name: Retain only bounded Copa RPM scan evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: copa-rpm-evidence-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/copa-evidence/*.json
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Attest the pushed images
         uses: ./.github/actions/attest-images

@@ -1,0 +1,18 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+# Velero v1.18.4: namespaced filters are allowlists. Preserve all other kinds
+# through the catch-all; specific-kind exclusions take precedence over it.
+version: v1
+namespacedFilterPolicies:
+  - namespaces: [takserver]
+    resourceFilters:
+      - kinds: [configmaps]
+        excludedNames: [istio-ca-crl, istio-ca-root-cert, kube-root-ca.crt]
+      - kinds: ["*"]
+  - namespaces: [cloudtak]
+    resourceFilters:
+      - kinds: [configmaps]
+        excludedNames: [istio-ca-crl, istio-ca-root-cert, kube-root-ca.crt]
+      - kinds: [virtualservices.networking.istio.io]
+        excludedNames: [cloudtak-tenant-cloudtak-map]
+      - kinds: ["*"]

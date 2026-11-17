@@ -117,6 +117,10 @@ check_match ".github/workflows/mutation.yaml" ignore
 check_match ".github/workflows/ui-reel.yaml" ignore
 check_match ".github/workflows/native-cache.yaml" ignore
 check_decide false ".github/workflows/native-cache.yaml"
+check_match ".github/workflows/native-cache-pr.yaml" ignore
+check_decide false ".github/workflows/native-cache-pr.yaml"
+check_decide true $'.github/workflows/native-cache-pr.yaml\ncharts/takserver/values.yaml'
+check_match ".github/workflows/native-cache-pr-extra.yaml" relevant
 check_match ".github/workflows/native-cache-extra.yaml" relevant
 check_decide true $'.github/workflows/native-cache.yaml\ncharts/takserver/values.yaml'
 # Mutation tooling is isolated from the Pepr package used by cluster jobs.

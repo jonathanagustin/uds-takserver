@@ -11,12 +11,14 @@ import json
 import os
 import shutil
 import ssl
+import socket
 import tempfile
 import threading
 from types import SimpleNamespace
 from pathlib import Path
 import subprocess
 import unittest
+import warnings
 from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location("trust_live", Path(__file__).with_name("trust-bundle-live.py"))
@@ -473,6 +475,7 @@ class SsoDiscoveryTLS(unittest.TestCase):
 
             server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
             context.load_cert_chain(server_chain, root / "leaf.key")
             server.socket = context.wrap_socket(server.socket, server_side=True)
             threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -494,6 +497,25 @@ class SsoDiscoveryTLS(unittest.TestCase):
                     return real_exec(code, *args)
 
             try:
+                # Exercise the actual fixture listener, including the version
+                # alert from the server rather than a local no-cipher failure.
+                versions = [ssl.TLSVersion.TLSv1_2]
+                if ssl.HAS_TLSv1_3:
+                    versions.append(ssl.TLSVersion.TLSv1_3)
+                for version in versions:
+                    client = ssl.create_default_context(cafile=str(root / "root.pem"))
+                    client.minimum_version = client.maximum_version = version
+                    with socket.create_connection(("127.0.0.1", server.server_port), timeout=5) as raw:
+                        with client.wrap_socket(raw, server_hostname="localhost") as secure:
+                            self.assertEqual(secure.version(), version.name.replace("_", "."))
+                legacy = ssl.create_default_context(cafile=str(root / "root.pem"))
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", DeprecationWarning)
+                    legacy.minimum_version = legacy.maximum_version = ssl.TLSVersion.TLSv1_1
+                legacy.set_ciphers("DEFAULT:@SECLEVEL=0")
+                with socket.create_connection(("127.0.0.1", server.server_port), timeout=5) as raw:
+                    with self.assertRaisesRegex(ssl.SSLError, "ALERT_PROTOCOL_VERSION"):
+                        legacy.wrap_socket(raw, server_hostname="localhost")
                 kube.exec_sso = fixture_exec
                 root_fp = next(iter(live.fingerprints((root / "root.pem").read_text())))
                 self.assertEqual(kube.signing_status("fixture"), "IN_BUNDLE " + root_fp)
