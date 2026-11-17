@@ -6,6 +6,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 filter="${here}/../.github/scripts/redact-then-filter.sh"
+bounded="${here}/agent-diagnostic-command.py"
 # Agent logs are untrusted. Omit the whole stream on authentication markers,
 # including JSON/header variants, before the existing config-secret redactor.
 redact() {
@@ -13,7 +14,15 @@ redact() {
   [[ "${1}" == all ]] || args=(--tail "${1}")
   python3 -c '
 import re, sys
-text = sys.stdin.read()
+data = sys.stdin.buffer.read(1048577)
+if len(data) > 1048576:
+    print("Omitted oversized agent diagnostic stream (limit=1048576 bytes)")
+    sys.exit(1)
+try:
+    text = data.decode("utf-8", errors="strict")
+except UnicodeError:
+    print("Omitted malformed agent diagnostic stream")
+    sys.exit(1)
 if re.search(r"authorization|bearer|basic|registry[_. -]?(?:auth|password|credential|token|secret)|dockerconfigjson|\bauths?\b|identitytoken|accesstoken|://[^\s/@]+:[^\s/@]+@", text, re.IGNORECASE):
     print("Omitted authentication-bearing agent diagnostic")
 else:
@@ -41,7 +50,7 @@ if [[ "${UPGRADE_AGENT_DIAGNOSTICS_INNER:-}" != 1 ]]; then
   rm -f "${log}"
   exit 0
 fi
-k() { timeout --kill-after=1s 3s uds zarf tools kubectl --request-timeout=2s "$@"; }
+k() { python3 "${bounded}" uds zarf tools kubectl --request-timeout=2s "$@"; }
 safe() { k "$@" 2>&1 | redact 40 || echo 'Omitted unavailable or unsanitizable agent diagnostic'; }
 # K3d nodes are Docker containers (app=k3d). K3s ships crictl configured for
 # its embedded containerd. Prefer CRI where the node exposes that wrapper;
@@ -56,7 +65,7 @@ trap 'rm -rf "${scratch}"' EXIT
 capture() {
   local label="$1" output="$2" code=0
   shift 2
-  timeout --kill-after=1s 3s "$@" >"${output}" 2>"${output}.err" || code=$?
+  python3 "${bounded}" "$@" >"${output}" 2>"${output}.err" || code=$?
   echo "${label}: exit=${code}"
   if (( code != 0 )); then
     cat "${output}" "${output}.err" | redact 8 || echo 'Omitted unsanitizable command error'
@@ -128,7 +137,7 @@ physical_logs() {
     code=0
     # Expansion occurs only inside the selected node, with validated arguments.
     # shellcheck disable=SC2016
-    timeout --kill-after=1s 3s docker exec "${node}" sh -c '
+    python3 "${bounded}" docker exec "${node}" sh -c '
         directory="$1"; file="$2"
         for path in /var /var/log /var/log/pods "/var/log/pods/${directory}" "/var/log/pods/${directory}/server"; do
           [ -d "${path}" ] && [ ! -L "${path}" ] || exit 66
