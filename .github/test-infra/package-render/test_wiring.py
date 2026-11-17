@@ -48,7 +48,7 @@ class WorkflowWiringTests(unittest.TestCase):
             'tests.test_package_values.RenderFailureTests', 'tests.test_trust_bundle',
             'tests.test_expose_annotations', 'tests.test_workload_identities', 'tests.test_filesystem_backup_owner',
             'tests.test_velero_handoff', 'tests.test_velero_clean_completion', 'tests.test_ephemeral_cluster', 'tests.test_velero_transfer',
-            'tests.test_velero_trial', 'tests.test_staged_migrations', 'tests.test_upgrade_agent_watch',
+            'tests.test_velero_trial', 'tests.test_velero_source_provider', 'tests.test_velero_source_bundle', 'tests.test_velero_controller_state', 'tests.test_staged_migrations', 'tests.test_upgrade_agent_watch',
             'tests.test_identity_rollout_driver',
             'tests.test_package_identity_driver', 'tests.test_identity_cleanup_evidence', 'tests.test_identity_phase_evidence', 'tests.test_identity_public_evidence', 'tests.test_identity_configmap_authorities', 'tests.test_identity_retained_state', 'tests.test_identity_pvc_quiescence', 'tests.test_identity_render_inputs', 'tests.test_identity_failure_evidence'}
         modules = set(re.findall(r'tests\.test_[A-Za-z_]+(?:\.[A-Za-z]+)?', safety['run']))

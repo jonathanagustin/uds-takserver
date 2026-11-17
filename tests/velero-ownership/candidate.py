@@ -17,6 +17,7 @@ SPEC = importlib.util.spec_from_file_location('ownership_drive', Path(__file__).
 D = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(D)
 ROOT = Path(__file__).resolve().parents[2]
+C = D.source_provider()
 
 
 def variants(bundle, exemption):
@@ -50,6 +51,7 @@ def main():
     directory = args.directory.resolve()
     if args.operation == 'prepare':
         D.require(not directory.exists(), 'candidate directory already exists')
+        provider = C.receipt() if C.enabled() else None
         source = ROOT / 'bundle/full/uds-bundle.yaml'
         docs = variants(yaml.safe_load(source.read_text()), yaml.safe_load(args.exemption.read_text()))
         directory.mkdir(parents=True, mode=0o700)
@@ -63,24 +65,40 @@ def main():
                     for chart in charts.values():
                         if 'valuesFiles' in chart:
                             chart['valuesFiles'] = [os.path.relpath((source.parent / value).resolve(), dest) for value in chart['valuesFiles']]
+            if provider:
+                for package in doc['packages']:
+                    if package['name'] == 'core-backup-restore':
+                        C.replace_package(package, dest)
             (dest / 'uds-bundle.yaml').write_text(yaml.safe_dump(doc, sort_keys=False))
         (directory / 'uds-config.yaml').write_bytes((ROOT / 'bundle/full/uds-config.yaml').read_bytes())
-        receipt = {'schema': 1, 'sourceSHA': os.environ.get('GITHUB_SHA'),
+        receipt = {'schema': 2 if provider else 1, 'sourceSHA': os.environ.get('GITHUB_SHA'),
                    'files': {str(p.relative_to(directory)): D.digest(p) for p in directory.rglob('*') if p.is_file()},
                    'exemptionSHA256': D.digest(args.exemption)}
+        if provider:
+            receipt['coreSourceProvider'] = provider
         (directory / 'candidate.json').write_text(json.dumps(receipt, indent=2) + '\n')
     else:
         receipt = json.loads((directory / 'candidate.json').read_text())
-        D.require(receipt['schema'] == 1 and receipt['sourceSHA'] == os.environ.get('GITHUB_SHA'), 'candidate source changed')
+        enabled = C.enabled()
+        D.require(receipt['schema'] == (2 if enabled else 1) and receipt['sourceSHA'] == os.environ.get('GITHUB_SHA'), 'candidate source changed')
+        if enabled:
+            D.require(receipt.get('coreSourceProvider') == C.receipt(), 'Core provider binding changed')
+        else:
+            D.require('coreSourceProvider' not in receipt, 'unexpected Core provider binding')
         for relative, digest in receipt['files'].items():
             D.require(D.digest(directory / relative) == digest, 'prepared candidate changed before binding')
         files = {'config': {'path': 'uds-config.yaml', 'sha256': D.digest(directory / 'uds-config.yaml')}}
         for name in ('core', 'detach', 'clean'):
             matches = list((directory / name).glob('uds-bundle-*.tar.zst'))
             D.require(len(matches) == 1, 'exactly one built archive required for ' + name)
+            if enabled:
+                C.verify_bundle(matches[0], receipt['coreSourceProvider'])
             files[name] = {'path': str(matches[0].relative_to(directory)), 'sha256': D.digest(matches[0])}
+        plan = {'schema': 2 if enabled else 1, 'sourceSHA': receipt['sourceSHA'], 'files': files}
+        if enabled:
+            plan['coreSourceProvider'] = receipt['coreSourceProvider']
         with (directory / 'plan.json').open('x') as stream:
-            json.dump({'schema': 1, 'sourceSHA': receipt['sourceSHA'], 'files': files}, stream, indent=2)
+            json.dump(plan, stream, indent=2)
             stream.write('\n')
 
 

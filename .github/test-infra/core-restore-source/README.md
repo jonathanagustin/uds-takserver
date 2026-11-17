@@ -119,3 +119,50 @@ matches. Schema 1 artifacts retain their original source-specific verifier;
 they are not silently upgraded. The `.2` source patch, Core base, license and
 image indexes are unchanged. ARM native build/API acceptance requires successful
 protected ARM runs; source pins and offline tests alone do not establish it.
+
+The optional `run_owner_trial` input (default false) runs the existing native
+fresh/handoff/reversal driver only after the same run's signed build and API
+smoke succeed. The trial job has read-only permissions and consumes exactly the
+six-file provider for its own source, run, attempt and architecture. It verifies
+the pinned native CLI, package signature, transparency log, corresponding source
+and payloads before creating a disposable cluster, then rechecks the captured
+provider hashes before bundle binding, each restore and receipt publication.
+The source-mode schema 2 plan also binds the provider's canonical package manifest
+digest to all three built archives. It checks every OCI blob, the retained
+`uds-bundle.yaml` package path/ref and exact keyless policy, embedded source
+annotations, version and native platform. This inspection repeats when loading
+the plan, restoring reviewed task defaults, and immediately before each bundle
+deployment. A stale, unrelated or weakened-policy archive cannot be labelled as
+the selected source candidate by merely updating its archive hash.
+
+Canonical digest inspection uses the pinned UDS0.41 CLI only after successful
+signature verification. That subcommand does not accept verification flags;
+supported `--log-level=error --no-color` flags suppress its unverified-signature
+warning so bounded merged output contains exactly the digest. A nonzero exit,
+unexpected output or changed log refuses the binding. Digest inspection itself
+is not a signature check. The exact certificate, issuer and transparency-log
+checks remain mandatory in the preceding provider verifier and normal UDS
+bundle creation/deployment.
+
+The provider receipt includes a closed inventory of 26 runtime helper files,
+including policy YAML, controller readback, bundle reader, driver and staged
+receipt helpers. Every receipt compares those bytes to the exact workflow source
+commit with Git replacement and lazy fetching disabled. Source/helper drift
+before deployment, restore or final receipt verification fails closed; the
+constructor's initial helper check is not the final check.
+`tasks.yaml` retains its existing separate strict pin/restoration guard: its
+temporary image-tag transform is validated and restored after archive binding,
+then the driver requires exact reviewed task bytes before deployment. The pin
+script and restoration guard remain in the closed inventory.
+
+Only the experimental bundle copies select this local signed backup/restore
+package. The trial uses `tests/backup-restore-controller-trial.sh`, carrying the
+exact seven-resource restore policy and controller readback from draft #597.
+Ordinary restore tasks and published Core dependencies retain their defaults.
+The private journal and public acceptance receipt bind the provider and restore
+helper hashes. A failed trial or failed receipt validation fails the job; raw
+cluster journals and command logs are not uploaded.
+
+This wiring is not restore or owner-transfer acceptance. Both native trials
+must pass real data/client restore, controller regeneration, fresh ownership,
+handoff and reversal before the draft restore behavior can become ready.

@@ -242,6 +242,51 @@ def successful_step(job, name):
             steps[0].get('conclusion') == 'success', 'execution-or-cleanup-not-successful')
 
 
+def current_run(api, receipt, workflow, head):
+    """Require the signed attempt to remain the latest eligible successful run."""
+    run = api.get(f'actions/runs/{receipt["run"]["id"]}')
+    require(run['id'] == receipt['run']['id'] and run['workflow_id'] == workflow['id'] and run['path'] == WORKFLOW and
+            run['event'] == 'pull_request' and run['head_sha'] == head and
+            run['head_repository']['full_name'] == REPO and run['status'] == 'completed' and
+            run['conclusion'] == 'success' and run['run_attempt'] == receipt['run']['attempt'],
+            'run-identity-attempt-or-result-mismatch')
+    runs = api.pages(f'actions/workflows/{workflow["id"]}/runs?event=pull_request&head_sha={head}',
+                     'workflow_runs')
+    # GitHub clears pull_requests after merge. The signed PR merge ref already
+    # binds the selected run; conservatively consider EVERY same-repo PR run for
+    # this exact workflow/head, including newer failed/queued unassociated rows.
+    applicable = []
+    seen = set()
+    for item in runs:
+        repository = item.get('head_repository')
+        require(type(item.get('id')) is int and item['id'] > 0 and item['id'] not in seen and
+                type(item.get('workflow_id')) is int and item['workflow_id'] == workflow['id'] and
+                item.get('event') == 'pull_request' and item.get('head_sha') == head and
+                type(item.get('run_attempt')) is int and item['run_attempt'] > 0 and
+                isinstance(repository, dict) and type(repository.get('id')) is int and
+                repository['id'] > 0 and isinstance(repository.get('full_name'), str) and
+                re.fullmatch(r'[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}', repository['full_name']) and
+                (repository['full_name'] == REPO) == (repository['id'] == 1427088300),
+                'run-list-identity-missing-contradictory-or-ambiguous')
+        seen.add(item['id'])
+        if repository['full_name'] != REPO:
+            continue  # A positively identified foreign fork is not same-repo evidence.
+        applicable.append(item)
+    require(applicable and max(item['id'] for item in applicable) == run['id'],
+            'not-latest-applicable-run')
+    # IDs order run creation, not subsequent attempts. Do not let an older-ID
+    # rerun or still-active run be masked by a newer-ID green result.
+    require(all(item['id'] == run['id'] or
+                (item['run_attempt'] == 1 and item.get('status') == 'completed')
+                for item in applicable), 'other-applicable-run-unsettled-or-rerun-order-unproven')
+    selected_run = next(item for item in applicable if item['id'] == run['id'])
+    require(selected_run['run_attempt'] == run['run_attempt'] and
+            selected_run.get('status') == run['status'] and
+            selected_run.get('conclusion') == run['conclusion'],
+            'selected-run-list-attempt-or-result-changed')
+    return run
+
+
 def qualify(api, receipt, raw, verified, pr_number, target, policy_ref):
     """Pure read-only policy over injected API/crypto evidence; no skip output exists."""
     validate_receipt(receipt)
@@ -271,46 +316,7 @@ def qualify(api, receipt, raw, verified, pr_number, target, policy_ref):
             require(hashlib.sha256(content).hexdigest() == receipt['workflow']['sha256'],
                     'committed-workflow-hash-mismatch')
     workflow = api.get(f'actions/workflows/{WORKFLOW.rsplit("/", 1)[1]}')
-    run = api.get(f'actions/runs/{receipt["run"]["id"]}')
-    require(run['id'] == receipt['run']['id'] and run['workflow_id'] == workflow['id'] and run['path'] == WORKFLOW and
-            run['event'] == 'pull_request' and run['head_sha'] == pr['head']['sha'] and
-            run['head_repository']['full_name'] == REPO and run['status'] == 'completed' and
-            run['conclusion'] == 'success' and run['run_attempt'] == receipt['run']['attempt'],
-            'run-identity-attempt-or-result-mismatch')
-    runs = api.pages(f'actions/workflows/{workflow["id"]}/runs?event=pull_request&head_sha={pr["head"]["sha"]}',
-                     'workflow_runs')
-    # GitHub clears pull_requests after merge. The signed PR merge ref already
-    # binds the selected run; conservatively consider EVERY same-repo PR run for
-    # this exact workflow/head, including newer failed/queued unassociated rows.
-    applicable = []
-    seen = set()
-    for item in runs:
-        repository = item.get('head_repository')
-        require(type(item.get('id')) is int and item['id'] > 0 and item['id'] not in seen and
-                type(item.get('workflow_id')) is int and item['workflow_id'] == workflow['id'] and
-                item.get('event') == 'pull_request' and item.get('head_sha') == pr['head']['sha'] and
-                type(item.get('run_attempt')) is int and item['run_attempt'] > 0 and
-                isinstance(repository, dict) and type(repository.get('id')) is int and
-                repository['id'] > 0 and isinstance(repository.get('full_name'), str) and
-                re.fullmatch(r'[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}', repository['full_name']) and
-                (repository['full_name'] == REPO) == (repository['id'] == 1427088300),
-                'run-list-identity-missing-contradictory-or-ambiguous')
-        seen.add(item['id'])
-        if repository['full_name'] != REPO:
-            continue  # A positively identified foreign fork is not same-repo evidence.
-        applicable.append(item)
-    require(applicable and max(item['id'] for item in applicable) == run['id'],
-            'not-latest-applicable-run')
-    # IDs order run creation, not subsequent attempts. Do not let an older-ID
-    # rerun or still-active run be masked by a newer-ID green result.
-    require(all(item['id'] == run['id'] or
-                (item['run_attempt'] == 1 and item.get('status') == 'completed')
-                for item in applicable), 'other-applicable-run-unsettled-or-rerun-order-unproven')
-    selected_run = next(item for item in applicable if item['id'] == run['id'])
-    require(selected_run['run_attempt'] == run['run_attempt'] and
-            selected_run.get('status') == run['status'] and
-            selected_run.get('conclusion') == run['conclusion'],
-            'selected-run-list-attempt-or-result-changed')
+    run = current_run(api, receipt, workflow, pr['head']['sha'])
     jobs = api.pages(f'actions/runs/{run["id"]}/attempts/{run["run_attempt"]}/jobs', 'jobs')
     scenario = receipt['scenario']
     offline = scenario['name'] == 'install-airgap'
@@ -330,6 +336,10 @@ def qualify(api, receipt, raw, verified, pr_number, target, policy_ref):
     found = [item for item in artifacts if item.get('name') == artifact_name]
     require(len(found) == 1 and found[0].get('expired') is False, 'artifact-missing-expired-or-ambiguous')
     require(api.artifact(found[0]['id']) == raw, 'artifact-receipt-bytes-mismatch')
+    # Downloads and paginated reads can outlast a rerun request. Recheck both
+    # the selected attempt and all competing runs after authenticating bytes.
+    # This is a point-in-time observation, never an atomic reuse authorization.
+    current_run(api, receipt, workflow, pr['head']['sha'])
     return {'source_run': run['id'], 'attempt': run['run_attempt'], 'job_id': selected[0]['id'],
             'artifact_id': found[0]['id'], 'scenario': scenario['name'],
             'architecture': scenario['architecture'], 'tested_commit': source['sha'],

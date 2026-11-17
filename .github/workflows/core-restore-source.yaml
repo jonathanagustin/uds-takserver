@@ -10,6 +10,11 @@ on:
         type: boolean
         default: false
 
+      run_owner_trial:
+        description: Prove actual restore and owner round-trip with this run's signed candidate (includes API smoke)
+        type: boolean
+        default: false
+
       api_mode:
         description: Upgrade a reconciled baseline or install the candidate once on a fresh cluster
         type: choice
@@ -87,7 +92,7 @@ jobs:
             ${{ runner.temp }}/core-source-build/artifacts/corresponding-source.tar.gz
 
   api-smoke:
-    if: inputs.run_api_smoke && github.repository == 'jonathanagustin/uds-takserver' && github.ref == 'refs/heads/main'
+    if: (inputs.run_api_smoke || inputs.run_owner_trial) && github.repository == 'jonathanagustin/uds-takserver' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-22.04' }}
     timeout-minutes: 125
@@ -163,3 +168,95 @@ jobs:
             ${{ runner.temp }}/core-source-api/public-result.json
             ${{ runner.temp }}/core-source-api/baseline-review.json
             ${{ runner.temp }}/core-source-api/candidate-review.json
+
+  owner-trial:
+    if: inputs.run_owner_trial && github.repository == 'jonathanagustin/uds-takserver' && github.ref == 'refs/heads/main'
+    needs:
+      - build
+      - api-smoke
+    runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-22.04' }}
+    timeout-minutes: 230
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+    env:
+      SCENARIO: velero
+      ARCHITECTURE: ${{ inputs.architecture }}
+      IDENTITY_METHOD: manual
+      FRESH_STRICT: 'false'
+      PASSIVE_WATCH: 'false'
+      FLAVOR: upstream
+      DEV_PACKAGE_WAIT_SECONDS: '0'
+      DEV_PACKAGE_SHA: ${{ github.sha }}
+      GH_TOKEN: ${{ github.token }}
+      CORE_RESTORE_POLICY_CANDIDATE: 'true'
+      CORE_RESTORE_OWNER_TRIAL: 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Install pinned client tools
+        uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c
+        with:
+          install_args: uv helm k3d aqua:defenseunicorns/uds-cli
+          cache: true
+      - name: Download this attempt's signed provider
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: core-restore-source-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.architecture }}
+          path: ${{ runner.temp }}/core-source-provider
+      - name: Select a fresh owner-trial kubeconfig
+        run: |
+          test ! -e "$RUNNER_TEMP/core-owner-kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/core-owner-kubeconfig" >> "$GITHUB_ENV"
+      - name: Expose the pinned embedded Kubernetes client
+        run: |
+          mkdir -p "$RUNNER_TEMP/staged-client-bin"
+          printf '#!/usr/bin/env bash\nexec uds zarf tools kubectl "$@"\n' > "$RUNNER_TEMP/staged-client-bin/kubectl"
+          chmod 755 "$RUNNER_TEMP/staged-client-bin/kubectl"
+          echo "$RUNNER_TEMP/staged-client-bin" >> "$GITHUB_PATH"
+      - name: Refuse a remote daemon before runner or cluster work
+        run: python3 tests/ephemeral-cluster.py bootstrap --context k3d-uds
+      - name: Install Docker Compose
+        uses: docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a
+        with:
+          version: v5.7.0
+      - name: Prepare the disposable runner
+        env:
+          TRIM_SKIP_ABOVE_GB: '60'
+        run: |
+          set -euo pipefail
+          sudo sysctl -w fs.inotify.max_user_instances=1280 fs.inotify.max_user_watches=655360
+          ./.github/scripts/trim-runner.sh
+          ./.github/scripts/add-runner-swap.sh
+          printf '%s\n' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          ./.github/scripts/pin-image-tags.sh
+      - name: Run only the selected staged acceptance
+        id: staged-trial
+        timeout-minutes: 225
+        run: uv run --no-project --with pyyaml==6.0.3 --with zstandard==0.25.0 bash .github/scripts/staged-migrations.sh
+      - name: Publish only allowlisted stage evidence, including failures
+        if: always()
+        timeout-minutes: 2
+        env:
+          TRIAL_ARCH: ${{ inputs.architecture }}
+        run: |
+          uv run --no-project --with pyyaml==6.0.3 --with zstandard==0.25.0 python3 .github/scripts/staged-migrations.py publish \
+            --directory "$RUNNER_TEMP/staged-migrations" \
+            --output "out/staged-public-${TRIAL_ARCH}" --arch "$TRIAL_ARCH"
+      - name: Upload exact-run sanitized acceptance evidence
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: core-owner-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.architecture }}
+          path: out/staged-public-${{ inputs.architecture }}/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Require accepted exact-source owner receipts
+        run: uv run --no-project --with pyyaml==6.0.3 python3 .github/scripts/staged-migrations.py verify --directory "out/staged-public-${ARCHITECTURE}/receipts"
