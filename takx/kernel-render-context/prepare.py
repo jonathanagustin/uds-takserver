@@ -247,6 +247,9 @@ def prepare(args):
     protected = [source, HERE.parent.parent, args.baseline_profile.resolve(), args.texture_profile.resolve(), args.client_profile.resolve()]
     if any(output == p or output.is_relative_to(p) or p.is_relative_to(output) for p in protected):
         raise ValueError('fresh output must be disjoint from all input roots')
+    if any(root.exists() and any(ancestor.exists() and ancestor.samefile(root)
+                                 for ancestor in (output, *output.parents)) for root in protected):
+        raise ValueError('fresh output must be physically disjoint from all input roots')
     if output.exists() or output.is_symlink() or not output.parent.is_dir():
         raise ValueError('new output under an existing parent is required')
     if shutil.disk_usage(output.parent).free < FLOOR+CAP:

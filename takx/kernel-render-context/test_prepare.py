@@ -6,7 +6,9 @@ import contextlib
 import io
 import json
 from pathlib import Path
+import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -16,6 +18,52 @@ SPEC.loader.exec_module(p)
 
 
 class SourceGuards(unittest.TestCase):
+    def source_arguments(self, root, output):
+        source = root/'source'
+        source.mkdir(exist_ok=True)
+        (root/'texture').mkdir(exist_ok=True)
+        return SimpleNamespace(source=source, output=output,
+                               baseline_profile=p.HERE.parent/'kernel-native',
+                               texture_profile=root/'texture',
+                               client_profile=p.HERE.parent/'kernel-client-interop',
+                               git=sys.executable, patch=sys.executable)
+
+    def test_output_case_alias_is_refused_before_mutation_or_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            args = self.source_arguments(root, root/'SOURCE'/'out')
+            alias = root/'SOURCE'
+            if not alias.exists() or not alias.samefile(args.source):
+                self.skipTest('temporary filesystem does not alias source and SOURCE')
+            # Keep the owned source contract real and isolate external profile
+            # checks from this filesystem guard. No source tool may execute.
+            with patch.object(p, 'profile_inputs', return_value=({}, [], b'', b'')), \
+                 patch.object(p.Runner, 'run', side_effect=ValueError('source command intercepted')) as command, \
+                 patch.object(p.subprocess, 'Popen', side_effect=AssertionError('process forbidden')):
+                with self.assertRaisesRegex(ValueError, 'disjoint'):
+                    p.prepare(args)
+                command.assert_not_called()
+            self.assertFalse((args.source/'out').exists())
+
+    def test_output_direct_overlap_and_disjoint_entrypoint_controls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            args = self.source_arguments(root, root/'source'/'out')
+            with patch.object(p, 'profile_inputs', return_value=({}, [], b'', b'')), \
+                 patch.object(p.Runner, 'run', side_effect=ValueError('source command intercepted')) as command, \
+                 patch.object(p.subprocess, 'Popen', side_effect=AssertionError('process forbidden')):
+                with self.assertRaisesRegex(ValueError, 'disjoint'):
+                    p.prepare(args)
+                command.assert_not_called()
+                self.assertFalse(args.output.exists())
+                args.output = root/'disjoint-output'
+                with self.assertRaisesRegex(ValueError, 'source command intercepted'):
+                    p.prepare(args)
+                command.assert_called_once()
+            failure = json.loads((args.output/'first-failure.json').read_text())
+            self.assertTrue(failure['source_only'])
+            self.assertFalse((args.output/'prepared.json').exists())
+
     def test_cpu_control_extracts_one_unchanged_production_class_only(self):
         spec = importlib.util.spec_from_file_location('worker_control', Path(__file__).with_name('worker_retirement_control.py'))
         control = importlib.util.module_from_spec(spec)
