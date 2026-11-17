@@ -666,10 +666,17 @@ class PackageTrial(D.Driver):
             if not namespace.strip():continue
             for kind in kinds:
                 objects=self.get(kind,namespace=ns)['items']
+                if kind=='secrets' and ns in R.APP_RELEASES:
+                    retained=[]
+                    for obj in objects:
+                        if obj['metadata']['name']=='private-registry':
+                            R.preserved_registry(self,obj,self.state.get('preservedRegistrySecrets',[]))
+                        else:retained.append(obj)
+                    objects=retained
                 if kind=='configmaps':
                     retained=[]
                     for obj in objects:
-                        if obj['metadata']['name'] in ('kube-root-ca.crt','istio-ca-root-cert','uds-trust-bundle'):
+                        if obj['metadata']['name'] in ('kube-root-ca.crt','istio-ca-root-cert','istio-ca-crl','uds-trust-bundle'):
                             try:R.preserved_trust(self,obj,self.state['preservedTrustMaps'])
                             except ValueError:
                                 try:self._clean_application_inventory_failure=R.clean_inventory_failure(ns,kind,[obj],'preserved-trust-changed')
@@ -705,6 +712,7 @@ class PackageTrial(D.Driver):
         # Remove only this exact application's installed Zarf package, never a bundle/Core.
         for entry in list(self.state['created']):
             if entry['kind']=='ServiceAccount' and not entry.get('deleted'):self.delete_created(entry['kind'],entry['name'])
+        self.state['preservedRegistrySecrets']=R.capture_registry(self)
         self.state['preservedTrustMaps']=R.capture_trust(self)
         self.state['retainedCleanup']=R.cleanup_snapshot(self,self.state['dataInvariants'])
         setup_hook=R.setup_hook_snapshot(self)

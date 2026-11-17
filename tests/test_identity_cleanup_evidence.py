@@ -156,3 +156,17 @@ class CleanInventoryEvidence(unittest.TestCase):
             self.assertEqual(payload['binding'],trial.state['guard'])
             trial.capture_retained_validation(self.snapshot(),'rollback',kind='cleanup-clean-inventory')
             self.assertEqual(first,path.read_bytes())
+
+    def test_registry_exemption_requires_successful_authority_guard_and_keeps_other_secrets(self):
+        from unittest.mock import patch
+        objects=self.objects(1);objects[0]['metadata']['name']='private-registry'
+        trial=self.trial(objects);trial.state['preservedRegistrySecrets']=[{'bound':'fixture'}]
+        with patch.object(P.R,'preserved_registry',return_value=True) as guard:
+            self.assertEqual(trial.clean_application_state(),{'clean':True})
+            guard.assert_called_once_with(trial,objects[0],trial.state['preservedRegistrySecrets'])
+        with patch.object(P.R,'preserved_registry',side_effect=ValueError('authority changed')):
+            with self.assertRaisesRegex(ValueError,'authority changed'):trial.clean_application_state()
+        objects.extend(self.objects(1))
+        with patch.object(P.R,'preserved_registry',return_value=True):
+            with self.assertRaisesRegex(ValueError,'prevents clean strict install: secrets'):trial.clean_application_state()
+        self.assertEqual(trial._clean_application_inventory_failure['objects'][0]['name'],'remaining-000')

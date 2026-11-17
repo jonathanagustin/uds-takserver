@@ -77,7 +77,8 @@ def validation_fixture(root):
            'cert-account':('metadata','identity-spec','object-fields'),
            'cert-role':('metadata','rbac','object-fields'),'cert-binding':('metadata','rbac','object-fields'),
            'cert-job':('metadata','job-spec','object-fields')}
-    source_names=('pepr/capabilities/workload.ts','pepr/capabilities/cloudtak-admin.ts','pepr/capabilities/takclient-credentials.ts')
+    source_names=('pepr/capabilities/workload.ts','pepr/capabilities/cloudtak-admin.ts','pepr/capabilities/takclient-credentials.ts',
+                  'pepr/capabilities/takclient.ts','pepr/capabilities/takclient-pki.ts','pepr/capabilities/takclient-capability.ts','.github/container-and-chart/docker/Dockerfile','.github/container-and-chart/docker/publish-cert-configmap.sh')
     def sha(value):return AGE.digest(json.dumps(value,sort_keys=True,separators=(',',':')).encode())
     def meta(name):return {'name':name,'namespace':'takserver','annotations':{'helm.sh/hook':'pre-install,pre-upgrade'}}
     objects=[{'apiVersion':'v1','kind':'Secret','metadata':meta('takserver-keystore'),'data':{'KEYSTORE_SOURCE':'PRIVATE_KEYSTORE_SOURCE'}},

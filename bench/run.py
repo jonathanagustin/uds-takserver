@@ -33,7 +33,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from bench.loadlog import parse
-from bench import capacity, jvm_metrics, sustained
+from bench import capacity, jvm_metrics, postgis_study, sustained
 from bench.phases import pod_phases
 from bench.startup import max_generation, max_restarts
 from bench.tester_exit import ANCHOR, bind_tester, reap, kill_group
@@ -154,6 +154,13 @@ def load_config(path):
 
 def selected_configs(paths):
     profile = os.environ.get("BENCH_PROFILE", "all")
+    if profile == postgis_study.PROFILE:
+        if not postgis_study.enabled():
+            raise ValueError('postgis profile requires the explicit synthetic-postgis study')
+        try:
+            return postgis_study.configurations([load_config(path) for path in paths])
+        except RuntimeError as error:
+            raise ValueError(str(error)) from None
     if profile not in ("all", "baseline"):
         raise ValueError("BENCH_PROFILE must be all or baseline")
     configs = [load_config(path) for path in paths]
@@ -499,7 +506,7 @@ def apply_postgres(config, runner=None):
     """Apply bench GUC overrides. Returns true when the server must restart."""
     global _postgres_custom
     settings = config.get("postgres") or {}
-    if not settings and not _postgres_custom:
+    if not settings and not _postgres_custom and (config.get('study') or {}).get('protocol') != postgis_study.PROTOCOL:
         return False
     run = runner or kubectl
     postgres_sql(postgres_statements(settings), run)
@@ -541,6 +548,17 @@ def postgres_cgroup():
     if values['memory.max'] != str(512 * 1024**2):
         raise RuntimeError('PostgreSQL cgroup memory limit differs from 512Mi study constraint')
     return values
+
+
+def postgis_state():
+    """Read only the numeric/public identity and setting acceptance fields."""
+    try:
+        value = json.loads(postgres_sql([postgis_study.READBACK_SQL], kubectl, database='cot'))
+        if not isinstance(value, dict):
+            raise ValueError('invalid state')
+        return value
+    except (ValueError, TypeError, subprocess.SubprocessError):
+        raise RuntimeError('PostgreSQL study database readback unavailable') from None
 
 
 def reset_postgres_counters(runner=None):
@@ -732,13 +750,17 @@ def restore(config, saved, runner=None, wait=True):
         rollout(rollout_items(config, False))
 
 
-def rollout(items):
+def rollout(items, timeout_s=None):
     started = time.monotonic()
     seen = False
     for item in items:
         kubectl("rollout", "restart", item["workload"], "-n", item["namespace"])
         try:
-            kubectl("rollout", "status", item["workload"], "-n", item["namespace"], "--timeout=600s")
+            if timeout_s is None:
+                kubectl("rollout", "status", item["workload"], "-n", item["namespace"], "--timeout=600s")
+            else:
+                kubectl("rollout", "status", item["workload"], "-n", item["namespace"],
+                        f"--timeout={timeout_s}s", timeout=timeout_s + 10)
         except RuntimeError:
             diagnose(item["namespace"], item["workload"])
             raise
@@ -1090,14 +1112,31 @@ def one(config, clients, out_dir, tester, cold, study=False):
     record = blank(arch_name(), config["name"], clients, duration)
     if study:
         record['study'] = config['study']
+    postgis = study and config['study'].get('protocol') == postgis_study.PROTOCOL
     try:
+        if postgis:
+            record['study']['state_before_restart'] = postgis_state()
+            previous = record['study'].get('previous_database_identity')
+            state = record['study']['state_before_restart']
+            if previous is not None:
+                postgis_study.require(previous == [state.get('system_identifier'), state.get('database_oid'), state.get('postmaster_start')],
+                                     'database/postmaster identity changed between sessions')
         postgres_changed = apply_postgres(config)
         apply_config(config)
         if config.get("restart") or postgres_changed:
-            record["time_to_ready"]["warm_s"] = rollout(rollout_items(config, postgres_changed))
+            record["time_to_ready"]["warm_s"] = (rollout(rollout_items(config, postgres_changed), timeout_s=120)
+                                                   if postgis else rollout(rollout_items(config, postgres_changed)))
             record["time_to_ready"]["cold_s"] = cold
         else:
             record["time_to_ready"]["cold_s"] = cold
+        if postgis:
+            state = postgis_state()
+            record['study']['state_after_restart'] = state
+            postgis_study.validate_restart(record['study']['state_before_restart'], state)
+            postgis_study.validate_state(state, record['study']['configuration'])
+            postgis_study.validate_limits(postgres_cgroup())
+            record['study']['database_version_after_restart'] = postgres_version()
+            postgis_study.validate_version(record['study']['database_version_after_restart'])
         fp, fp_errors = footprint()
         record["footprint"] = fp
         record["errors"].extend(fp_errors)
@@ -1135,7 +1174,14 @@ def one(config, clients, out_dir, tester, cold, study=False):
             if phase == 'before':
                 window['before_unix'] = time.time()
                 window['cgroup_before'] = postgres_cgroup()
+                if postgis:
+                    postgis_study.validate_limits(window['cgroup_before'])
+                    record['study']['state_before'] = postgis_state()
+                    postgis_study.validate_state(record['study']['state_before'], record['study']['configuration'],
+                                                 record['study']['state_after_restart'])
                 window['database_version'] = postgres_version()
+                if postgis:
+                    postgis_study.validate_version(window['database_version'])
                 window['database_before_started_unix'] = time.time()
                 window['postgres_before'] = read_postgres([])
                 window['database_before_finished_unix'] = time.time()
@@ -1154,6 +1200,11 @@ def one(config, clients, out_dir, tester, cold, study=False):
                 window['postgres_after'] = read_postgres(pg_rss)
                 window['database_after_finished_unix'] = time.time()
                 window['cgroup_after'] = postgres_cgroup()
+                if postgis:
+                    postgis_study.validate_limits(window['cgroup_after'])
+                    record['study']['state_after'] = postgis_state()
+                    postgis_study.validate_state(record['study']['state_after'], record['study']['configuration'],
+                                                 record['study']['state_after_restart'])
                 stop.set()
                 thread.join(timeout=10)
                 window['capacity_after'] = capacity_inventory(capacity_errors)
@@ -1224,6 +1275,49 @@ def one(config, clients, out_dir, tester, cold, study=False):
     return record
 
 
+def run_postgis_study(configs, out_dir, tester, cold, proof, verify):
+    """Nine explicit, source-bound sessions; supported baseline loop stays unchanged."""
+    expected = os.environ.get('BENCH_NATIVE_ARCH')
+    postgis_study.require(expected in ('amd64', 'arm64') and arch_name() == expected,
+                         'native runner architecture differs from the matrix')
+    for name in postgis_study.POINTS:
+        for repeat in (1, 2, 3):
+            postgis_study.require(not (out_dir / arch_name() / f'{name}-r{repeat}.json').exists(),
+                                 'refusing to overwrite a retained session record')
+    cached_images = None
+    records = []
+    previous_state = None
+    previous_runtime = None
+    for original, repeat, _position in postgis_study.plan(configs):
+        postgis_study.require(verify() == proof, 'owned ephemeral cluster proof changed')
+        name = original['name']
+        original = {**original, 'duration_s': sustained.DURATION}
+        provenance = sustained.provenance(original, git_sha(), tester)
+        provenance.update(protocol=postgis_study.PROTOCOL, **postgis_study.identity(name, repeat),
+                          ephemeral_proof=dict(proof),
+                          runner={'machine': platform.machine(), 'kernel': platform.release(), 'logical_cpus': os.cpu_count()})
+        if previous_state is not None:
+            provenance['previous_database_identity'] = [previous_state['system_identifier'], previous_state['database_oid'],
+                                                        previous_state['postmaster_start']]
+        config = {**original, 'name': f'{name}-r{repeat}', 'cached_images': cached_images, 'study': provenance}
+        record = one(config, 50, out_dir, tester, cold, study=True)
+        cached_images = record.get('images')
+        if not record['errors'] and postgis_study.record_identity(record) is None:
+            record['errors'].append('PostgreSQL study: session evidence identity is incomplete or invalid')
+            write_record(record, out_dir)
+        if not record['errors'] and previous_runtime is not None and postgis_study.runtime_identity(record) != previous_runtime:
+            record['errors'].append('PostgreSQL study: loaded images, memory limits or application incarnations changed between sessions')
+            write_record(record, out_dir)
+        if record['errors']:
+            print(f"{config['name']}: comparison stopped at invalid session {provenance['session']}", file=sys.stderr)
+            return 1
+        previous_state = record['study']['state_after']
+        previous_runtime = postgis_study.runtime_identity(record)
+        records.append(record)
+    postgis_study.require(postgis_study.complete(records), 'comparison block is not complete')
+    return 0
+
+
 def main(argv):
     config_dir = ROOT / "bench" / "configs"
     out_dir = ROOT / "bench" / "out"
@@ -1248,6 +1342,9 @@ def main(argv):
             return subprocess.run(argv, check=True, capture_output=True, text=True, timeout=15).stdout
         proof = ephemeral.verify('k3d-uds', guarded_command)
     cold, cold_errors = ready_age()
+    if postgis_study.enabled():
+        return run_postgis_study(configs, out_dir, tester, cold, proof,
+                                 lambda: ephemeral.verify('k3d-uds', guarded_command))
     failed = False
     cached_images = None
     for original in configs:

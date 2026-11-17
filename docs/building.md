@@ -38,6 +38,17 @@ The runtime stages use UBI9 OpenJDK 17, also pinned by the manifest-list digest,
 
 When Copa was added (#212), Trivy 0.76.1 reported 17 fixable OS vulnerabilities (1 critical, 7 high) in the base of that time, `1.24-3.1791779556`, and Copa 0.15.0 cleared all 17. The TAK image adds more packages, so [`.github/scripts/copa-patch.sh`](../.github/scripts/copa-patch.sh) runs after a single-architecture build and replaces the tag with the patched image before the push. A multi-arch push does not load an image Copa can patch. CI builds one architecture per runner. The PostGIS image is built here from the official `postgres` image and goes through the same Copa step (#222). NATS stays on its upstream tags, and this repository does not publish a patched copy of it.
 
+The Container workflow retains `copa-rpm-evidence-<arch>-<run>-<attempt>` even
+when patching fails. These bounded JSON files contain the scan report hash,
+image ID, native architecture, source/run binding, OS family/version and only
+the vulnerability IDs and installed/fixed versions for `krb5-libs`, `libpcap`,
+`rpm` and `rpm-libs` (see #625). Raw reports, image tags, descriptions and
+repository credentials are not retained. Local callers can opt in with
+`COPA_EVIDENCE_DIR` pointing to an output directory. Diagnostic failure does not
+change the patch result or scan policy. These scan observations do not establish
+package-manager candidates, repository publication state or a successful patch.
+
+
 The builder stays on Java 17. TAK Server 5.7-RELEASE-14, commit `5187abd46d827d37cfc5708805eced197a837e49`, is still the newest public tag. Its Gradle wrapper is 8.10.2, and that Gradle cannot run on Java 25: Groovy stops in the build script with `Unsupported class file major version 69`. TAK 5.7 targets Java 17, and the runtime image is OpenJDK 17, so `mise.toml` pins Temurin 17 as well. Moving the builder means a newer upstream wrapper, or a wrapper bump in this repository that still emits Java 17 bytecode and passes the install and upgrade tests.
 
 The six tags match `zarf.yaml`:

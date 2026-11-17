@@ -30,6 +30,8 @@ PEPR = (UUID, UUID + '-watcher')
 NS = 'takserver'
 CONTEXT = 'k3d-uds'
 PHASES = ('shared', 'transition', 'strict', 'rollback')
+IDENTITY_JOURNAL_LIMIT = 16 * 1024 * 1024
+IDENTITY_JOURNAL_STAGES = 4096
 ROLE_NAMES = {'takserver-workload-discovery', 'takserver-config-ignite-log'}
 RBAC = {('ServiceAccount', app) for app in APPS} | {('Role', name) for name in ROLE_NAMES} | {
     ('RoleBinding', app + '-discovery') for app in APPS} | {('RoleBinding', 'takserver-config-ignite-log')}
@@ -359,7 +361,10 @@ class Driver:
     def journal(self, stage, **receipt):
         self.state['stages'].append({'stage': stage, **receipt})
         temporary = self.evidence.with_suffix('.tmp')
-        temporary.write_text(json.dumps(self.state, indent=2, sort_keys=True) + '\n')
+        require(len(self.state['stages']) <= IDENTITY_JOURNAL_STAGES, 'identity journal stage bound exceeded')
+        data = (json.dumps(self.state, indent=2, sort_keys=True) + '\n').encode('utf-8')
+        require(len(data) <= IDENTITY_JOURNAL_LIMIT, 'identity journal byte bound exceeded')
+        temporary.write_bytes(data)
         temporary.chmod(0o600)
         temporary.replace(self.evidence)
         fields=('stage','phase','operation','namespace','exitStatus','stderrPresent','protocol','controlRole','outerExit','stdoutCategory','diagnostic','role','timedOut','category','change','stdoutPresent','hook','fieldClass','check')

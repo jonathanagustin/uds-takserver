@@ -1,0 +1,64 @@
+{
+  "candidate_version": "1.16.0-restore-policy.2",
+  "common_after_sha256": "78954bdb4ffa39ef2b0e96245a02dc936adf918e715943d0f18b414e11055893",
+  "core_commit": "fd9769cd9e791d9b6ad86251af0f4899992a9ae5",
+  "core_license_sha256": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
+  "crd_after_sha256": "eb650958cfba9a0e1e951ecde2e4436062e58d80afc86db50aef48262a95fb43",
+  "patch_sha256": "61fe679b53e58e35ea77f0ef85416b3f05fb0220ca90452c0a22167a75fcdf77",
+  "platforms": {
+    "amd64": {
+      "cli_sha256": "31cd710a3f1154f81767a5268f2c887d9e33fe10b81e45ee4183c810dd5ad308",
+      "image_manifest_sha256": [
+        "7f4298192ac4482d233fe62dd56d0a807606687724e8c1a549886508e5e2c346",
+        "87f95cccca5d4149e28ba44ffe1bd35ac298d9fc09aaccf9a02a4d432aeb89d9",
+        "e6a64c9f44ed17f426cb888cf651ea2f5e66927c6278d92ef3d7d29022897be5"
+      ]
+    },
+    "arm64": {
+      "cli_sha256": "fc0bcf3ea0a512a5fcb158547ae6c388cde0759152dca41eb200c6dbca9b93d3",
+      "image_manifest_sha256": [
+        "70edc40da1926e674741fd48d2947b638200ea49b930a87c78e8b16bb47ac8f4",
+        "74bc6b9ac4b8ac3de30c4630b9c272d6d2ce7594f0f306cab8a71bec1ad9e966",
+        "858b3a0ac3d5bc4cf3390495d154a6c3d00ae6a30ace2e2394a2e47d26254e7a"
+      ]
+    }
+  },
+  "schema": 2,
+  "source_files": {
+    "LICENSE.md": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
+    "packages/backup-restore/README.md": "0940c3f081dede2c45583df2942835f2b5d08462cceba49fed5daa7c32c9fc7b",
+    "packages/backup-restore/tasks.yaml": "dd14999a605a34253b717c53d1e263c99a5651df84bd178f749959058ee4e289",
+    "packages/backup-restore/zarf-values.schema.json": "97c76675bc6872c3aa0f4c5b95bafda53f739861513800d7931102274eaa3194",
+    "packages/backup-restore/zarf-values.yaml": "da62bbeabffc08fc9b00fc4163954fae8391fc4b9173b857fd6d9ab010f0926e",
+    "packages/backup-restore/zarf.yaml": "b13cb1d8ddf6817b97e659da5baf7801e051549b993fb4da44764ed0287fa5c8",
+    "src/velero/README.md": "ed46cd0af9760da63d6c198851e25f0c65188681bba2f60d37a7131a59b29702",
+    "src/velero/chart/.helmignore": "bb987e6a8ef45a99255d1d632812482d5f0f3255ea841520b4d90342df5fe2b3",
+    "src/velero/chart/Chart.yaml": "30930590923b890bda5b7de3a5c8617717bcce3bfd48254632c5ef1486c33ae8",
+    "src/velero/chart/templates/_helpers.tpl": "091faec432cb69d4217b2ace97b9dcd87e65afa5341f5db2d7730c53112503dd",
+    "src/velero/chart/templates/crds/backuprepositories.yaml": "201e2f954e71158dcb97d571b3072ecf9141a371bc51f19049e4f70aae0c09c9",
+    "src/velero/chart/templates/crds/backups.yaml": "f4db375044a1e493780e97a3fb94df78661468637282a868e9e9e2e159a6f1b8",
+    "src/velero/chart/templates/crds/backupstoragelocations.yaml": "7deca1011fe7fed8cfb03330e0548fcae7c55e6532cac6f2116f58879317c36c",
+    "src/velero/chart/templates/crds/datadownloads.yaml": "65393f90f5b3601a539bf724ede431dc97040b08a4cea5ea0b925cef2b039199",
+    "src/velero/chart/templates/crds/datauploads.yaml": "bde4e7ed55d14a1db946d4ed6dfaf9ea4272f9dc90c20d2899327ac3cea126ea",
+    "src/velero/chart/templates/crds/deletebackuprequests.yaml": "0776b5ec4a92f9aa07f6f75bd75b40132b805d8c9cc1248e2e5a494b1945302d",
+    "src/velero/chart/templates/crds/downloadrequests.yaml": "10096acd55c66f90466211f32c2a464d9871c4b4e20d21d29a6ec997cfd0b019",
+    "src/velero/chart/templates/crds/podvolumebackups.yaml": "ae8dc8471b0c3876dda508d8337804cd49f8aa08675d085a198ab0ddedf22862",
+    "src/velero/chart/templates/crds/podvolumerestores.yaml": "017dea376cc1047e992037bbb0f6dfe4f2a4040418aa3b21689da6ba5a98f6f5",
+    "src/velero/chart/templates/crds/restores.yaml": "689e35b8dad98292373f48218746098a3bcdb4b134a4a4b87195785012c1575c",
+    "src/velero/chart/templates/crds/schedules.yaml": "8b0c60016c1edf3d0fba6bfcb8b505ce42a8e196b984c5350db67155896abd3e",
+    "src/velero/chart/templates/crds/serverstatusrequests.yaml": "a3435beaeeaf410e9450485afe0e490394cdec7013f769f6728ad4a4900dc5b2",
+    "src/velero/chart/templates/crds/volumesnapshotlocations.yaml": "1228784eb6fa0222afae5f4f869b7e1d1f37853305d980d39c51b2992f3ccd00",
+    "src/velero/chart/templates/uds-package.yaml": "6e814d1b083f0dd854c35a9df4b8eede590c872b8a08d7a7314622a0c9ed0d63",
+    "src/velero/chart/templates/uptime-recording-rules.yaml": "c3655e47094a4c997f684c33b55dc8173393bdfee2939e7a09cfdbc7859cb986",
+    "src/velero/chart/values.yaml": "d2bf07a39dc994eeb320dd605da26b140c88ec4ce95d8b1c58d998c96a7e250d",
+    "src/velero/common/zarf.yaml": "22632122c8c03212fad4b26f7737fe82051adc48c633b84153c036211c358af8",
+    "src/velero/tasks.yaml": "3f493e255c48bc536b9e8d8b78017119f7dc341adc48461b1e45b408cd35d7c4",
+    "src/velero/values/registry1-values.yaml": "7f990b19ec080ae8967a0a5c2cbbe71d6c6a20348b55f815ea2aa5346a975934",
+    "src/velero/values/unicorn-values.yaml": "f840b3dab0095c9be361af623f153ac2a658cbfb66ddd7c5d126a2619ac9005e",
+    "src/velero/values/upstream-values.yaml": "abbcc4b049a58657c47036fb79e7537cdeab046dee0f1adc42f59f84355e4991",
+    "src/velero/values/values.yaml": "492018cfaaab198615fba8d448a2a87d568eb18658dac3a4642bdd70ef6aa9a9",
+    "src/velero/zarf-values.yaml": "55e197c257a4242e650488fa5cce47f9b87925751887d30cf3fe4bf08839acfe",
+    "src/velero/zarf.yaml": "b9067cd5ae2f488f5fa013881fe2725fbfc60960f586eea7c034cbd1a591615f"
+  },
+  "tasks_after_sha256": "808cfa68d4a426c40561203a4e98b4cd601bb5b25e745cd10fcc3ef5ab72aeac"
+}

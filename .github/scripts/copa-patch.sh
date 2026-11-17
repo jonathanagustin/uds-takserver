@@ -183,10 +183,25 @@ apply_patch() {
   docker rmi "${dst}" >/dev/null
 }
 
+# Optional fixed-field evidence; a diagnostic failure never hides a patch failure.
+retain_evidence() {
+  if [[ -z "${COPA_EVIDENCE_DIR:-}" ]]; then
+    return 0
+  fi
+  local image_id
+  image_id="$(docker image inspect --format '{{.Id}}' "$1")" || return
+  python3 "$(dirname "${BASH_SOURCE[0]}")/copa-evidence.py" \
+    --report "$2" --directory "${COPA_EVIDENCE_DIR}" \
+    --architecture "${copa_arch}" --image-id "${image_id}"
+}
+
 for image in "$@"; do
   docker image inspect "${image}" >/dev/null
   before_report="${work}/reports/before.json"
   scan "${image}" "${before_report}"
+  if ! retain_evidence "${image}" "${before_report}"; then
+    echo "copa scan evidence could not be retained" >&2
+  fi
   before="$(count_fixable "${before_report}")"
   echo "${image}: ${before} fixable OS vulnerabilities"
   if [[ "${before}" -eq 0 ]]; then
