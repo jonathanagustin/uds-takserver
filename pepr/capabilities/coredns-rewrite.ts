@@ -79,13 +79,16 @@ export async function reconcileCoreDns(cluster: Cluster, env: CoreDnsEnv): Promi
   if (!configMap) {
     return;
   }
-  if (env.inClusterDns !== "true") {
-    // Disabling must also undo an earlier enabled installation. Remove only
-    // our key; Core and other applications share this ConfigMap.
+  const disabling = env.inClusterDns !== "true";
+  if (disabling) {
+    // Keep an empty owned key until rollout succeeds. If restart fails, the
+    // next reconciliation can still discover and finish the pending cleanup.
     if (!Object.prototype.hasOwnProperty.call(configMap.data ?? {}, OVERRIDE_KEY)) {
       return;
     }
-    await cluster.removeConfigMapKey(COREDNS_NAMESPACE, COREDNS_CONFIGMAP, OVERRIDE_KEY);
+    if (configMap.data![OVERRIDE_KEY] !== "") {
+      await cluster.patchConfigMapKey(COREDNS_NAMESPACE, COREDNS_CONFIGMAP, OVERRIDE_KEY, "", true);
+    }
   } else {
     if (!env.domain) {
       throw new Error("DOMAIN is not set");
@@ -113,6 +116,9 @@ export async function reconcileCoreDns(cluster: Cluster, env: CoreDnsEnv): Promi
   const hasAnnotations = deployment.spec?.template?.metadata?.annotations !== undefined;
   await cluster.restartDeployment(COREDNS_NAMESPACE, COREDNS_DEPLOYMENT, hasAnnotations);
   await waitRollout(cluster, COREDNS_NAMESPACE, COREDNS_DEPLOYMENT);
+  if (disabling) {
+    await cluster.removeConfigMapKey(COREDNS_NAMESPACE, COREDNS_CONFIGMAP, OVERRIDE_KEY);
+  }
 }
 
 export function rolloutDone(deploy: DeploymentDoc | undefined): boolean {

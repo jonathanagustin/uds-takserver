@@ -146,6 +146,23 @@ test("enabling then disabling removes only our rules and reloads once per change
   assert.equal(recorded.restarted.length, 2);
 });
 
+test("failed disable restart retains an empty owned key for a later retry", async () => {
+  const configMap = { data: { [OVERRIDE_KEY]: rules(), "uds.override": "keep" } };
+  const { cluster: fake, recorded } = cluster({ configMap, deployment: {} });
+  const restart = fake.restartDeployment;
+  fake.restartDeployment = async () => { throw new Error("restart unavailable"); };
+  await assert.rejects(reconcileCoreDns(fake, env({ inClusterDns: "false" })), /restart unavailable/);
+  assert.equal(configMap.data[OVERRIDE_KEY], "");
+  assert.deepEqual(recorded.removed, []);
+  fake.restartDeployment = restart;
+  await reconcileCoreDns(fake, env({ inClusterDns: "false" }));
+  assert.deepEqual(configMap.data, { "uds.override": "keep" });
+  assert.deepEqual(recorded.removed, [OVERRIDE_KEY]);
+  assert.equal(recorded.restarted.length, 1);
+  await reconcileCoreDns(fake, env({ inClusterDns: "false" }));
+  assert.equal(recorded.restarted.length, 1);
+});
+
 test("disabling removes even an empty owned override", async () => {
   const { cluster: fake, recorded } = cluster({
     configMap: { data: { [OVERRIDE_KEY]: "" } }, deployment: {},
