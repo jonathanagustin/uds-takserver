@@ -66,20 +66,29 @@ for rec in sys.stdin.buffer.read().split(b"\0"):
 '
 }
 
-key() {
-  local sum
-  sum="$(
-    {
-      printf 'salt=%s\n' "${KEY_SALT:-}"
-      printf 'arch=%s flavor=%s\n' "${arch}" "${flavor}"
-      printf 'uds=%s\n' "$(uds version 2>/dev/null || true)"
-      inputs | while IFS= read -r line; do
-        case "${line}" in
-          gitlink\ *) echo "${line}" ;;
-          'file .gitmodules')
-            # TAKX is opt-in and absent from the default package. Preserve all
-            # existing module metadata while ignoring only its own section.
-            python3 -c '
+# macOS ships Bash 3.2 and shasum; Linux normally supplies sha256sum.
+hash() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$@"
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$@"
+  else
+    echo "dev-package: SHA-256 tool unavailable" >&2
+    return 127
+  fi
+}
+
+key_material() {
+  printf 'salt=%s\n' "${KEY_SALT:-}"
+  printf 'arch=%s flavor=%s\n' "${arch}" "${flavor}"
+  printf 'uds=%s\n' "$(uds version 2>/dev/null || true)"
+  inputs | while IFS= read -r line; do
+    case "${line}" in
+      gitlink\ *) echo "${line}" ;;
+      'file .gitmodules')
+        # TAKX is opt-in and absent from the default package. Preserve all
+        # existing module metadata while ignoring only its own section.
+        python3 -c '
 import hashlib, pathlib, re
 lines = pathlib.Path(".gitmodules").read_bytes().splitlines(keepends=True)
 kept, skip = [], False
@@ -89,19 +98,25 @@ for line in lines:
     if not skip:
         kept.append(line)
 print(hashlib.sha256(b"".join(kept)).hexdigest() + "  .gitmodules")
-'
-            ;;
-          file\ *) sha256sum -- "${line#file }" ;;
-          *) echo "dev-package: unexpected input line ${line}" >&2; exit 1 ;;
-        esac
-      done
-    } | sha256sum
-  )"
+' || return
+        ;;
+      file\ *) hash -- "${line#file }" || return ;;
+      *) echo "dev-package: unexpected input line ${line}" >&2; exit 1 ;;
+    esac
+  done
+}
+
+key() {
+  local sum
+  # Explicitly propagate failures even when a caller captures our output.
+  sum="$(key_material | hash)" || return
   echo "${arch}-${sum:0:16}"
 }
 
 ref() {
-  echo "${repo}/takserver:$(key)"
+  local value
+  value="$(key)" || return
+  echo "${repo}/takserver:${value}"
 }
 
 exists() {
@@ -125,7 +140,7 @@ package_run_done() {
     | python3 -c 'import json,sys; r=json.load(sys.stdin).get("workflow_runs") or []; print(r[0]["status"] if r else "none")' 2>/dev/null)" || return 1
   if [[ "${status}" == "completed" ]]; then
     # One more look: it may have published just before finishing.
-    exists "$(ref)" && return 1
+    exists "$1" && return 1
     echo "dev-package: the Package run for ${DEV_PACKAGE_SHA} finished without this tag" >&2
     return 0
   fi
@@ -138,9 +153,9 @@ prebuilt() {
     return
   fi
   local r waited=0 wait="${DEV_PACKAGE_WAIT_SECONDS:-0}"
-  r="$(ref)"
+  r="$(ref)" || return
   until exists "${r}"; do
-    if (( waited >= wait )) || package_run_done; then
+    if (( waited >= wait )) || package_run_done "${r}"; then
       echo "dev-package: ${r} not published; creating the package here" >&2
       echo false
       return
@@ -159,14 +174,15 @@ prebuilt() {
 }
 
 publish() {
-  local r
-  r="$(ref)"
+  local r value
+  value="$(key)" || return
+  r="${repo}/takserver:${value}"
   if exists "${r}"; then
     echo "dev-package: ${r} exists; not publishing"
     return
   fi
   [[ -f "${file}" ]] || { echo "dev-package: ${file} missing" >&2; exit 1; }
-  python3 "${root}/.github/scripts/publish-dev-package.py" "${file}" "oci://${repo}" "$(key)"
+  python3 "${root}/.github/scripts/publish-dev-package.py" "${file}" "oci://${repo}" "${value}"
   echo "dev-package: published ${r}"
 }
 

@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "type": "vehicle-metadata-library-qualification",
+  "artifact": {
+    "classes": {
+      "gov/tak/api/cot/detail/VehicleModelDetailHandler$Interop.class": "e94a4b0a552be9886ba24bb873adc81678131bd75483bf387bae2d6f6ef92862",
+      "gov/tak/api/cot/detail/VehicleModelDetailHandler.class": "fed59cf6fdcbe9e1ece0a2c925ae4a195fcaf89b1815de6e136fde587b75c923"
+    },
+    "file": "vehicle-metadata.jar",
+    "sha256": "2d6a429b71e8ca0cc1a58d15d7581f3829a4c43847710647c3ae9e9012ce9d6b",
+    "sourceSHA256": "21117bbaf6fe3a30c46a0e1ce6539ccb468acb400a25efdff44fcf035002119b"
+  },
+  "buildReceiptSHA256": [
+    "08f836212b270a96298079b942ee67b2ba3bc5a5acbc76ca2b69ee43bd742505",
+    "f690c62134d436c2b5ba1876aa8334e456eac1c6a95dce7c1c8434d02f9b634d"
+  ],
+  "javaCompositionReceiptSHA256": "5d00f4bfb02bf3683e460b1770fd20146cf2ea63c051d17c1274677a30f99b05",
+  "javaCompositionSources": 1239,
+  "javaCompositionClasses": 2702,
+  "artifactByteIdenticalAcrossTwoBuilds": true,
+  "apiClassesLoadedFromPackagedJar": 2,
+  "cotControlsPerBuild": 34,
+  "strictJniDiagnostics": 0,
+  "callerCompatibility": {
+    "receiptSHA256": "addf88172c4138a6a43c0342767cc739d91fda5fed361138384b85bd196da385",
+    "freshPlatformSourceCount": 1815,
+    "callerSourceCount": 3,
+    "callerRevision": "af54a3e1fe8796b6e109e2e5925dbef524ea7e31",
+    "reusedInputs": "pinned public Java composition, dependency JARs and three previously generated source templates; all platform classes freshly compiled"
+  },
+  "sourceFilesSHA256": {
+    "build.py": "e2ac7c76c7d3af40a0c1ddfb3f3665436be94071f2cadade835bead616b3912c",
+    "inputs.lock.json": "7c5774670d6590e59d046dc46f4e1739146983b6d1a754c97a1de20788920a52",
+    "java/gov/tak/api/cot/detail/VehicleModelDetailHandler.java": "21117bbaf6fe3a30c46a0e1ce6539ccb468acb400a25efdff44fcf035002119b",
+    "tests/VehicleArtifactControls.java": "ba4ad1508e0f39f5289e50339287f0110c403fe494616da3f5eb44244b460653",
+    "tests/VehicleModelControls.java": "db9f15e922dd1d8648141687bddc83db94a4d43cd62065d374c024da3e46cc63"
+  },
+  "scope": "Public vehicle CoT metadata API JAR on JDK17; no meshes, complete5.8Platform/Client, or privateSDK equivalence."
+}

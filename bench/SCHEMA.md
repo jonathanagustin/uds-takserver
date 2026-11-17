@@ -254,6 +254,24 @@ input hashes are supplied bindings, not independent run or checkout attestations
 Kubelet image inventories may be truncated and do not establish page-cache state.
 See the [startup-only procedure](../docs/benchmarks.md#collect-one-startup-pair-without-load).
 
+## Opt-in counterbalanced PostgreSQL comparison
+
+The separate manual `synthetic-postgis` mode reuses the sustained client's
+50-client/300-second warmup/1200-second measurement contract, with its own
+`synthetic-postgis-v1` protocol identifier. See the
+[counterbalanced PostgreSQL procedure](../docs/benchmarks.md#collect-an-exploratory-postgresql-comparison).
+Its records add `study.configuration`, `repeat`, `order_position` and `session`,
+the checked `ephemeral_proof`, and `state_before_restart`,
+`state_after_restart`, `state_before` and `state_after`. State includes the
+database system identifier/OID/size, postmaster start and normalized GUC and
+durability readbacks. Configuration identities are not pooled: this mode
+selects exactly three existing configurations, with three distinct sessions
+each. Report validation requires one complete nine-session architecture block
+with matching source/tester/configuration and disposable-cluster identities.
+Database contents and filesystem caches remain shared, with rotated order and
+a PostgreSQL restart per session. Adding the protocol is not measured tuning,
+capacity or architecture evidence.
+
 ## Opt-in sustained synthetic baseline
 
 The manual Benchmark input `study=synthetic-baseline` selects baseline only,

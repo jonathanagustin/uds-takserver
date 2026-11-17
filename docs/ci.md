@@ -13,14 +13,27 @@ Docs, device, benchmark, demo, unit-test-only, and repository metadata changes s
 | Test | `test.yaml` | pull requests and pushes to `main` that change a relevant path ([`runtime-paths.sh`](../.github/scripts/runtime-paths.sh)) | Builds the CloudTAK and PostGIS images when their inputs changed, waits for the six TAK images, then runs the install test and the upgrade test from the last release, each on amd64 and arm64. On pushes to `main`, and on pull requests with the `upgrade-pg15` label, it also runs the upgrade from release 0.6.0 (PostgreSQL 15) on both architectures. `verify-test` reports the result. A superseded run skips `verify-test` instead of failing it |
 | Unit tests | `unit-tests.yaml` | every pull request, and pushes to `main` | Pepr module tests and the Python upgrade helper tests, with coverage in the job summary. Also the Loki query helper, CoreConfig cache listener, profile, benchmark harness, and Full Core summary tests, and the package values render. See [Coverage](../CONTRIBUTING.md#coverage) |
 | Package | `package.yaml` | the same relevant paths as Test, pushes of those paths to `main`, and by hand | Waits for the images, then creates the dev package on amd64 and arm64, checks its architecture, and publishes it as `ghcr.io/jonathanagustin/uds-takserver/ci-packages/takserver:<arch>-<key>`. See [Package reuse](#package-reuse) |
-| Scan | `scan.yaml` | pull requests that change the package, charts, values, bundle, image builds, or submodules | Compares image scans with `uds-pk scan compare` and posts the result as a pull request comment |
+| Scan | `scan.yaml` | pull requests that change the package, charts, values, bundle, image builds, or submodules | Compares image scans with `uds-pk scan compare`, retains the complete comparison as an artifact, and comments on same-repository pull requests |
 | CodeQL | `codeql.yaml` | every pull request, pushes to `main`, and Mondays at 06:00 | CodeQL code scanning |
 | Dependency Review | `dependency-review.yaml` | every pull request | GitHub dependency review of the changed dependencies |
 | Docs | `docs.yaml` | changes to `docs-site/`, `docs/`, `adr/`, `README.md`, `SECURITY.md`, `CONTRIBUTING.md`, or `CHANGELOG.md` | Builds the docs site and runs its browser tests. A broken internal link fails the build. On `main` it also deploys the site to GitHub Pages |
 
 A pull request whose files are all on that ignore list skips Test and Package. One relevant file still runs them, on amd64 and arm64. Full Core decides in its own `changes` job and skips the deploy when the diff does not need it. The checks that `main` requires still report on every pull request: `hk`, both CodeQL `Analyze` jobs, and `dependency-review`. Those workflows have no path filter. Lint, unit tests, and the PR title check run on every pull request too. JavaScript, TypeScript, and GitHub Actions stay in that CodeQL workflow. Python, Java/Kotlin, and C/C++ are in `codeql-extended.yaml` (see [Scheduled and opt-in gates](#scheduled-and-opt-in-gates)).
 
-[Review rules for main](branch-protection.md) describes the solo-maintainer policy and the optional independent-review policy. The proposed administrator-bypass and up-to-date-branch changes have not been applied. Required approvals on `main` remain at zero while the repository has one collaborator.
+[Review rules for main](branch-protection.md) describes the applied solo-maintainer policy, its current ruleset readback, and the optional independent-review policy. Required approvals on `main` remain at zero while the repository has one maintainer.
+
+### Scan results from fork pull requests
+
+A successful Scan comparison always uploads the complete `comment.md` as the
+`scan-comparison` artifact and links it from the job summary. This applies to
+small and large comparisons, before any optional conversation update. A failed
+scan or comparison still fails the job.
+
+Same-repository pull requests also receive the normal result comment, with an
+artifact link for a large comparison. Fork pull requests use the artifact and
+job summary because their read-only token cannot write to the upstream PR
+conversation. They keep the ordinary `pull_request` trigger and do not need an
+upstream write token for reporting.
 
 ## Airgap install check
 
@@ -332,6 +345,23 @@ stream before selecting output. It never publishes private tail text, matching
 strings, command arguments, URLs, environments or exception messages. Private
 evidence remains excluded from artifact copying.
 
+If receipt generation or sanitized-proof verification fails, the publisher also
+retains `receipt-failure.json`. It records the validation operation, an
+allowlisted exception type and call-site lines hashed against the staged helper.
+For identity journals, it reports only fixed boolean predicates for completion,
+source bindings and requested package phases. It omits observed values, private
+paths, exception messages and unknown fields. Its file hash is bound into the
+unaccepted receipt. A successful trial job or completed progress stage cannot
+replace the required receipt and public phase proofs.
+
+Private identity transcripts have a separate 16 MiB byte limit and 4,096-stage
+limit, enforced by both writer and reader. These are complete multi-phase
+journals, not individual phase proofs. The reader refuses links, duplicate JSON
+fields, and files changed while reading. Individual phase snapshots and public
+JSON proofs retain their 256 KiB bounds and full semantic/hash verification.
+Large private transcripts are never copied into public artifacts; diagnostic
+companions alone cannot establish acceptance.
+
 The command runner retained this tail **before** redaction; it may begin inside
 a credential or omit the original error. It is therefore unsafe to publish even
 a subsequently redacted excerpt. Categories are diagnostic signatures, not
@@ -385,6 +415,24 @@ tail bytes, establish a causal explanation or authorize another trial.
 
 
 ### Release readiness
+
+The supplementary release-binding metadata and predicate contain public
+provenance: repository name; release tag, numeric ID and application commit;
+workflow commit, run ID, attempt and ref; and package index and architecture
+digests. The predicate also carries its schema version. These values are
+intended for the published attestation. `GH_TOKEN` and the anonymous registry
+token are transport credentials, never provenance fields. Other environment
+variables and extra release API fields are excluded; unknown metadata fields
+fail validation before any preparation output is written.
+
+Each serialized JSON payload is limited to one MiB. The metadata and original
+index are staged as owner-only files (mode `0600`) in the runner's temporary
+directory, replacing existing files without following their links. The
+predicate is emitted on standard output for the workflow's attestation step;
+verification diagnostics remain fixed verdicts rather than API response or
+credential dumps. Sentinel regression tests cover the environment/API field
+boundary and rejected extra fields. This describes the serialization policy;
+it does not establish the disposition of an unread code-scanning alert.
 
 Release Please creates a draft and its Git tag together. Charts publish first;
 then the existing native publisher signs and verifies both architecture packages

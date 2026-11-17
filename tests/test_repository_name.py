@@ -88,8 +88,6 @@ class RepositoryNameTests(unittest.TestCase):
                         f'--certificate-identity https://github.com/jonathanagustin/{OLD}/.github/workflows/demo.yaml@refs/heads/main ' + chr(92))
                 elif name == 'docs-site/src/lib/repository-links.mjs':
                     self.assertEqual(line, f"export const legacyGithubRepositoryUrl = 'https://github.com/jonathanagustin/{OLD}';")
-                elif name == '.github/container-and-chart/postgis/smoke.sh':
-                    self.assertEqual(line, f'old_image="${{OLD_IMAGE:-ghcr.io/jonathanagustin/{OLD}/postgis:15-3.4}}"')
                 elif name == '.github/scripts/migrate-ghcr.py':
                     self.assertEqual(line, f"OLD = OWNER + '/{OLD}/'")
                 elif name == '.github/workflows/migrate-packages.yaml':
@@ -100,7 +98,6 @@ class RepositoryNameTests(unittest.TestCase):
         self.assertEqual(signer_counts, Counter(SIGNERS))
         self.assertEqual(counts, Counter({**SIGNERS, 'README.md': 3,
                          'docs-site/src/lib/repository-links.mjs': 1,
-                         '.github/container-and-chart/postgis/smoke.sh': 1,
                          '.github/scripts/migrate-ghcr.py': 1,
                          '.github/workflows/migrate-packages.yaml': 3}))
 

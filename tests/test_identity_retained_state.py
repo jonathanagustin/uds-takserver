@@ -26,6 +26,340 @@ class RetainedStateGuards(unittest.TestCase):
                 'users':[{'user':{'client-certificate-data':'Zml4dHVyZQ==','client-key-data':'Zml4dHVyZQ=='}}]}
         return SimpleNamespace(guard=lambda:None,core_unchanged=lambda:None,
             get=lambda *a,**k:{'items':[]},kube=lambda *a:'{}' if a[1]=='namespace' else json.dumps(obj),command=lambda argv:json.dumps(client))
+    def test_cleanup_drift_is_private_digest_only_and_never_deletes(self):
+        for field in ('uid','resourceVersion','annotations'):
+            obj=self.secret();rec=self.record(obj);driver=self.driver(obj)
+            if field=='annotations':obj['metadata'][field]['private']='PRIVATE_VALUE_SENTINEL'
+            else:obj['metadata'][field]='changed'
+            with patch.object(R,'delete_record') as delete:
+                with self.assertRaisesRegex(ValueError,'identity/metadata changed'):R.conditional_delete(driver,rec)
+                delete.assert_not_called()
+            value=driver._retained_cleanup_drift
+            self.assertEqual(value['changedFields'],['metadataSHA256'] if field=='annotations' else
+                             ['uid','metadataSHA256'] if field=='uid' else ['resourceVersion'])
+            self.assertNotIn('PRIVATE_VALUE_SENTINEL',json.dumps(value))
+            self.assertEqual(R.validate_cleanup_drift(value),value)
+            for mutate in (lambda v:v['observed'].update(data='private'),
+                           lambda v:v['expected'].update(namespace='zarf'),
+                           lambda v:v.update(changedFields=[]),
+                           lambda v:v['observed'].update(metadataSHA256='private'),
+                           lambda v:v.update(schema=True)):
+                bad=copy.deepcopy(value);mutate(bad)
+                with self.assertRaises(ValueError):R.validate_cleanup_drift(bad)
+        obj=self.secret();rec=self.record(obj);obj['metadata']['resourceVersion']='8'
+        driver=self.driver(obj)
+        with patch.object(R,'validate_cleanup_drift',side_effect=OSError('private capture failure')),patch.object(R,'delete_record') as delete:
+            with self.assertRaisesRegex(ValueError,'identity/metadata changed'):R.conditional_delete(driver,rec)
+            delete.assert_not_called()
+        self.assertIsNone(driver._retained_cleanup_drift)
+
+    def test_pvc_version_drift_fingerprints_spec_status_and_finalizers_without_delete(self):
+        for change in ('spec','status','finalizers','unavailable'):
+            obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver','name':'retained-data',
+                 'uid':'original','resourceVersion':'1','finalizers':['kubernetes.io/pvc-protection']},
+                 'spec':{'volumeName':'PRIVATE_VOLUME_SENTINEL'},'status':{'phase':'Bound'}}
+            rec=self.record(obj);rec['parent']={'volumeName':'bound-volume','volumeUID':'bound-pv'}
+            rec['pvcState']=R.pvc_state(obj)
+            obj['metadata']['resourceVersion']='2'
+            if change=='spec':obj['spec']['volumeName']='PRIVATE_CHANGED_SENTINEL'
+            elif change=='status':obj['status']['phase']='Lost'
+            elif change=='finalizers':obj['metadata']['finalizers']=[]
+            else:rec['pvcState']={'private':'invalid descriptor'}
+            driver=self.driver(obj)
+            with patch.object(R,'delete_record') as delete:
+                with self.assertRaisesRegex(ValueError,'identity/metadata changed'):R.conditional_delete(driver,rec)
+                delete.assert_not_called()
+            snapshot=driver._retained_cleanup_drift
+            self.assertEqual(snapshot['changedFields'],['resourceVersion'])
+            self.assertNotIn('PRIVATE_',json.dumps(snapshot))
+            if change=='unavailable':
+                self.assertNotIn('pvcState',snapshot)
+                continue
+            before,after=snapshot['pvcState']['expected'],snapshot['pvcState']['observed']
+            for key in ('spec','status','finalizers'):
+                self.assertEqual(before[key+'SHA256']!=after[key+'SHA256'],key==change)
+            if change=='finalizers':
+                self.assertTrue(before['pvcProtection']);self.assertFalse(after['pvcProtection'])
+            self.assertEqual(R.validate_cleanup_drift(snapshot),snapshot)
+            for mutate in (lambda v:v['pvcState']['observed'].update(spec='PRIVATE_BODY'),
+                           lambda v:v['pvcState']['observed'].update(pvcProtection=1),
+                           lambda v:v['pvcState']['observed'].update(otherFinalizerCount=True),
+                           lambda v:v['pvcState']['observed'].update(statusSHA256='PRIVATE_BODY'),
+                           lambda v:v['pvcState'].update(extra={})):
+                bad=copy.deepcopy(snapshot);mutate(bad)
+                with self.assertRaises(ValueError):R.validate_cleanup_drift(bad)
+
+    def test_status_field_digests_distinguish_changes_without_raw_values(self):
+        obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver'},'status':{}}
+        baseline=R.pvc_state(obj)
+        for field in (*R.PVC_STATUS_FIELDS,'PRIVATE_UNKNOWN_KEY'):
+            changed=copy.deepcopy(obj);changed['status'][field]='PRIVATE_STATUS_VALUE'
+            state=R.pvc_state(changed)
+            self.assertNotEqual(state['statusSHA256'],baseline['statusSHA256'])
+            fields=state['statusFieldsSHA256'];before=baseline['statusFieldsSHA256']
+            self.assertEqual([key for key in fields if fields[key]!=before[key]],
+                             [field if field in R.PVC_STATUS_FIELDS else 'other'])
+            self.assertNotIn('PRIVATE_',json.dumps(state))
+        explicit_null=copy.deepcopy(obj);explicit_null['status']['phase']=None
+        self.assertNotEqual(R.pvc_state(explicit_null)['statusFieldsSHA256']['phase'],
+                            baseline['statusFieldsSHA256']['phase'])
+        legacy=copy.deepcopy(baseline);del legacy['statusFieldsSHA256'];legacy.pop('conditionFacts',None)
+        self.assertEqual(R.validate_pvc_state(legacy),legacy)
+        for mutation in ('extra','missing','raw','wrong-type'):
+            bad=copy.deepcopy(baseline)
+            if mutation=='extra':bad['statusFieldsSHA256']['PRIVATE_KEY']='a'*64
+            elif mutation=='missing':del bad['statusFieldsSHA256']['phase']
+            elif mutation=='raw':bad['statusFieldsSHA256']['phase']='PRIVATE_VALUE'
+            else:bad['statusFieldsSHA256']=[]
+            with self.assertRaises(ValueError):R.validate_pvc_state(bad)
+
+    def owner_entry(self,manager,field='f:conditions'):
+        return {'manager':manager,'operation':'PRIVATE_OPERATION','subresource':'status','fieldsType':'FieldsV1',
+                'fieldsV1':{'f:status':{field:{'k:PRIVATE_CONDITION':{'f:PRIVATE_VALUE':{}}}}}}
+
+    def test_managed_condition_owners_are_fixed_hints_and_digest_only(self):
+        entries=[self.owner_entry('k3s'),self.owner_entry('PRIVATE_MANAGER'),self.owner_entry('k3s'),
+                 self.owner_entry('kubelet','f:phase')]
+        facts=R.condition_owners({'managedFields':entries})
+        self.assertEqual((facts['count'],facts['codes'],facts['unknownCount']),(3,['K3s','Other'],1))
+        self.assertNotIn('PRIVATE',json.dumps(facts))
+        changed=copy.deepcopy(entries);changed[1]['manager']='ANOTHER_PRIVATE_MANAGER'
+        self.assertNotEqual(facts['sha256'],R.condition_owners({'managedFields':changed})['sha256'])
+        empty=R.condition_owners({'managedFields':[]})
+        self.assertEqual((empty['count'],empty['codes'],empty['unknownCount']),(0,[],0))
+        for mutate in (lambda v:v.update(count=True),lambda v:v.update(count=33),
+                       lambda v:v.update(codes=['PRIVATE_MANAGER']),lambda v:v.update(codes=['Other','K3s']),
+                       lambda v:v.update(unknownCount=0),lambda v:v.update(sha256='PRIVATE_VALUE'),
+                       lambda v:v.update(manager='PRIVATE_MANAGER')):
+            bad=copy.deepcopy(facts);mutate(bad)
+            with self.assertRaises(ValueError):R.validate_condition_owners(bad)
+
+    def test_invalid_managed_fields_cannot_suppress_existing_pvc_fingerprints(self):
+        for entries in ([{}]*33,'PRIVATE_VALUE',[None]):
+            obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver','managedFields':entries},
+                 'status':{'conditions':[]}}
+            state=R.pvc_state(obj)
+            self.assertNotIn('managedOwners',state['conditionFacts'])
+            self.assertIn('fieldsSHA256',state['conditionFacts'])
+            self.assertIn('statusFieldsSHA256',state)
+
+    def test_owner_capture_failure_keeps_existing_pvc_detail(self):
+        obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver','managedFields':[]},
+             'status':{'conditions':[]}}
+        with patch.object(R,'condition_owners',side_effect=RuntimeError('PRIVATE_FAILURE')):
+            state=R.pvc_state(obj)
+        self.assertIn('fieldsSHA256',state['conditionFacts'])
+        self.assertNotIn('managedOwners',state['conditionFacts'])
+        self.assertNotIn('PRIVATE',json.dumps(state))
+
+    def test_pvc_owner_hints_keep_version_refusal_and_baseline_immutable(self):
+        obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver','name':'retained-data',
+             'uid':'original','resourceVersion':'1','managedFields':[self.owner_entry('k3s')]},
+             'status':{'conditions':[{'type':'PRIVATE_TYPE','status':'False'}]}}
+        rec=self.record(obj);rec['parent']={'volumeName':'bound-volume','volumeUID':'bound-pv'}
+        rec['pvcState']=R.pvc_state(obj);baseline=copy.deepcopy(rec['pvcState'])
+        obj['metadata']['resourceVersion']='2';obj['status']['conditions'][0]['status']='True'
+        obj['metadata']['managedFields']=[self.owner_entry('kubectl-patch')]
+        driver=self.driver(obj);driver.kube=MagicMock(side_effect=driver.kube)
+        with patch.object(R,'delete_record') as delete:
+            with self.assertRaisesRegex(ValueError,'identity/metadata changed'):R.conditional_delete(driver,rec)
+            delete.assert_not_called()
+        snapshot=driver._retained_cleanup_drift
+        self.assertEqual(rec['pvcState'],baseline)
+        self.assertEqual(snapshot['pvcState']['expected']['conditionFacts']['managedOwners']['codes'],['K3s'])
+        self.assertEqual(snapshot['pvcState']['observed']['conditionFacts']['managedOwners']['codes'],['KubectlPatch'])
+        self.assertNotIn('PRIVATE',json.dumps(snapshot))
+        self.assertLessEqual(len(json.dumps(snapshot).encode()),4096)
+        self.assertIn('--show-managed-fields=true',driver.kube.call_args.args)
+
+    def test_owner_hint_overflow_keeps_fingerprints_and_refuses_delete(self):
+        for width in (1,253):
+            with self.subTest(version_width=width):
+                entries=[self.owner_entry(manager) for manager in R.PVC_MANAGER_CODES]
+                obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver','name':'retained-data',
+                     'uid':'original','resourceVersion':'1'*width,'managedFields':entries},
+                     'status':{'conditions':[{'type':'PRIVATE_TYPE','status':'False'}]}}
+                rec=self.record(obj);rec['parent']={'volumeName':'bound-volume','volumeUID':'bound-pv'}
+                rec['pvcState']=R.pvc_state(obj);baseline=copy.deepcopy(rec['pvcState'])
+                obj['metadata']['resourceVersion']='2'*width;obj['status']['conditions'][0]['status']='True'
+                driver=self.driver(obj)
+                with patch.object(R,'delete_record') as delete:
+                    with self.assertRaisesRegex(ValueError,'identity/metadata changed'):R.conditional_delete(driver,rec)
+                    delete.assert_not_called()
+                snapshot=driver._retained_cleanup_drift
+                self.assertEqual(rec['pvcState'],baseline)
+                self.assertLessEqual(len(json.dumps(snapshot).encode()),4096)
+                for state in snapshot['pvcState'].values():self.assertIn('statusFieldsSHA256',state)
+                self.assertNotIn('PRIVATE',json.dumps(snapshot))
+                R.validate_cleanup_drift(snapshot)
+
+    def test_cleanup_snapshot_reads_pvc_managed_fields_in_same_observation(self):
+        obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver','name':'retained-data',
+             'uid':'original','resourceVersion':'1','managedFields':[self.owner_entry('k3s')]},'status':{}}
+        driver=SimpleNamespace(kube=MagicMock(return_value=json.dumps(obj)),
+                               get=MagicMock(side_effect=AssertionError('no second PVC read')))
+        proof={'source':{},'records':[{'kind':'PersistentVolumeClaim','name':'retained-data','namespace':'takserver','uid':'original','parent':{}}]}
+        with patch.object(R,'verify'),patch.object(R,'cleanup_allowed',return_value=True),patch.object(R,'claim_parent',return_value={}):
+            records=R.cleanup_snapshot(driver,proof)
+        self.assertEqual(len(records),1);self.assertEqual(driver.kube.call_count,1)
+        self.assertIn('--show-managed-fields=true',driver.kube.call_args.args)
+        self.assertEqual(records[0]['pvcState']['conditionFacts']['managedOwners']['codes'],['K3s'])
+
+    def test_condition_facts_shapes_are_fixed_and_optional(self):
+        for status,shape in (({},'absent'),({'conditions':None},'null'),
+                             ({'conditions':[]},'list'),({'conditions':'PRIVATE_VALUE'},'other')):
+            facts=R.condition_facts(status)
+            facts.pop('fieldsSHA256',None)
+            self.assertEqual(facts,{'shape':shape,'count':0,'knownTypes':{},'otherTypeCount':0})
+            self.assertNotIn('PRIVATE',json.dumps(facts))
+        for conditions in ([{}]*33,['PRIVATE_VALUE']):
+            obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver'},'status':{'conditions':conditions}}
+            state=R.pvc_state(obj)
+            self.assertNotIn('conditionFacts',state)
+            self.assertIn('statusFieldsSHA256',state)
+            self.assertEqual(R.validate_pvc_state(state),state)
+
+    def test_condition_facts_only_emit_known_types_and_fixed_statuses(self):
+        facts=R.condition_facts({'conditions':[
+            {'type':'Resizing','status':'True','message':'PRIVATE_MESSAGE','reason':'PRIVATE_REASON'},
+            {'type':'Resizing','status':'PRIVATE_STATUS'},
+            {'type':'PRIVATE_TYPE','status':'True'},
+            {'type':{'PRIVATE_KEY':1},'status':'True'}]})
+        self.assertEqual(set(facts.pop('fieldsSHA256')),R.PVC_CONDITION_DIGEST_KEYS)
+        self.assertEqual(facts,{'shape':'list','count':4,'knownTypes':{'Resizing':['Other','True']},'otherTypeCount':2})
+        self.assertNotIn('PRIVATE',json.dumps(facts))
+        for mutate in (lambda v:v.update(extra='private'),lambda v:v.update(count=True),
+                       lambda v:v.update(count=33),lambda v:v.update(shape='PRIVATE'),
+                       lambda v:v['knownTypes'].update(PRIVATE_TYPE=['True']),
+                       lambda v:v['knownTypes'].update(Resizing=['PRIVATE_STATUS']),
+                       lambda v:v['knownTypes'].update(Resizing=['True','Other']),
+                       lambda v:v.update(otherTypeCount=1),lambda v:v.update(shape='absent')):
+            bad=copy.deepcopy(facts);mutate(bad)
+            with self.assertRaises(ValueError):R.validate_condition_facts(bad)
+
+    def test_condition_field_digests_distinguish_changes_without_values(self):
+        original={'conditions':[{'type':'PRIVATE_TYPE','status':'PRIVATE_STATUS',
+            'reason':'PRIVATE_REASON','message':'PRIVATE_MESSAGE','lastProbeTime':'PRIVATE_TIME',
+            'lastTransitionTime':'PRIVATE_TRANSITION','PRIVATE_KEY':'PRIVATE_VALUE'}]}
+        baseline=R.condition_facts(original)
+        self.assertNotIn('PRIVATE',json.dumps(baseline))
+        for field,group in (('type','type'),('status','status'),('reason','detail'),
+                            ('message','detail'),('lastProbeTime','timestamps'),
+                            ('lastTransitionTime','timestamps'),('PRIVATE_KEY','other')):
+            changed=copy.deepcopy(original);changed['conditions'][0][field]='OTHER_PRIVATE_VALUE'
+            facts=R.condition_facts(changed)
+            self.assertEqual([key for key in baseline['fieldsSHA256'] if
+                baseline['fieldsSHA256'][key]!=facts['fieldsSHA256'][key]],[group])
+            self.assertNotIn('PRIVATE',json.dumps(facts))
+        absent=R.condition_facts({'conditions':[{}]})
+        null=R.condition_facts({'conditions':[{'lastProbeTime':None}]})
+        self.assertNotEqual(absent['fieldsSHA256']['timestamps'],null['fieldsSHA256']['timestamps'])
+        for mutate in (lambda v:v['fieldsSHA256'].update(PRIVATE_KEY='a'*64),
+                       lambda v:v['fieldsSHA256'].pop('type'),
+                       lambda v:v['fieldsSHA256'].update(type='PRIVATE_VALUE'),
+                       lambda v:v.update(fieldsSHA256=[]),lambda v:v.update(shape='absent',count=0,otherTypeCount=0)):
+            bad=copy.deepcopy(baseline);mutate(bad)
+            with self.assertRaises(ValueError):R.validate_condition_facts(bad)
+        legacy=copy.deepcopy(baseline);del legacy['fieldsSHA256']
+        self.assertEqual(R.validate_condition_facts(legacy),legacy)
+
+    def test_oversized_condition_detail_preserves_fingerprints_and_delete_refusal(self):
+        conditions=[{'type':sorted(R.PVC_CONDITION_TYPES)[i%6],'status':'Unknown','message':'PRIVATE_MESSAGE'} for i in range(32)]
+        obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver','name':'retained-data',
+             'uid':'original','resourceVersion':'1'*253},'spec':{},'status':{'conditions':conditions}}
+        rec=self.record(obj);rec['parent']={'volumeName':'bound-volume','volumeUID':'bound-pv'}
+        rec['pvcState']=R.pvc_state(obj);original=copy.deepcopy(rec['pvcState'])
+        obj['metadata']['resourceVersion']='2'*253;obj['status']['conditions'][0]['status']='False'
+        driver=self.driver(obj)
+        with patch.object(R,'delete_record') as delete:
+            with self.assertRaisesRegex(ValueError,'identity/metadata changed'):R.conditional_delete(driver,rec)
+            delete.assert_not_called()
+        snapshot=driver._retained_cleanup_drift
+        self.assertEqual(rec['pvcState'],original)
+        self.assertLessEqual(len(json.dumps(snapshot).encode()),4096)
+        for value in snapshot['pvcState'].values():
+            self.assertIn('statusFieldsSHA256',value)
+            self.assertNotIn('conditionFacts',value)
+        self.assertEqual(R.validate_cleanup_drift(snapshot),snapshot)
+
+    def test_condition_digest_overflow_preserves_small_facts_and_baseline(self):
+        conditions=[{'type':'PRIVATE_TYPE','status':'True','message':'PRIVATE_MESSAGE'}]
+        obj={'kind':'PersistentVolumeClaim','metadata':{'namespace':'takserver','name':'x'*100,
+             'uid':'u'*100,'resourceVersion':'1'*253},'spec':{},'status':{'conditions':conditions}}
+        rec=self.record(obj);rec['parent']={'volumeName':'bound-volume','volumeUID':'bound-pv'}
+        rec['pvcState']=R.pvc_state(obj);original=copy.deepcopy(rec['pvcState'])
+        obj['metadata']['resourceVersion']='2'*253;obj['status']['conditions'][0]['status']='False'
+        driver=self.driver(obj)
+        with patch.object(R,'delete_record') as delete:
+            with self.assertRaisesRegex(ValueError,'identity/metadata changed'):R.conditional_delete(driver,rec)
+            delete.assert_not_called()
+        snapshot=driver._retained_cleanup_drift
+        self.assertEqual(rec['pvcState'],original)
+        self.assertLessEqual(len(json.dumps(snapshot).encode()),4096)
+        for value in snapshot['pvcState'].values():
+            self.assertIn('statusFieldsSHA256',value)
+            self.assertIn('conditionFacts',value)
+            self.assertNotIn('fieldsSHA256',value['conditionFacts'])
+        self.assertEqual(R.validate_cleanup_drift(snapshot),snapshot)
+
+    def setup_fixture(self):
+        hook={'apiVersion':'batch/v1','kind':'Job','metadata':{'name':'takserver-db-setup',
+            'labels':{'app.kubernetes.io/instance':'takserver','app.kubernetes.io/managed-by':'Helm'},
+            'annotations':{'helm.sh/hook':'post-install','helm.sh/hook-weight':'-5','helm.sh/hook-delete-policy':'before-hook-creation'}},
+            'spec':{'template':{'spec':{'restartPolicy':'Never','containers':[{'name':'post-install-job','image':'real-source-image'}]}}}}
+        job=copy.deepcopy(hook);job['metadata'].update(namespace='takserver',uid='job-original',resourceVersion='9')
+        job['status']={'succeeded':1,'conditions':[{'type':'Complete','status':'True'}]}
+        pod={'metadata':{'namespace':'takserver','name':'setup-child','uid':'child',
+            'ownerReferences':[{'apiVersion':'batch/v1','kind':'Job','name':'takserver-db-setup','uid':'job-original','controller':True}]},
+            'status':{'phase':'Succeeded'}}
+        inventories={('takserver','pods'):[pod]}
+        def get(kind,name=None,namespace='takserver'):
+            return job if kind=='job' else {'items':inventories.get((namespace,kind),[])}
+        driver=SimpleNamespace(command=lambda argv:json.dumps(hook),get=get,
+            kube=lambda *args:json.dumps(job) if args[1]=='job' else '{}',guard=MagicMock(),
+            core_unchanged=MagicMock(),wait=MagicMock(),journal=MagicMock())
+        return driver,hook,job,pod,inventories
+
+    def test_setup_hook_binds_stored_release_and_deletes_only_exact_completed_parent(self):
+        driver,hook,job,pod,inventory=self.setup_fixture()
+        proof=R.setup_hook_snapshot(driver)
+        with patch.object(R,'delete_record') as delete:
+            R.cleanup_setup_hook(driver,proof)
+            delete.assert_called_once_with(driver,proof['record'])
+        self.assertEqual(driver.wait.call_args.args[1],300)
+        # An external-database release has no source hook and no cleanup grant.
+        driver.command=lambda argv:''
+        self.assertIsNone(R.setup_hook_snapshot(driver))
+        with patch.object(R,'delete_record') as delete:
+            R.cleanup_setup_hook(driver,None);delete.assert_not_called()
+
+    def test_setup_hook_rejects_source_and_terminal_state_drift(self):
+        for change in ('foreign-hook','changed-image','extra-container','running','failed','owned'):
+            with self.subTest(change=change):
+                driver,hook,job,pod,inventory=self.setup_fixture()
+                if change=='foreign-hook':hook['metadata']['name']='foreign'
+                elif change=='changed-image':job['spec']['template']['spec']['containers'][0]['image']='replacement'
+                elif change=='extra-container':job['spec']['template']['spec']['containers'].append({'name':'extra'})
+                elif change=='running':job['status']['active']=1
+                elif change=='failed':job['status']['failed']=1
+                else:job['metadata']['ownerReferences']=[{'uid':'foreign'}]
+                with self.assertRaises(ValueError):R.setup_hook_snapshot(driver)
+
+    def test_setup_hook_cleanup_refuses_replacement_or_any_live_foreign_consumer(self):
+        for change in ('uid','version','spec','pod-owner','pod-phase','foreign-namespace','deployment'):
+            with self.subTest(change=change):
+                driver,hook,job,pod,inventory=self.setup_fixture();proof=R.setup_hook_snapshot(driver)
+                if change=='uid':job['metadata']['uid']='replacement'
+                elif change=='version':job['metadata']['resourceVersion']='10'
+                elif change=='spec':job['spec']['template']['spec']['restartPolicy']='Always'
+                elif change=='pod-owner':pod['metadata']['ownerReferences'][0]['uid']='foreign'
+                elif change=='pod-phase':pod['status']['phase']='Running'
+                elif change=='foreign-namespace':inventory[('cloudtak','pods')]=[pod]
+                else:inventory[('takserver','deployments')]=[{'metadata':{'name':'remaining'}}]
+                with patch.object(R,'delete_record') as delete:
+                    with self.assertRaises(ValueError):R.cleanup_setup_hook(driver,proof)
+                    delete.assert_not_called()
+
     def test_sentinel_operations_pass_exact_namespace_container_and_safe_diagnostics(self):
         for namespace in ('takserver','cloudtak'):
             for operation in ('create','read','remove'):
@@ -74,6 +408,15 @@ class RetainedStateGuards(unittest.TestCase):
         request=opener.open.call_args.args[0]
         self.assertEqual(request.get_method(),'DELETE');self.assertEqual(request.full_url,'https://127.0.0.1:6443/api/v1/namespaces/takserver/secrets/takserver-keystore')
         self.assertEqual(json.loads(request.data)['preconditions'],{'uid':'original','resourceVersion':'7'})
+    def test_setup_job_delete_uses_batch_endpoint_and_foreground_preconditions(self):
+        _driver,_hook,job,_pod,_inventory=self.setup_fixture();driver=self.driver(job)
+        opener=MagicMock();opener.open.return_value.__enter__.return_value.status=202
+        with patch.object(R.ssl,'create_default_context',return_value=MagicMock()),patch.object(R.urllib.request,'build_opener',return_value=opener):
+            R.delete_record(driver,R.resource_record(job))
+        request=opener.open.call_args.args[0]
+        self.assertEqual(request.full_url,'https://127.0.0.1:6443/apis/batch/v1/namespaces/takserver/jobs/takserver-db-setup')
+        self.assertEqual(json.loads(request.data),{'apiVersion':'v1','kind':'DeleteOptions','preconditions':{'uid':'job-original','resourceVersion':'9'},'propagationPolicy':'Foreground'})
+
     def test_changed_uid_or_resourceversion_refuses_before_client_or_http(self):
         for field in ('uid','resourceVersion'):
             obj=self.secret();rec=self.record(obj);obj['metadata'][field]='replacement';driver=self.driver(obj)
@@ -323,3 +666,158 @@ class StoredHookSourceGuards(unittest.TestCase):
         for mutate in [lambda v:v.update(extra='PRIVATE'),lambda v:v['diagnostic'].update(hook='PRIVATE'),lambda v:v['baseline']['hookInventory']['objects']['keystore'].update(sha256='PRIVATE')]:
             value=copy.deepcopy(failure);mutate(value)
             with self.assertRaises(ValueError):R.validate_source_failure(value)
+
+class RegistryAuthorityGuards(unittest.TestCase):
+    def fixture(self):
+        source={'apiVersion':'v1','kind':'Secret','metadata':{'name':'private-registry',
+            'namespace':'zarf','uid':'core-registry','resourceVersion':'1',
+            'labels':{'app.kubernetes.io/managed-by':'zarf'}},
+            'type':'kubernetes.io/dockerconfigjson','data':{'.dockerconfigjson':'PRIVATE_FIXTURE'}}
+        obj=copy.deepcopy(source);obj['metadata'].update(namespace='takserver',uid='namespace-copy')
+        driver=SimpleNamespace(get=lambda kind,name,namespace:source)
+        return obj,source,driver
+
+    def test_copy_requires_exact_retained_source_and_is_never_cleanup_allowed(self):
+        obj,source,driver=self.fixture();binding=R.registry_binding(driver,obj)
+        self.assertNotIn('PRIVATE_FIXTURE',json.dumps(binding))
+        self.assertTrue(R.preserved_registry(driver,obj,[binding]))
+        self.assertFalse(R.cleanup_allowed(R.resource_record(obj)))
+        for value in (obj,source):
+            value['metadata']['resourceVersion']='new-observation'
+            value['metadata']['managedFields']=[{'manager':'observation'}]
+        self.assertTrue(R.preserved_registry(driver,obj,[binding]))
+
+    def test_reject_replacement_payload_metadata_type_and_extra_fields_on_either_side(self):
+        changes=[lambda v:v['metadata'].update(uid='replacement'),
+                 lambda v:v['metadata'].update(deletionTimestamp='now'),
+                 lambda v:v['metadata']['labels'].clear(),
+                 lambda v:v['metadata'].update(annotations={'foreign':'changed'}),
+                 lambda v:v.update(type='Opaque'),lambda v:v.update(immutable=True),
+                 lambda v:v['data'].update(extra='payload'),
+                 lambda v:v['data'].update({'.dockerconfigjson':'changed'}),
+                 lambda v:v.update(stringData={'extra':'payload'})]
+        for side in ('target','source'):
+            for change in changes:
+                with self.subTest(side=side,change=change):
+                    obj,source,driver=self.fixture();binding=R.registry_binding(driver,obj)
+                    change(obj if side=='target' else source)
+                    with self.assertRaises(ValueError):R.preserved_registry(driver,obj,[binding])
+
+    def test_no_binding_duplicates_wrong_namespace_or_missing_authority_fail_closed(self):
+        obj,source,driver=self.fixture();binding=R.registry_binding(driver,obj)
+        for bindings in ([],[binding,binding]):
+            with self.assertRaises(ValueError):R.preserved_registry(driver,obj,bindings)
+        obj['metadata']['namespace']='istio-system'
+        with self.assertRaises(ValueError):R.registry_binding(driver,obj)
+        obj['metadata']['namespace']='takserver';source['metadata']['namespace']='cloudtak'
+        with self.assertRaises(ValueError):R.registry_binding(driver,obj)
+        driver.get=lambda *a,**k:(_ for _ in ()).throw(ValueError('source unavailable'))
+        with self.assertRaises(ValueError):R.registry_binding(driver,obj)
+
+class EmptyCrlGuards(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary=tempfile.TemporaryDirectory(prefix='empty-crl-fixture-')
+        cls.addClassCleanup(cls.temporary.cleanup)
+        cls.folder=Path(cls.temporary.name)
+        def run(*args):
+            subprocess.run(['openssl',*args],cwd=cls.folder,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=20)
+        for name in ('ca','other'):
+            run('req','-x509','-newkey','rsa:2048','-nodes','-keyout',name+'.key','-out',name+'.pem','-subj','/CN='+name,'-days','2')
+        (cls.folder/'newcerts').mkdir()
+        (cls.folder/'index').write_text('');(cls.folder/'serial').write_text('01\n');(cls.folder/'crlnumber').write_text('01\n')
+        (cls.folder/'openssl.cnf').write_text('[ca]\ndefault_ca=authority\n[authority]\ndir='+str(cls.folder)+'\n'
+            'database=$dir/index\nnew_certs_dir=$dir/newcerts\ncertificate=$dir/ca.pem\nprivate_key=$dir/ca.key\n'
+            'serial=$dir/serial\ncrlnumber=$dir/crlnumber\ndefault_md=sha256\ndefault_days=1\ndefault_crl_days=1\npolicy=policy\n'
+            '[policy]\ncommonName=supplied\n')
+        run('ca','-config','openssl.cnf','-gencrl','-out','empty.crl')
+        run('req','-newkey','rsa:2048','-nodes','-keyout','leaf.key','-out','leaf.csr','-subj','/CN=leaf')
+        run('ca','-config','openssl.cnf','-batch','-in','leaf.csr','-out','leaf.pem')
+        run('ca','-config','openssl.cnf','-revoke','leaf.pem')
+        run('ca','-config','openssl.cnf','-gencrl','-out','revoked.crl')
+
+    def fixture(self):
+        import hashlib,ssl
+        ca=(self.folder/'ca.pem').read_text()
+        digest=hashlib.sha256(ssl.PEM_cert_to_DER_cert(ca)).hexdigest().upper()
+        data={'ca.crl':(self.folder/'empty.crl').read_text(),'revoked.json':'[]','number':'1',
+              'ca-fingerprint':':'.join(digest[i:i+2] for i in range(0,64,2)),'reload-at':''}
+        obj={'apiVersion':'v1','kind':'Secret','type':'Opaque','metadata':{'name':'takserver-crl','namespace':'takserver',
+             'uid':'bound-crl','resourceVersion':'1','labels':{'app.kubernetes.io/part-of':'takserver','uds.dev/pod-reload':'false'}},
+             'data':{key:base64.b64encode(value.encode()).decode() for key,value in data.items()}}
+        return obj,ca
+
+    def test_real_empty_signed_crl_accepts_and_source_data_is_not_modified(self):
+        obj,ca=self.fixture();before=copy.deepcopy(obj)
+        self.assertTrue(R.empty_crl(obj,ca));self.assertEqual(obj,before)
+        rec=R.resource_record(obj);self.assertFalse(R.cleanup_allowed(rec))
+        rec['emptyCrlDataSHA256']=R.sha(obj['data']);self.assertTrue(R.cleanup_allowed(rec))
+
+    def test_wrong_signer_and_real_revocation_cannot_hide_behind_empty_json(self):
+        import hashlib,ssl
+        obj,ca=self.fixture();other=(self.folder/'other.pem').read_text()
+        with self.assertRaisesRegex(ValueError,'issuer'):R.empty_crl(obj,other)
+        fingerprint=hashlib.sha256(ssl.PEM_cert_to_DER_cert(other)).hexdigest().upper()
+        obj['data']['ca-fingerprint']=base64.b64encode(':'.join(fingerprint[i:i+2] for i in range(0,64,2)).encode()).decode()
+        with self.assertRaisesRegex(ValueError,'signature'):R.empty_crl(obj,other)
+        obj,ca=self.fixture();obj['data']['ca.crl']=base64.b64encode((self.folder/'revoked.crl').read_bytes()).decode()
+        obj['data']['number']=base64.b64encode(b'2').decode()
+        with self.assertRaisesRegex(ValueError,'signature, entries'):R.empty_crl(obj,ca)
+
+    def test_state_payload_and_metadata_guards_refuse(self):
+        changes=[lambda v:v['data'].update({'revoked.json':base64.b64encode(b'[{"serial":"1"}]').decode()}),
+                 lambda v:v['data'].update({'reload-at':base64.b64encode(b'pending').decode()}),
+                 lambda v:v['data'].update(number=base64.b64encode(b'2').decode()),
+                 lambda v:v['data'].update({'ca.crl':'invalid-base64!'}),
+                 lambda v:v['data'].update(extra=''),
+                 lambda v:v['metadata']['labels'].update({'uds.dev/pod-reload':'true'}),
+                 lambda v:v['metadata'].update(namespace='zarf'),
+                 lambda v:v['metadata'].update(deletionTimestamp='now')]
+        for change in changes:
+            obj,ca=self.fixture();change(obj)
+            with self.subTest(change=change),self.assertRaises(ValueError):R.empty_crl(obj,ca)
+        obj,ca=self.fixture()
+        with patch.object(R.subprocess,'run',side_effect=FileNotFoundError):
+            with self.assertRaisesRegex(ValueError,'unavailable'):R.empty_crl(obj,ca)
+
+    def test_live_clients_prevent_snapshot_and_conditional_ca_or_crl_deletion(self):
+        obj,ca=self.fixture();driver=SimpleNamespace(get=lambda *a,**k:{'items':[{'metadata':{'name':'active'}}]})
+        with patch.object(R,'verify') as verify:
+            with self.assertRaisesRegex(ValueError,'active clients'):R.cleanup_snapshot(driver,{'records':[{'namespace':'takserver','name':'takserver-crl'}]})
+            verify.assert_not_called()
+        helper=RetainedStateGuards()
+        for name in ('takserver-crl','takserver-ca-key','takserver-certs','tak-health-client'):
+            obj['metadata']['name']=name;rec=helper.record(obj)
+            if name=='takserver-crl':rec['emptyCrlDataSHA256']=R.sha(obj['data'])
+            driver.guard=lambda:None;driver.core_unchanged=lambda:None
+            with patch.object(R,'consumers_gone'),patch.object(R,'delete_record') as delete:
+                with self.assertRaisesRegex(ValueError,'active clients'):R.conditional_delete(driver,rec)
+                delete.assert_not_called()
+
+    def test_generated_secret_checks_real_ca_material_and_absent_clients_before_cleanup(self):
+        obj,ca=self.fixture()
+        driver=SimpleNamespace(get=lambda kind,*a,**k:({'items':[]} if kind.startswith('takclients.') else
+                               {'binaryData':{'ca.pem':base64.b64encode(ca.encode()).decode()}}))
+        self.assertTrue(R.generated_secret(driver,obj,cleanup=True))
+
+    def test_missing_client_api_requires_explicit_crd_absence(self):
+        driver=SimpleNamespace(get=lambda *a,**k:(_ for _ in ()).throw(ValueError('list failed')),
+                               kube=lambda *a:'')
+        R.no_live_clients(driver)
+        driver.kube=lambda *a:'{"kind":"CustomResourceDefinition"}'
+        with self.assertRaisesRegex(ValueError,'inventory unavailable'):R.no_live_clients(driver)
+        driver.kube=lambda *a:(_ for _ in ()).throw(ValueError('query failed'))
+        with self.assertRaises(ValueError):R.no_live_clients(driver)
+
+    def test_conditional_delete_requires_captured_empty_payload_hash(self):
+        obj,ca=self.fixture();helper=RetainedStateGuards();rec=helper.record(obj);driver=helper.driver(obj)
+        with patch.object(R,'delete_record') as delete:
+            with self.assertRaisesRegex(ValueError,'outside exact'):R.conditional_delete(driver,rec)
+            delete.assert_not_called()
+        rec['emptyCrlDataSHA256']='0'*64
+        with patch.object(R,'delete_record') as delete:
+            with self.assertRaisesRegex(ValueError,'verified empty CRL data changed'):R.conditional_delete(driver,rec)
+            delete.assert_not_called()
+        rec['emptyCrlDataSHA256']=R.sha(obj['data'])
+        with patch.object(R,'delete_record') as delete:
+            R.conditional_delete(driver,rec);delete.assert_called_once_with(driver,rec)
