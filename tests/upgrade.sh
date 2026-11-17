@@ -83,7 +83,7 @@ uds zarf tools yq -i '
   } |
   del(.packages[] | select(.name == "takserver") | .repository)
 ' "${work}/bundle/uds-bundle.yaml"
-if ! uds zarf package pull "${package}" --architecture="${arch}" --no-progress --features values=true -o "${work}"; then
+if ! uds zarf package pull "${package}" --architecture="${arch}" --features values=true -o "${work}"; then
   echo "::error title=Released package unavailable::Cannot pull ${package} for ${tag}. Publish this release's upstream ${arch} package before rerunning."
   exit 1
 fi

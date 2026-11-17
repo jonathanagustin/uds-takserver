@@ -2,14 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Apply the declared safety variant to exact published Lula 0.9.5 bytes.
 
-No network or execution. The output must be beside the installed official bundle
-so its original external dependency resolution remains intact.
+No network or execution. The output must be beside its verified official input.
+The workflow extracts the standalone crawl module and installs only its locked
+external dependencies; callers may also patch an existing official installation.
 """
 import argparse
 import base64
 import hashlib
 import json
 from pathlib import Path
+import tarfile
 
 INPUTS = {
     "bbc727ec333f3d61e9945407bdb62b3a0e3b48590766c5968adbc1dedf6d9612": "cli/commands/crawl.js",
@@ -22,6 +24,27 @@ def verify_archive(path):
     digest = "sha512-" + base64.b64encode(hashlib.sha512(path.read_bytes()).digest()).decode()
     if digest != lock["tarballIntegrity"]:
         raise ValueError("Official Lula archive integrity mismatch")
+
+
+def extract_crawl(archive_path, source_path):
+    """Extract only the hashed crawl module and check its external versions."""
+    verify_archive(archive_path)
+    lock = json.loads(Path(__file__).with_name("source.lock.json").read_text())
+    with tarfile.open(archive_path, "r:gz") as archive:
+        def read(name):
+            member = archive.getmember("package/" + name)
+            if not member.isfile() or not 0 < member.size <= 1024 * 1024:
+                raise ValueError("Expected a bounded regular official archive member")
+            return archive.extractfile(member).read(1024 * 1024 + 1)
+        raw = read("dist/cli/commands/crawl.js")
+        if hashlib.sha256(raw).hexdigest() != lock["officialFiles"]["dist/cli/commands/crawl.js"]:
+            raise ValueError("Unknown official crawl source digest")
+        metadata = json.loads(read("package.json"))
+        for name, version in lock["crawlRuntimeDependencies"].items():
+            if metadata["dependencies"].get(name) != version:
+                raise ValueError("Unexpected official crawl dependency version")
+    with source_path.open("xb") as destination:
+        destination.write(raw)
 
 
 def patch_source(source):
@@ -102,8 +125,11 @@ def prepare(source_path, output_path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", type=Path, required=True)
+    parser.add_argument("--extract-crawl", action="store_true")
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
     verify_archive(args.archive)
+    if args.extract_crawl:
+        extract_crawl(args.archive, args.source)
     prepare(args.source, args.output)

@@ -13,7 +13,7 @@ TERMINATION_SECONDS = 10
 
 def publish(archive, repository, tag, seconds=PUBLICATION_SECONDS, grace=TERMINATION_SECONDS):
     command = ['uds', 'zarf', 'package', 'publish', archive, repository,
-               '--tag', tag, '--retries', '3', '--confirm', '--no-progress']
+               '--tag', tag, '--retries', '3']
     child = subprocess.Popen(command, stdin=subprocess.DEVNULL, start_new_session=True)
     try:
         try:
