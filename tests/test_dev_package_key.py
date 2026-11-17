@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Exercise the real package key without building a package."""
 import os
+import shutil
 import importlib.util
 import hashlib
 import json
@@ -15,6 +16,7 @@ import time
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / '.github/scripts/dev-package.sh'
+BASH = os.environ.get('DEV_PACKAGE_TEST_BASH', shutil.which('bash'))
 PUBLISH_SCRIPT = SCRIPT.with_name('publish-dev-package.py')
 SPEC = importlib.util.spec_from_file_location('owned_package_publication', PUBLISH_SCRIPT)
 PUBLISH = importlib.util.module_from_spec(SPEC)
@@ -60,7 +62,7 @@ else: sys.exit(99)
         for case in ('exists', 'missing', 'publish'):
             with self.subTest(case=case):
                 root, env, archive = self.fixture()
-                key = subprocess.check_output(['bash', str(SCRIPT), 'key'], cwd=root, env=env).decode().strip()
+                key = subprocess.check_output([BASH, str(SCRIPT), 'key'], cwd=root, env=env).decode().strip()
                 before = archive.read_bytes()
                 if case == 'exists':
                     env['PUBLISH_EXISTS'] = 'true'
@@ -68,7 +70,7 @@ else: sys.exit(99)
                     archive.unlink()
                 elif case == 'missing':
                     archive.unlink()
-                result = subprocess.run(['bash', str(SCRIPT), 'publish'], cwd=root, env=env,
+                result = subprocess.run([BASH, str(SCRIPT), 'publish'], cwd=root, env=env,
                                         capture_output=True, timeout=10)
                 calls = [json.loads(line) for line in (root / 'calls.jsonl').read_text().splitlines()]
                 publications = [call for call in calls if call[:3] == ['zarf', 'package', 'publish']]
@@ -87,7 +89,7 @@ else: sys.exit(99)
         root, env, archive = self.fixture()
         env['PUBLISH_EXIT'] = '17'
         before = archive.read_bytes()
-        result = subprocess.run(['bash', str(SCRIPT), 'publish'], cwd=root, env=env,
+        result = subprocess.run([BASH, str(SCRIPT), 'publish'], cwd=root, env=env,
                                 capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 17)
         calls = [json.loads(line) for line in (root / 'calls.jsonl').read_text().splitlines()]
@@ -95,6 +97,50 @@ else: sys.exit(99)
         self.assertEqual(archive.read_bytes(), before)
         self.assertNotIn(b'dev-package: published', result.stdout)
         self.assertIn(b'fixture publisher stderr', result.stderr)
+
+    def test_hash_failures_emit_no_reference_and_never_contact_registry(self):
+        for failure in ('missing-tools', 'file-hash', 'aggregate-hash', 'missing-gitmodules'):
+            for operation in ('key', 'ref', 'prebuilt', 'publish'):
+                with self.subTest(failure=failure, operation=operation):
+                    root, env, _ = self.fixture()
+                    tools = root / 'bin'
+                    for name in ('git', 'uname', 'python3'):
+                        (tools / name).symlink_to(shutil.which(name))
+                    env['PATH'] = str(tools)
+                    if failure != 'missing-tools':
+                        tool = tools / 'sha256sum'
+                        tool.write_text('#!' + sys.executable + "\nimport json,os,sys\nargs=sys.argv[1:]\nif (os.environ['HASH_FAILURE']=='file-hash' and args) or (os.environ['HASH_FAILURE']=='aggregate-hash' and not args): sys.exit(19)\nos.execv(os.environ['FIXTURE_HASH_TOOL'],[os.environ['FIXTURE_HASH_TOOL'],*json.loads(os.environ['FIXTURE_HASH_PREFIX']),*args])\n")
+                        tool.chmod(0o755)
+                        env['HASH_FAILURE'] = failure
+                        env['FIXTURE_HASH_TOOL'] = shutil.which('sha256sum') or shutil.which('shasum')
+                        env['FIXTURE_HASH_PREFIX'] = json.dumps([] if shutil.which('sha256sum') else ['-a','256'])
+                    if failure == 'missing-gitmodules':
+                        modules = root / '.gitmodules';modules.write_text('')
+                        subprocess.run(['git','-C',str(root),'add','.gitmodules'],check=True)
+                        modules.unlink()
+                    result = subprocess.run([BASH, str(SCRIPT), operation],cwd=root,env=env,capture_output=True,timeout=10)
+                    self.assertNotEqual(result.returncode,0)
+                    self.assertEqual(result.stdout,b'')
+                    calls = root / 'calls.jsonl'
+                    if calls.exists():
+                        self.assertTrue(all(json.loads(line)==['version'] for line in calls.read_text().splitlines()))
+
+    def test_shasum_only_path_matches_gnu_hash_and_preserves_publication(self):
+        root, env, _ = self.fixture()
+        expected = subprocess.check_output([BASH,str(SCRIPT),'key'],cwd=root,env=env)
+        tools = root / 'bin'
+        for name in ('git','uname','python3','shasum'):
+            (tools / name).symlink_to(shutil.which(name))
+        env['PATH'] = str(tools)
+        self.assertEqual(subprocess.check_output([BASH,str(SCRIPT),'key'],cwd=root,env=env),expected)
+        result=subprocess.run([BASH,str(SCRIPT),'publish'],cwd=root,env=env,capture_output=True,timeout=10)
+        self.assertEqual(result.returncode,0,result.stderr)
+        calls=[json.loads(line) for line in (root/'calls.jsonl').read_text().splitlines()]
+        publications=[call for call in calls if call[:3]==['zarf','package','publish']]
+        self.assertEqual(len(publications),1)
+        self.assertEqual(publications[0][publications[0].index('--tag')+1],expected.decode().strip())
+        # One successful key capture supplies both existence lookup and publish tag.
+        self.assertEqual(calls.count(['version']),3)  # Two explicit key checks plus one publication key.
 
     def process_fixture(self, root):
         uds = root / 'uds'
@@ -172,7 +218,7 @@ class PackageKeyTests(unittest.TestCase):
             uds.chmod(0o755)
             env = dict(os.environ, PATH=f'{tools}:{os.environ["PATH"]}')
             def key():
-                return subprocess.check_output(['bash', str(SCRIPT), 'key'], cwd=root, env=env, text=True).strip()
+                return subprocess.check_output([BASH, str(SCRIPT), 'key'], cwd=root, env=env, text=True).strip()
             runtime = ['zarf.yaml', 'common/zarf.yaml', 'charts/cloudtak/files/icon.svg',
                        'values/common-values.yaml', 'assets/icon.svg']
             site = ['docs-site/src/content/docs/example.mdx', 'docs-site/astro.config.mjs',
@@ -219,7 +265,7 @@ class PackageKeyTests(unittest.TestCase):
             uds.chmod(0o755)
             env = dict(os.environ, PATH=f'{tools}:{os.environ["PATH"]}')
             def key():
-                return subprocess.check_output(['bash', str(SCRIPT), 'key'], cwd=root, env=env, text=True).strip()
+                return subprocess.check_output([BASH, str(SCRIPT), 'key'], cwd=root, env=env, text=True).strip()
             runtime = ['zarf.yaml', 'common/zarf.yaml', 'charts/takserver/templates/server.yaml',
                        'pepr/src/policies.ts', 'values/upstream-values.yaml', 'tasks.yaml',
                        'mise.toml', '.gitattributes', 'runtime-helper.sh',
@@ -264,7 +310,7 @@ class PackageKeyTests(unittest.TestCase):
             uds.chmod(0o755)
             env = dict(os.environ, PATH=f'{tools}:{os.environ["PATH"]}')
             def key():
-                return subprocess.check_output(['bash', str(SCRIPT), 'key'], cwd=root, env=env, text=True).strip()
+                return subprocess.check_output([BASH, str(SCRIPT), 'key'], cwd=root, env=env, text=True).strip()
             modules = root / '.gitmodules'
             modules.write_text('[submodule "upstream/takserver"]\n\tpath = upstream/takserver\n\turl = https://example.test/server\n[submodule "upstream/cloudtak"]\n\tpath = upstream/cloudtak\n\turl = https://example.test/cloud\n')
             for name in ['values.yaml', 'zarf.yaml', 'tasks.yaml']:

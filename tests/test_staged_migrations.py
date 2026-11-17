@@ -230,6 +230,18 @@ class StagedMigrationTests(unittest.TestCase):
         self.assertEqual(subprocess.check_output(['git', 'diff', '--name-only'], cwd=root).decode().splitlines(),
                          [name for name in changed if name != 'tasks.yaml'])
 
+    def test_owner_helper_inventory_survives_real_reviewed_pin_and_task_restoration(self):
+        root,candidate,env=self.pinned_fixture()
+        spec=importlib.util.spec_from_file_location('pinned_owner_provider',root/'tests/velero-ownership/source_provider.py')
+        provider=importlib.util.module_from_spec(spec);spec.loader.exec_module(provider)
+        binding={'sourceSHA':env['GITHUB_SHA'],'runID':env['GITHUB_RUN_ID'],'runAttempt':env['GITHUB_RUN_ATTEMPT']}
+        pinned=provider.helper_inventory(binding)
+        self.assertNotIn('tasks.yaml',pinned)
+        with patch.object(S,'ROOT',root),patch.dict(os.environ,env,clear=True):S.restore_task_default(candidate)
+        self.assertEqual(provider.helper_inventory(binding),pinned)
+        reviewed=subprocess.check_output(['git','show',binding['sourceSHA']+':tasks.yaml'],cwd=root)
+        self.assertEqual((root/'tasks.yaml').read_bytes(),reviewed)
+
     def test_restoration_refuses_unrelated_missing_duplicate_and_symlink_without_writing(self):
         for failure in ('unrelated', 'missing', 'duplicate', 'symlink', 'helper', 'version', 'pin-helper',
                         'plan', 'archive', 'config', 'oversized-config', 'oversized-plan'):
