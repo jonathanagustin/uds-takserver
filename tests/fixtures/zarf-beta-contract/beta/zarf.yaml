@@ -10,29 +10,6 @@ values:
   - values.yaml
 components:
 - name: contract
-  charts:
-  - name: contract
-    namespace: default
+  import:
     local:
-      path: ../chart
-    values:
-    - sourcePath: .global.domain
-      targetPath: .record.DOMAIN
-    - sourcePath: .tak.imageTag
-      targetPath: .record.TAK_IMAGE_TAG
-    - sourcePath: .dns.inCluster
-      targetPath: .record.IN_CLUSTER_DNS
-    - sourcePath: .dns.passthroughHosts
-      targetPath: .record.PASSTHROUGH_HOSTS
-    - sourcePath: .tak.plugins.memoryRequest
-      targetPath: .record.PLUGINS_MEMORY_REQUEST
-    - sourcePath: .tak.plugins.memoryLimit
-      targetPath: .record.PLUGINS_MEMORY_LIMIT
-    - sourcePath: .backup.filesystem.enabled
-      targetPath: .record.FILESYSTEM_BACKUP
-    - sourcePath: .backup.filesystem.owner
-      targetPath: .record.FILESYSTEM_BACKUP_OWNER
-    - sourcePath: .storage.postgresClass
-      targetPath: .record.POSTGRES_STORAGE_CLASS
-    - sourcePath: .storage.cloudtakClass
-      targetPath: .record.CLOUDTAK_STORAGE_CLASS
+    - path: common/zarf.yaml
