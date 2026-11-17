@@ -195,6 +195,11 @@ queued run invalidates older green evidence. Other applicable runs must be compl
 first attempts: an older run ID can have a later rerun, whose order is unproven.
 An older settled first-attempt failure or cancellation may be superseded by the
 newer successful run. The checker does not infer rerun order from timestamps.
+After downloading and comparing the artifact bytes, it reads the selected run
+and all bounded run-list pages again under the same policy. A newly requested
+rerun, newer applicable run, changed result or unavailable final read prevents
+historical qualification. These are point-in-time observations; GitHub does not
+provide an atomic snapshot across these requests, so they cannot authorize reuse.
 Positively identified foreign forks
 remain ineligible. It verifies the signed receipt subject, workflow, GitHub issuer,
 numeric repository identity and exact run/attempt invocation. It also downloads the
