@@ -18,6 +18,8 @@ class AgentGateTests(unittest.TestCase):
             'uds', 'zarf', 'tools', 'yq', '-o=json', '.',
             str(ROOT / 'tests/upgrade-agent-gate/zarf.yaml')], text=True)
         package = json.loads(result)
+        self.assertEqual(package['apiVersion'], 'zarf.dev/v1beta1')
+        self.assertFalse(package['components'][0].get('optional', False))
         actions = package['components'][0]['actions']['onDeploy']['before']
         self.assertEqual([a['maxTotalSeconds'] for a in actions], [300, 45, 15])
         self.assertEqual([a['wait']['cluster']['condition'] for a in actions], [
@@ -27,8 +29,8 @@ class AgentGateTests(unittest.TestCase):
         self.assertNotIn('images', package['components'][0])
         component = package['components'][0]
         self.assertEqual(component['files'], [{'source': 'live-health.py',
-                                              'target': '.cache/upgrade-agent-gate/live-health.py'}])
-        self.assertEqual(component['actions']['onDeploy']['after'], [{
+                                              'destination': '.cache/upgrade-agent-gate/live-health.py'}])
+        self.assertEqual(component['actions']['onDeploy']['onSuccess'], [{
             'description': 'Probe live agent HTTPS health through the Kubernetes API',
             'maxTotalSeconds': 40, 'cmd': 'python3 .cache/upgrade-agent-gate/live-health.py'}])
         self.assertNotIn('serves', actions[-1]['description'])
