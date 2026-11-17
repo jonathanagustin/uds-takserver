@@ -678,6 +678,30 @@ def identity_failure_callsites(directory, diagnostic=False):
     return result
 
 
+def owner_command_failure(directory, failed_step, binding):
+    """Allow only the failed source-owned stage's numeric process outcome."""
+    try:
+        journal = bounded_json(directory / 'owner/journal.json')
+        require(type(journal.get('schema')) is int and journal['schema'] == 1 and journal.get('accepted') is False
+                and journal.get('driverSHA256') == sha(ROOT / 'tests/velero-ownership/drive.py')
+                and all(journal['cluster'].get(key) == value for key, value in binding.items()),
+                'command diagnostic source/run differs')
+        entries = [entry for entry in journal['steps']
+                   if entry.get('name') == failed_step and entry.get('status') == 'failed']
+        require(failed_step in OWNER_STEPS and len(entries) == 1, 'command diagnostic stage differs')
+        value = entries[0]['commandFailure']
+        require(type(value) is dict and set(value) == {'exitStatus', 'terminationReason'}
+                and type(value['exitStatus']) is int and -255 <= value['exitStatus'] <= 255,
+                'invalid command exit metadata')
+        reason, code = value['terminationReason'], value['exitStatus']
+        require(type(reason) is str and reason in ('nonzero-exit', 'signal', 'timeout', 'stdout-limit')
+                and (reason != 'nonzero-exit' or code > 0) and (reason != 'signal' or code < 0),
+                'invalid command termination metadata')
+        return {'exitStatus': code, 'terminationReason': reason}
+    except (ValueError, OSError, KeyError, TypeError, AttributeError):
+        return None
+
+
 def failure_categories(directory, progress):
     """Read one bounded regular private file; publish only fixed IDs/counts."""
     source, run, attempt = (os.environ.get(key, '') for key in
@@ -689,6 +713,10 @@ def failure_categories(directory, progress):
     result = {'schema': 1, 'sourceSHA': source, 'runID': run, 'runAttempt': attempt,
               'failedStep': failed[-1] if failed else 'unavailable',
               'scope': 'retained-tail-signatures-only', 'status': 'unavailable', 'categories': []}
+    command = owner_command_failure(directory, result['failedStep'],
+                                    {'sourceSHA': source, 'runID': run, 'runAttempt': attempt})
+    if command is not None:
+        result['commandFailure'] = command
     if 'identities' in SCENARIOS.get(os.environ.get('SCENARIO'), []):
         calls = identity_failure_callsites(directory)
         result['identityFailures'] = calls

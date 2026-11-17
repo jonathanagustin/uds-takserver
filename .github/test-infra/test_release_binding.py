@@ -191,6 +191,27 @@ class BindingTests(unittest.TestCase):
         self.assertEqual(signing['with']['subject-digest'],'${{ steps.index.outputs.digest }}')
         self.assertNotIn('predicate-type',steps[names.index(expected[0])]['with'])
 
+    def test_slsa_step_reads_registry_bundle_and_keeps_verifier_failure_fatal(self):
+        root=Path(__file__).resolve().parents[2]
+        job=yaml.load((root/'.github/workflows/release.yaml').read_text(),Loader=yaml.BaseLoader)['jobs']['provenance']
+        step=next(s for s in job['steps'] if s['name']=='Verify the provenance')
+        subject='ghcr.io/'+B.REPO+'/takserver@sha256:'+'a'*64
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory);capture=path/'arguments.json'
+            helper=path/'gh'
+            helper.write_text('#!'+sys.executable+'\nimport json,os,sys\n'
+                              'open(os.environ["CAPTURE"],"w").write(json.dumps(sys.argv[1:]))\n'
+                              'sys.exit(int(os.environ["VERIFY_EXIT"]))\n')
+            helper.chmod(0o755)
+            for code in (0,7):
+                env={**os.environ,'PATH':directory,'CAPTURE':str(capture),'VERIFY_EXIT':str(code),
+                     'SUBJECT':subject,'GITHUB_REPOSITORY':B.REPO,'GITHUB_REPOSITORY_OWNER':'wrong-owner'}
+                result=subprocess.run(['/bin/bash','-c',step['run']],env=env,capture_output=True,timeout=10)
+                self.assertEqual(result.returncode,code)
+                self.assertEqual(json.loads(capture.read_text()),[
+                    'attestation','verify','oci://'+subject,'--bundle-from-oci','--repo',B.REPO,
+                    '--signer-workflow',B.REPO+'/.github/workflows/release.yaml'])
+
     def test_rerun_selects_exact_authenticated_attempt_without_old_substitution(self):
         old=self.output()
         self.metadata['workflow']['runAttempt']='2'

@@ -302,8 +302,8 @@ jobs:
           gh release upload "${RELEASE_TAG}" "${RUNNER_TEMP}/${BUNDLE_NAME}" "${RUNNER_TEMP}/${INTOTO_NAME}" \
             --clobber --repo "${GITHUB_REPOSITORY}"
 
-      # Check the attestation the way the README tells users to, against
-      # the registry copy and this workflow as the signer.
+      # Read the registry copy explicitly; the CLI otherwise queries the
+      # GitHub attestation API. Scope certificate identity to this repository.
       - name: Verify the provenance
         env:
           GH_TOKEN: ${{ github.token }}
@@ -312,7 +312,7 @@ jobs:
         run: |
           set -euo pipefail
           gh attestation verify "oci://${SUBJECT}" \
-            --owner "${GITHUB_REPOSITORY_OWNER}" \
+            --bundle-from-oci --repo "${GITHUB_REPOSITORY}" \
             --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yaml"
       - name: Prepare checked application release binding
         env:
