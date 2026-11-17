@@ -9,6 +9,8 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+import subprocess
+import sys
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +33,14 @@ class OwnerProviderTests(unittest.TestCase):
             self.assertFalse(C.enabled())
         with patch.dict(os.environ, {'CORE_RESTORE_OWNER_TRIAL': 'yes'}, clear=True):
             with self.assertRaises(ValueError):C.enabled()
+
+    def test_intentional_task_pin_has_existing_separate_guard(self):
+        self.assertNotIn('tasks.yaml',C.HELPERS)
+        self.assertIn('.github/scripts/pin-image-tags.sh',C.HELPERS)
+        self.assertIn('.github/scripts/staged-migrations.py',C.HELPERS)
+        spec=importlib.util.spec_from_file_location('source_task_guard_driver',ROOT/'tests/velero-ownership/drive.py')
+        driver=importlib.util.module_from_spec(spec);spec.loader.exec_module(driver)
+        self.assertIn('tasks.yaml',driver.REVIEWED_HELPERS)
 
     def test_wrong_workflow_source_platform_and_identity_modes_are_refused(self):
         changes = {'GITHUB_EVENT_NAME': 'pull_request', 'GITHUB_REF': 'refs/heads/topic',
@@ -55,24 +65,28 @@ class OwnerProviderTests(unittest.TestCase):
         value = {'packageSHA256': C.B.digest(directory / name)}
         (directory / 'provider.json').write_text(json.dumps(value))
         (verification / 'verify-signature.log').write_text('synthetic-signature-verification')
+        (verification / 'package-manifest.log').write_text('sha256:'+'b'*64+'\n')
         (verification / 'verified.json').write_text(json.dumps({'schema': 1, 'signatureVerified': True,
             'certificateIdentity': C.B.IDENTITY, 'providerSHA256': C.B.digest(directory / 'provider.json'),
             'packageSHA256': value['packageSHA256'], 'logSHA256': C.B.digest(verification / 'verify-signature.log')}))
         pins = C.inventory(directory)
-        captured = {'schema': 1, 'sourceSHA': 'a' * 40, 'runID': '123', 'runAttempt': '1',
+        captured = {'schema': 2, 'sourceSHA': 'a' * 40, 'runID': '123', 'runAttempt': '1',
                     'architecture': 'amd64', 'files': pins, 'packageSHA256': value['packageSHA256'],
-                    'providerSHA256': pins['provider.json'], 'restoreHelperSHA256': C.B.digest(ROOT / C.HELPER)}
+                    'providerSHA256': pins['provider.json'], 'restoreHelperSHA256': C.B.digest(ROOT / C.HELPER),
+                    'helperSHA256': {name:C.B.digest(ROOT/name) for name in C.HELPERS},
+                    'packageManifestDigest': 'sha256:'+'b'*64}
         (verification / 'owner-inputs.json').write_text(json.dumps(captured))
         return directory, verification, captured
 
     def test_receipt_rejects_changed_payload_signature_log_metadata_and_run(self):
-        for change in ('payload', 'log', 'signature', 'run', 'attempt', 'source', 'extra', 'symlink'):
+        for change in ('payload', 'log', 'manifest-log', 'signature', 'run', 'attempt', 'source', 'extra', 'symlink'):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as temporary:
                 directory, verification, captured = self.fixture(temporary)
-                with patch.dict(os.environ, self.environment(), clear=True), patch.object(C, 'paths', return_value=(directory, verification)), patch.object(C.B, 'verify_recipe'), patch.object(C.B, 'validate_provider'):
+                with patch.dict(os.environ, self.environment(), clear=True), patch.object(C, 'paths', return_value=(directory, verification)), patch.object(C.B, 'verify_recipe'), patch.object(C.B, 'validate_provider'), patch.object(C, 'helper_inventory', return_value=captured['helperSHA256']):
                     self.assertEqual(C.receipt(), captured)
                     if change == 'payload':(directory / 'change.patch').write_text('changed')
                     elif change == 'log':(verification / 'verify-signature.log').write_text('changed')
+                    elif change == 'manifest-log':(verification / 'package-manifest.log').write_text('sha256:'+'c'*64+'\n')
                     elif change == 'signature':
                         p=verification / 'verified.json';v=json.loads(p.read_text());v['signatureVerified']=False;p.write_text(json.dumps(v))
                     elif change in ('run', 'attempt', 'source'):
@@ -81,6 +95,62 @@ class OwnerProviderTests(unittest.TestCase):
                     else:
                         p=directory / 'change.patch';p.unlink();p.symlink_to(directory / 'LICENSE.md')
                     with self.assertRaises(ValueError):C.receipt()
+
+    def test_every_runtime_helper_is_compared_to_exact_workflow_source_and_drift_refuses(self):
+        binding={'sourceSHA':'a'*40,'runID':'123','runAttempt':'1'}
+        originals={name:(ROOT/name).read_bytes() for name in C.HELPERS}
+        with tempfile.TemporaryDirectory() as temporary:
+            folder=Path(temporary)
+            for name,data in originals.items():
+                path=folder/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(data)
+            calls=[]
+            def show(argv,**kwargs):
+                calls.append((argv,kwargs))
+                self.assertIn('--no-replace-objects',argv)
+                self.assertEqual(kwargs['env']['GIT_NO_LAZY_FETCH'],'1')
+                self.assertTrue(argv[-1].startswith(binding['sourceSHA']+':'))
+                return subprocess.CompletedProcess(argv,0,originals[argv[-1].split(':',1)[1]],b'')
+            with patch.object(C,'ROOT',folder),patch.object(C.subprocess,'run',side_effect=show):
+                self.assertEqual(set(C.helper_inventory(binding)),set(C.HELPERS))
+                self.assertEqual(len(calls),len(C.HELPERS))
+                for name in C.HELPERS:
+                    path=folder/name;path.write_bytes(originals[name]+b'\n# changed\n')
+                    with self.subTest(helper=name),self.assertRaisesRegex(ValueError,'runtime helper differs'):
+                        C.helper_inventory(binding)
+                    path.write_bytes(originals[name])
+
+    def test_policy_and_controller_drift_after_construction_prevents_restore_dispatch(self):
+        spec=importlib.util.spec_from_file_location('source_restore_drift_driver',ROOT/'tests/velero-ownership/drive.py')
+        driver=importlib.util.module_from_spec(spec);spec.loader.exec_module(driver)
+        for name in ('tests/velero-controller-restore-policy.yaml','.github/scripts/velero-controller-state.py'):
+            with self.subTest(helper=name),tempfile.TemporaryDirectory() as temporary:
+                directory,verification,captured=self.fixture(temporary)
+                changed={**captured['helperSHA256'],name:'c'*64}
+                obj=object.__new__(driver.Driver);obj.core_provider=captured;obj.restore_helper=C.HELPER
+                obj.idle=lambda:None;obj.guarded=lambda:None
+                with patch.dict(os.environ,self.environment(),clear=True),patch.object(driver,'source_provider',return_value=C), \
+                     patch.object(C,'paths',return_value=(directory,verification)),patch.object(C.B,'verify_recipe'), \
+                     patch.object(C.B,'validate_provider'),patch.object(C,'helper_inventory',return_value=changed), \
+                     patch.object(obj,'execute',create=True) as execute:
+                    with self.assertRaisesRegex(ValueError,'changed after verification'):obj.accept('fresh-core','fresh','fresh')
+                    execute.assert_not_called()
+
+    def test_digest_uses_supported_quiet_flags_and_is_not_a_signature_command(self):
+        # This executable is a structural CLI fixture, not a signature proof.
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);cli=root/'cli';verification=root/'verify';verification.mkdir()
+            cli.write_text('#!'+sys.executable+'\nimport json,sys\n'
+                           'assert "--log-level=error" in sys.argv and "--no-color" in sys.argv\n'
+                           'assert not any(a.startswith("--verify") for a in sys.argv)\n'
+                           'print("sha256:"+"b"*64)\n')
+            cli.chmod(0o755)
+            lock={'cli_sha256':C.B.digest(cli)}
+            with patch.object(C.B,'contract',return_value=lock):
+                self.assertEqual(C.manifest_digest(root/'package',cli,verification),'sha256:'+'b'*64)
+                cli.write_text(cli.read_text()+'sys.exit(7)\n')
+                lock['cli_sha256']=C.B.digest(cli)
+                other=root/'failed';other.mkdir()
+                with self.assertRaisesRegex(ValueError,'owned command failed'):C.manifest_digest(root/'package',cli,other)
 
     def test_only_backup_restore_package_source_and_signer_change(self):
         original = yaml.safe_load((ROOT / 'bundle/full/uds-bundle.yaml').read_text())

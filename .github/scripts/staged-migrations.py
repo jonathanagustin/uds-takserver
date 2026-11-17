@@ -80,7 +80,9 @@ def restore_task_default(directory):
     require(head.returncode == 0 and head.stdout.decode().strip() == os.environ.get('GITHUB_SHA'),
             'staged restoration source differs from checkout')
     plan = json.loads(regular(directory / 'plan.json', 65536))
-    require(set(plan) == {'schema', 'sourceSHA', 'files'} and plan['schema'] == 1
+    selected = os.environ.get('CORE_RESTORE_OWNER_TRIAL', 'false') == 'true'
+    require(set(plan) == ({'schema', 'sourceSHA', 'files', 'coreSourceProvider'} if selected else {'schema', 'sourceSHA', 'files'})
+            and plan['schema'] == (2 if selected else 1)
             and plan['sourceSHA'] == os.environ['GITHUB_SHA']
             and set(plan['files']) == {'core', 'detach', 'clean', 'config'}, 'valid bound candidate required')
     bound = {}
@@ -93,6 +95,13 @@ def restore_task_default(directory):
         regular_file(path)
         require(sha(path) == entry['sha256'], 'bound input changed')
         bound[key] = (path, entry['sha256'])
+    if selected:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('restoration_core_provider', ROOT / 'tests/velero-ownership/source_provider.py')
+        provider = importlib.util.module_from_spec(spec); spec.loader.exec_module(provider)
+        require(plan['coreSourceProvider'] == provider.receipt(), 'bound Core provider differs')
+        for name in ('core', 'detach', 'clean'):
+            provider.verify_bundle(bound[name][0], plan['coreSourceProvider'])
     task = ROOT / 'tasks.yaml'
     actual, reviewed = regular(task), reviewed_bytes('tasks.yaml')
     helpers = ('.github/container-and-chart/docker/build.sh', '.github/container-and-chart/docker/version.txt',

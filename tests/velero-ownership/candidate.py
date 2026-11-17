@@ -71,7 +71,7 @@ def main():
                         C.replace_package(package, dest)
             (dest / 'uds-bundle.yaml').write_text(yaml.safe_dump(doc, sort_keys=False))
         (directory / 'uds-config.yaml').write_bytes((ROOT / 'bundle/full/uds-config.yaml').read_bytes())
-        receipt = {'schema': 1, 'sourceSHA': os.environ.get('GITHUB_SHA'),
+        receipt = {'schema': 2 if provider else 1, 'sourceSHA': os.environ.get('GITHUB_SHA'),
                    'files': {str(p.relative_to(directory)): D.digest(p) for p in directory.rglob('*') if p.is_file()},
                    'exemptionSHA256': D.digest(args.exemption)}
         if provider:
@@ -79,8 +79,9 @@ def main():
         (directory / 'candidate.json').write_text(json.dumps(receipt, indent=2) + '\n')
     else:
         receipt = json.loads((directory / 'candidate.json').read_text())
-        D.require(receipt['schema'] == 1 and receipt['sourceSHA'] == os.environ.get('GITHUB_SHA'), 'candidate source changed')
-        if C.enabled():
+        enabled = C.enabled()
+        D.require(receipt['schema'] == (2 if enabled else 1) and receipt['sourceSHA'] == os.environ.get('GITHUB_SHA'), 'candidate source changed')
+        if enabled:
             D.require(receipt.get('coreSourceProvider') == C.receipt(), 'Core provider binding changed')
         else:
             D.require('coreSourceProvider' not in receipt, 'unexpected Core provider binding')
@@ -90,9 +91,14 @@ def main():
         for name in ('core', 'detach', 'clean'):
             matches = list((directory / name).glob('uds-bundle-*.tar.zst'))
             D.require(len(matches) == 1, 'exactly one built archive required for ' + name)
+            if enabled:
+                C.verify_bundle(matches[0], receipt['coreSourceProvider'])
             files[name] = {'path': str(matches[0].relative_to(directory)), 'sha256': D.digest(matches[0])}
+        plan = {'schema': 2 if enabled else 1, 'sourceSHA': receipt['sourceSHA'], 'files': files}
+        if enabled:
+            plan['coreSourceProvider'] = receipt['coreSourceProvider']
         with (directory / 'plan.json').open('x') as stream:
-            json.dump({'schema': 1, 'sourceSHA': receipt['sourceSHA'], 'files': files}, stream, indent=2)
+            json.dump(plan, stream, indent=2)
             stream.write('\n')
 
 

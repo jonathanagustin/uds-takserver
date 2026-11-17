@@ -8,6 +8,7 @@ import json
 import os
 import re
 from pathlib import Path
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location('owner_core_build', ROOT / '.github/test-infra/core-restore-source/build.py')
@@ -16,7 +17,63 @@ SPEC.loader.exec_module(B)
 HELPER = 'tests/backup-restore-controller-trial.sh'
 HELPERS = (HELPER, '.github/scripts/velero-controller-state.py', 'tests/velero-controller-restore-policy.yaml',
            'tests/velero-ownership/source_provider.py', 'tests/velero-ownership/candidate.py',
-           'tests/velero-ownership/prepare.py', '.github/scripts/staged-migrations.sh')
+           'tests/velero-ownership/prepare.py', 'tests/velero-ownership/source_bundle.py',
+           '.github/scripts/staged-migrations.sh', '.github/scripts/staged-migrations.py',
+           'tests/ephemeral-cluster.py', 'tests/velero-ownership/drive.py',
+           'tests/velero-ownership/transfer.py', 'tests/velero-ownership/observe.py',
+           'tests/backup-restore.sh', 'tests/backup-names.sh', 'tests/api-smoke.sh',
+           'tests/extract-certs.sh', 'tests/keystore-pass.sh', 'tests/db-dump-secret.sh',
+           'tests/ensure-tak-group.py', 'tasks/test.yaml', '.github/scripts/pin-image-tags.sh',
+           '.github/scripts/checked-pipe.sh', '.github/scripts/redact-then-filter.sh',
+           '.github/scripts/redact-logs.py', '.github/scripts/node-agent-ready.sh')
+
+
+def helper_inventory(binding):
+    """Freeze the complete runtime helper inventory to this workflow's source."""
+    # tasks.yaml deliberately carries the reviewed pin-image-tags transform
+    # until restore-task-default validates and restores it after archive binding.
+    # That existing guard is itself in HELPERS; Driver.verify_helpers then
+    # requires exact tasks.yaml bytes before any owner deployment.
+    env = {'PATH': '/usr/bin:/bin', 'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_NO_LAZY_FETCH': '1', 'GIT_OPTIONAL_LOCKS': '0'}
+    if 'HOME' in os.environ:
+        env['HOME'] = os.environ['HOME']
+    result = {}
+    for relative in HELPERS:
+        path = B.regular(ROOT / relative, 4 * 1024**2)
+        reviewed = subprocess.run(['/usr/bin/git', '--no-replace-objects', '-C', str(ROOT), 'show',
+                                   binding['sourceSHA'] + ':' + relative], env=env, timeout=20,
+                                  check=True, capture_output=True)
+        B.require(len(reviewed.stdout) <= 4 * 1024**2 and reviewed.stdout == path.read_bytes(),
+                  'owner runtime helper differs from workflow source')
+        result[relative] = B.byte_digest(reviewed.stdout)
+    return result
+
+
+def bundle_reader():
+    spec = importlib.util.spec_from_file_location('owner_bundle_reader', Path(__file__).with_name('source_bundle.py'))
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    return module
+
+
+def manifest_digest(package, cli, verification):
+    """Read canonical identity only AFTER verify_provider's real signature check."""
+    cli = B.regular(Path(cli).resolve(), 256 * 1024**2)
+    B.require(B.digest(cli) == B.contract()['cli_sha256'], 'unreviewed UDS CLI payload')
+    spec = importlib.util.spec_from_file_location('owner_digest_runner', ROOT / 'takx/native-commoncommo/runner.py')
+    runner = importlib.util.module_from_spec(spec); spec.loader.exec_module(runner)
+    env = {k: os.environ[k] for k in ('HOME', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+           'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR') if k in os.environ}
+    env.update(PATH='/usr/bin:/bin', LC_ALL='C', KUBECONFIG=str(verification / 'empty-kubeconfig'))
+    # UDS0.41 digest does not support signature flags. Its stderr warning would
+    # contaminate the bounded merged output; the supported quiet flags suppress
+    # that warning. This command cannot substitute for verify_provider.
+    raw = runner.execute([str(cli), 'zarf', 'package', 'inspect', 'digest', str(package),
+                          '--tmpdir', str(verification / 'tmp'), '--log-level=error', '--no-color'],
+                         verification, 'package-manifest', 60, env, capture=True,
+                         disk_limit=1024**3, log_limit=1024)
+    digest = raw.decode().strip()
+    B.require(re.fullmatch('sha256:[a-f0-9]{64}', digest), 'canonical package manifest digest differs')
+    return digest
 
 
 def enabled():
@@ -51,8 +108,9 @@ def receipt():
     directory, verification = paths()
     binding, lock = B.context(), B.contract()
     B.verify_recipe(binding)
+    helpers = helper_inventory(binding)
     pins = inventory(directory)
-    value = json.loads((directory / 'provider.json').read_text(), object_pairs_hook=B.unique)
+    value = json.loads(B.regular(directory / 'provider.json', 256 * 1024).read_bytes(), object_pairs_hook=B.unique)
     B.validate_provider(value, binding, lock)
     verified = json.loads(B.regular(verification / 'verified.json', 256 * 1024).read_text(), object_pairs_hook=B.unique)
     B.require(set(verified) == {'schema', 'providerSHA256', 'packageSHA256', 'signatureVerified', 'certificateIdentity', 'logSHA256'}
@@ -62,9 +120,11 @@ def receipt():
               B.digest(B.regular(verification / 'verify-signature.log', 4 * 1024**2)) == verified['logSHA256'],
               'same-run signature verification differs')
     captured = json.loads(B.regular(verification / 'owner-inputs.json', 256 * 1024).read_text(), object_pairs_hook=B.unique)
-    result = {'schema': 1, **binding, 'architecture': B.architecture(), 'files': pins,
+    manifest = B.regular(verification / 'package-manifest.log', 1024).read_text().strip()
+    B.require(re.fullmatch('sha256:[a-f0-9]{64}', manifest), 'captured package manifest differs')
+    result = {'schema': 2, **binding, 'architecture': B.architecture(), 'files': pins,
               'packageSHA256': value['packageSHA256'], 'providerSHA256': pins['provider.json'],
-              'restoreHelperSHA256': B.digest(ROOT / HELPER)}
+              'restoreHelperSHA256': helpers[HELPER], 'helperSHA256': helpers, 'packageManifestDigest': manifest}
     B.require(captured == result, 'same-run provider changed after verification')
     return result
 
@@ -73,16 +133,28 @@ def verify(cli):
     directory, verification = paths()
     binding = B.context()
     B.verify_recipe(binding)
+    helpers = helper_inventory(binding)
     before = inventory(directory)
     value = B.verify_provider(directory, cli, verification)
-    B.require(inventory(directory) == before, 'same-run provider changed during verification')
-    result = {'schema': 1, **binding, 'architecture': B.architecture(), 'files': before,
+    package = next(directory / name for name in before if name.startswith('zarf-package-'))
+    manifest = manifest_digest(package, cli, verification)
+    B.require(inventory(directory) == before and helper_inventory(binding) == helpers,
+              'same-run provider or helpers changed during verification')
+    result = {'schema': 2, **binding, 'architecture': B.architecture(), 'files': before,
               'packageSHA256': value['packageSHA256'], 'providerSHA256': before['provider.json'],
-              'restoreHelperSHA256': B.digest(ROOT / HELPER)}
+              'restoreHelperSHA256': helpers[HELPER], 'helperSHA256': helpers, 'packageManifestDigest': manifest}
     with (verification / 'owner-inputs.json').open('x') as stream:
         json.dump(result, stream, indent=2)
         stream.write('\n')
     receipt()
+
+
+def verify_bundle(path, expected):
+    B.require(receipt() == expected, 'Core provider changed before bundle use')
+    directory, _ = paths()
+    digest = bundle_reader().inspect_bundle(path, expected, directory)
+    B.require(receipt() == expected, 'Core provider changed during bundle inspection')
+    return digest
 
 
 def replace_package(package, destination):
