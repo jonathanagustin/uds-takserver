@@ -13,11 +13,14 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import resource
+import selectors
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -282,13 +285,42 @@ def child(command, *, environment=None, timeout=300, limit=SCAN_LIMIT):
         environment = dict(os.environ if environment is None else environment)
         environment['GH_HOST'] = 'github.com'
         environment['GH_REPO'] = REPO
-    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
-        result = subprocess.run(command, stdout=stdout, stderr=stderr, env=environment,
-                                timeout=timeout, check=False, preexec_fn=limits)
-        require(result.returncode == 0, 'tool_failed')
-        require(stdout.tell() <= limit and stderr.tell() <= limit, 'tool_output_limit')
-        stdout.seek(0)
-        return stdout.read(limit + 1)
+    deadline = time.monotonic() + timeout
+    output = bytearray()
+    counts = {'stdout': 0, 'stderr': 0}
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          env=environment, start_new_session=True, preexec_fn=limits) as process:
+        try:
+            with selectors.DefaultSelector() as selector:
+                for stream, name in ((process.stdout, 'stdout'), (process.stderr, 'stderr')):
+                    os.set_blocking(stream.fileno(), False)
+                    selector.register(stream, selectors.EVENT_READ, name)
+                while selector.get_map():
+                    remaining = deadline - time.monotonic()
+                    require(remaining > 0, 'tool_timeout')
+                    for key, _ in selector.select(min(remaining, 1)):
+                        name = key.data
+                        block = os.read(key.fd, min(65536, limit - counts[name] + 1))
+                        if not block:
+                            selector.unregister(key.fileobj)
+                            continue
+                        counts[name] += len(block)
+                        require(counts[name] <= limit, 'tool_output_limit')
+                        if name == 'stdout':
+                            output.extend(block)
+            try:
+                result = process.wait(timeout=max(0.001, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                raise Rejected('tool_timeout') from None
+            require(result == 0, 'tool_failed')
+        except BaseException:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+            raise
+    return bytes(output)
 
 
 def database_snapshot(directory):

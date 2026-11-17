@@ -510,15 +510,43 @@ class ReleaseProviderTests(unittest.TestCase):
 
 class HostAndPrivacyTests(unittest.TestCase):
     def test_github_calls_pin_host_without_mutating_parent_environment(self):
-        def run(command, **options):
-            self.assertEqual(options['env']['GH_HOST'], 'github.com')
-            self.assertEqual(options['env']['GH_REPO'], S.REPO)
-            options['stdout'].write(b'{}')
-            return subprocess.CompletedProcess(command, 0)
-        with patch.dict(os.environ, {'GH_HOST': 'other.example', 'GH_REPO': 'other/repo'}), \
-                patch.object(S.subprocess, 'run', side_effect=run):
-            self.assertEqual(S.child(['gh', 'api', '--hostname', 'github.com', 'repos/' + S.REPO]), b'{}')
-            self.assertEqual(os.environ['GH_HOST'], 'other.example')
+        with tempfile.TemporaryDirectory() as directory:
+            helper = Path(directory) / 'gh'
+            helper.write_text('#!' + sys.executable + '\nimport json,os\n'
+                              'print(json.dumps([os.environ["GH_HOST"],os.environ["GH_REPO"]]))\n')
+            helper.chmod(0o700)
+            with patch.dict(os.environ, {'GH_HOST': 'other.example', 'GH_REPO': 'other/repo'}):
+                self.assertEqual(json.loads(S.child([str(helper)])), ['github.com', S.REPO])
+                self.assertEqual(os.environ['GH_HOST'], 'other.example')
+
+    def test_capture_overflow_stops_child_before_later_actions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for stream in (1, 2):
+                with self.subTest(stream=stream):
+                    pid = Path(directory) / f'pid-{stream}'
+                    marker = Path(directory) / f'late-{stream}'
+                    code = ('from pathlib import Path;import os,time;'
+                            f'Path({str(pid)!r}).write_text(str(os.getpid()));'
+                            f'os.write({stream}, b"x"*8192);time.sleep(2);'
+                            f'Path({str(marker)!r}).write_text("must not execute")')
+                    with self.assertRaisesRegex(S.Rejected, '^tool_output_limit$'):
+                        S.child([sys.executable, '-c', code], limit=1024, timeout=5)
+                    self.assertFalse(marker.exists())
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(int(pid.read_text()), 0)
+
+    def test_timeout_applies_after_both_capture_streams_close(self):
+        code = 'import os,time;os.close(1);os.close(2);time.sleep(5)'
+        with self.assertRaisesRegex(S.Rejected, '^tool_timeout$'):
+            S.child([sys.executable, '-c', code], timeout=0.2)
+
+    def test_scanner_data_file_is_separate_from_capture_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory) / 'scanner-data'
+            code = ('from pathlib import Path;'
+                    f'Path({str(data)!r}).write_bytes(b"x"*1048576);print("ok")')
+            self.assertEqual(S.child([sys.executable, '-c', code], limit=16), b'ok\n')
+            self.assertEqual(data.stat().st_size, 1048576)
 
     def test_invalid_manifest_diagnostics_do_not_echo_source_payload(self):
         with tempfile.TemporaryDirectory() as directory:
