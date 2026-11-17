@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "source_run_id": 42940218710,
+  "source_attempt": 1,
+  "source_commit": "5fe59bed8d64ebcc409a7029af22e7195e08a0fc",
+  "reviewer": "du-jonathanagustin",
+  "reviewed_at": "2026-11-17T05:46:29Z",
+  "full_frame_privacy_review": true,
+  "frames": {
+    "create-map-marker.mp4": 180,
+    "share-feature.mp4": 195,
+    "shared-marker.mp4": 180
+  },
+  "sha256": {
+    "Inter-LICENSE.txt": "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a",
+    "attestation.sigstore.json": "bca52a2b3744e7509702b31cde528475006d53cd8fba4e966bd4ad2cbffd23a4",
+    "create-map-marker.jpg": "5e3def9c1ff1dbb553a1cd89f9bf8e6058f54406620aed358ec7a6d8aa9521f4",
+    "create-map-marker.json": "2eff0c8e7be2d9ab3156b2e46985bb1b836d5ccdb067dfb1cf9a44e35b72da23",
+    "create-map-marker.mp4": "6007822df8aa5989a969ed06785b7c50db741bbec204ac348e01ff0bfcc5eadc",
+    "share-feature.jpg": "9cc4b3c3c85454dcb25d18211c0dc8c0fc74f6336add63e41e798306053abd76",
+    "share-feature.json": "e8356d2f145ed7e9d70aa1c682170b9824386ff341c37dae9d462852429c5fd2",
+    "share-feature.mp4": "d8ad92d3f79f8493b5cd8605a4a79be5b43c5f71928483b44ddfb67ebd1a6d97",
+    "shared-marker.jpg": "1e7adbf52e01d9479571c1aa39b2cd383f4599c27c07406d2c6241686731cbcb",
+    "shared-marker.json": "2f4e0a8fddbad9ca6c628c70b992f5eed9eb37db933e5eed83a19722cb7e1229",
+    "shared-marker.mp4": "f37ec686fe83e1c994330c9ef06e27293212851a19002f1f3431ae363108e5a0"
+  }
+}
