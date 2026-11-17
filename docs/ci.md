@@ -416,6 +416,24 @@ tail bytes, establish a causal explanation or authorize another trial.
 
 ### Release readiness
 
+The supplementary release-binding metadata and predicate contain public
+provenance: repository name; release tag, numeric ID and application commit;
+workflow commit, run ID, attempt and ref; and package index and architecture
+digests. The predicate also carries its schema version. These values are
+intended for the published attestation. `GH_TOKEN` and the anonymous registry
+token are transport credentials, never provenance fields. Other environment
+variables and extra release API fields are excluded; unknown metadata fields
+fail validation before any preparation output is written.
+
+Each serialized JSON payload is limited to one MiB. The metadata and original
+index are staged as owner-only files (mode `0600`) in the runner's temporary
+directory, replacing existing files without following their links. The
+predicate is emitted on standard output for the workflow's attestation step;
+verification diagnostics remain fixed verdicts rather than API response or
+credential dumps. Sentinel regression tests cover the environment/API field
+boundary and rejected extra fields. This describes the serialization policy;
+it does not establish the disposition of an unread code-scanning alert.
+
 Release Please creates a draft and its Git tag together. Charts publish first;
 then the existing native publisher signs and verifies both architecture packages
 and verifies provenance for their final index. Only then does its existing
