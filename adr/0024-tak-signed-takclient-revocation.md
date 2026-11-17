@@ -116,6 +116,13 @@ clientEndPoints, and unchanged API/messaging pod UIDs, start times and restart
 counts. Production dual-architecture cluster acceptance remains required before
 this implementation is released; the historical trial above is not its result.
 
+The extra control client's certificate and private key are loaded through files
+because Python's TLS API requires paths. The test creates an owned mode-0700
+directory and mode-0600 files, then removes them as soon as its TLS context is
+loaded, including on failure. Kubernetes subprocess failures report only a fixed
+operation verdict and exit code; command arguments and captured output are not
+published in diagnostics. Successful test output contains only test verdicts.
+
 The CRL is still cached by Java. Its periodic refresh near `nextUpdate` (and
 replacement after a CA change) requests a reload so an old cached CRL cannot
 expire and reject every client. That maintenance reload is separate from

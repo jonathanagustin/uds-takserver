@@ -34,11 +34,11 @@ run() {
 }
 
 run uds zarf package deploy "oci://ghcr.io/defenseunicorns/dev/uds/checkpoints/k3d-core-slim-dev:${core}" \
-  --architecture "${arch}" --confirm --features values=true --no-progress
+  --architecture "${arch}" --confirm --features values=true
 ./.github/scripts/fit-runner.sh >> "${log}" 2>&1
 
 run uds zarf package create . --confirm --architecture "${arch}" --flavor "${flavor}" --features values=true \
-  --skip-sbom --set DOMAIN="${domain}" --set TAK_IMAGE_TAG="${tak_tag}" --no-progress "${create_options[@]}"
+  --skip-sbom --set DOMAIN="${domain}" --set TAK_IMAGE_TAG="${tak_tag}" "${create_options[@]}"
 
 # The test bundle refers to the package without its flavor suffix
 # (uds-common create:test-bundle does the same copy).
