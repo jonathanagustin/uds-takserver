@@ -384,6 +384,10 @@ class ScriptPathTests(unittest.TestCase):
 
 
 class ImageRefTests(unittest.TestCase):
+    TAK_API_IMAGE = re.compile(
+        r"ghcr[.]io/jonathanagustin/uds-takserver/takserver-api:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}"
+    )
+
     def test_only_image_references_are_kept(self):
         text = "\n".join([
             "    images:",
@@ -396,7 +400,21 @@ class ImageRefTests(unittest.TestCase):
     def test_the_package_lists_tak_images(self):
         text = (Path(__file__).resolve().parents[1] / "zarf.yaml").read_text(encoding="utf-8")
         refs = runner.image_refs(text)
-        self.assertTrue(any(ref.startswith("ghcr.io/") and "takserver-api" in ref for ref in refs))
+        self.assertTrue(any(self.TAK_API_IMAGE.fullmatch(ref) for ref in refs))
+
+    def test_package_image_assertion_requires_the_exact_registry_and_repository(self):
+        self.assertIsNotNone(self.TAK_API_IMAGE.fullmatch(
+            "ghcr.io/jonathanagustin/uds-takserver/takserver-api:5.7-RELEASE-14"))
+        for ref in (
+            "untrusted-ghcr.io/jonathanagustin/uds-takserver/takserver-api:1",
+            "ghcr.io.example/jonathanagustin/uds-takserver/takserver-api:1",
+            "ghcr.io/other/uds-takserver/takserver-api:1",
+            "ghcr.io/jonathanagustin/uds-takserver/takserver-api-extra:1",
+            "ghcr.io/jonathanagustin/uds-takserver/not-takserver-api:1",
+            "ghcr.io/jonathanagustin/uds-takserver/takserver-api:1/extra",
+        ):
+            with self.subTest(ref=ref):
+                self.assertIsNone(self.TAK_API_IMAGE.fullmatch(ref))
 
 
 def tester_fixture():
