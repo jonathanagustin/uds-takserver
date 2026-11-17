@@ -31,14 +31,14 @@ For deployment, provisioning, and connection checks in one procedure, see
 
 ```bash
 uds zarf package create atak --set ATAK_TAG=5.5.1.10 --confirm
-uds zarf package deploy zarf-package-atak-device-amd64-*.tar.zst --set DOMAIN=uds.dev --confirm
+uds zarf package deploy zarf-package-atak-device-amd64-*.tar.zst --set-variables DOMAIN=uds.dev --confirm
 ```
 
 Or deploy the package the last `main` run tested, without building it:
 
 ```bash
 uds zarf package deploy oci://ghcr.io/jonathanagustin/uds-takserver/packages/atak-device:5.5.1.10 \
-  --architecture amd64 --set DOMAIN=uds.dev --confirm
+  --architecture amd64 --set-variables DOMAIN=uds.dev --confirm
 ```
 
 The package (`atak/zarf.yaml`) has two components:
