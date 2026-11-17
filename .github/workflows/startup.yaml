@@ -129,12 +129,45 @@ jobs:
           umask 077
           mkdir -m 700 "$EVIDENCE"
           python3 - <<'PY'
-          import hashlib, json, os, pathlib, subprocess
+          import hashlib, json, os, pathlib, re, stat, subprocess
           sha = os.environ['GITHUB_SHA']
           assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == sha
           package = subprocess.check_output(['bash', '.github/scripts/dev-package.sh', 'key']).strip()
+          arch = os.environ['STARTUP_ARCH']
+          if arch not in ('amd64', 'arm64'):
+              raise SystemExit('Unsupported startup package architecture')
+          archive = pathlib.Path(f'zarf-package-takserver-{arch}-dev-upstream.tar.zst')
+          package_archive = hashlib.sha256()
+          def archive_identity(info):
+              return (info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino, info.st_dev)
+          # Bind the bytes actually acquired, separately from their input key.
+          with os.fdopen(os.open(archive, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as stream:
+              before = os.fstat(stream.fileno())
+              if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 8 * 1024**3:
+                  raise SystemExit('Invalid startup package archive')
+              count = 0
+              for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                  count += len(chunk)
+                  if count > before.st_size:
+                      raise SystemExit('Startup package archive changed')
+                  package_archive.update(chunk)
+              after = os.fstat(stream.fileno())
+              if count != before.st_size or archive_identity(before) != archive_identity(after):
+                  raise SystemExit('Startup package archive changed')
+          # Pull reconstructs the local wrapper. Compare verified package
+          # contents across repetitions, retaining each wrapper's byte hash.
+          manifest = subprocess.check_output(
+              ['uds', 'zarf', 'package', 'inspect', 'digest', str(archive)],
+              text=True, timeout=120).strip()
+          if not re.fullmatch(r'sha256:[a-f0-9]{64}', manifest):
+              raise SystemExit('Invalid startup package manifest digest')
+          current = archive.stat(follow_symlinks=False)
+          if not stat.S_ISREG(current.st_mode) or archive_identity(current) != archive_identity(before):
+              raise SystemExit('Startup package archive changed')
           value = {'source': hashlib.sha256(sha.encode()).hexdigest(),
                    'package': hashlib.sha256(package).hexdigest(),
+                   'package_archive': package_archive.hexdigest(),
+                   'package_manifest': manifest.removeprefix('sha256:'),
                    'workflow': hashlib.sha256(pathlib.Path('.github/workflows/startup.yaml').read_bytes()).hexdigest()}
           (pathlib.Path(os.environ['EVIDENCE'])/'bindings.json').write_text(json.dumps(value)+'\n')
           PY
