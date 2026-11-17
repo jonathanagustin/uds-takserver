@@ -35,8 +35,17 @@ REVIEWED_HELPERS = ('tests/ephemeral-cluster.py', 'tests/velero-ownership/drive.
                          '.github/scripts/redact-logs.py', '.github/scripts/node-agent-ready.sh')
 
 
+def source_provider():
+    spec = importlib.util.spec_from_file_location('owner_source_provider', Path(__file__).with_name('source_provider.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def verify_helpers(command):
-    for relative in REVIEWED_HELPERS:
+    provider = source_provider()
+    extra = provider.HELPERS if provider.enabled() else ()
+    for relative in (*REVIEWED_HELPERS, *extra):
         reviewed = command(['git', 'show', 'HEAD:' + relative])
         require(reviewed.encode() == (ROOT / relative).read_bytes(), 'trial helper differs from reviewed source')
 
@@ -80,10 +89,16 @@ class Driver:
     def __init__(self, files, directory, execute, context=T.GUARD.CONTEXT):
         self.files, self.directory, self.execute, self.context = files, directory, execute, context
         verify_helpers(self.read_command)
+        provider = source_provider()
+        self.core_provider = provider.receipt() if provider.enabled() else None
+        self.restore_helper = provider.HELPER if self.core_provider else 'tests/backup-restore.sh'
         self.identity = T.GUARD.verify(context, self.read_command)
         self.transfer = T.Transfer(context, '', self.read_command)
         self.state = {'schema': 1, 'cluster': self.identity, 'driverSHA256': digest(Path(__file__)),
                       'inputs': {key: digest(value) for key, value in files.items()}, 'steps': [], 'accepted': False}
+
+        if self.core_provider:
+            self.state['coreSourceProvider'] = self.core_provider
 
     def read_command(self, argv, input_text=None):
         return self.execute(argv, input_text=input_text, timeout=45)
@@ -181,7 +196,9 @@ class Driver:
     def accept(self, stage, group, suffix):
         self.idle()
         self.guarded()
-        self.execute(['bash', str(ROOT / 'tests/backup-restore.sh')], timeout=2100,
+        if self.core_provider:
+            require(source_provider().receipt() == self.core_provider, 'Core provider changed before restore')
+        self.execute(['bash', str(ROOT / self.restore_helper)], timeout=2100,
                      env={'REQUIRE_FS_BACKUP': 'true', 'REQUIRE_CLEAN_BACKUP_RESTORE': 'true', 'BACKUP_TRIAL_SUFFIX': suffix, 'BACKUP_TRIAL_CONTEXT': self.context})
         backup = 'tak-ci-' + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'] + '-' + suffix
         self.observe(stage, group, backup)

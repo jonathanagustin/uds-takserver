@@ -119,3 +119,23 @@ matches. Schema 1 artifacts retain their original source-specific verifier;
 they are not silently upgraded. The `.2` source patch, Core base, license and
 image indexes are unchanged. ARM native build/API acceptance requires successful
 protected ARM runs; source pins and offline tests alone do not establish it.
+
+The optional `run_owner_trial` input (default false) runs the existing native
+fresh/handoff/reversal driver only after the same run's signed build and API
+smoke succeed. The trial job has read-only permissions and consumes exactly the
+six-file provider for its own source, run, attempt and architecture. It verifies
+the pinned native CLI, package signature, transparency log, corresponding source
+and payloads before creating a disposable cluster, then rechecks the captured
+provider hashes before bundle binding, each restore and receipt publication.
+
+Only the experimental bundle copies select this local signed backup/restore
+package. The trial uses `tests/backup-restore-controller-trial.sh`, carrying the
+exact seven-resource restore policy and controller readback from draft #597.
+Ordinary restore tasks and published Core dependencies retain their defaults.
+The private journal and public acceptance receipt bind the provider and restore
+helper hashes. A failed trial or failed receipt validation fails the job; raw
+cluster journals and command logs are not uploaded.
+
+This wiring is not restore or owner-transfer acceptance. Both native trials
+must pass real data/client restore, controller regeneration, fresh ownership,
+handoff and reversal before the draft restore behavior can become ready.

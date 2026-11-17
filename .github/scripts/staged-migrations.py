@@ -346,6 +346,16 @@ def receipt(directory, arch):
                     and journal.get('driverSHA256') == sha(ROOT / 'tests/velero-ownership/drive.py')
                     and [step.get('name') for step in journal['steps']] == OWNER_STEPS
                     and all(step.get('status') == 'passed' for step in journal['steps']), 'owner round-trip not accepted')
+            if os.environ.get('CORE_RESTORE_OWNER_TRIAL', 'false') == 'true':
+                import importlib.util
+                spec = importlib.util.spec_from_file_location('receipt_core_provider', ROOT / 'tests/velero-ownership/source_provider.py')
+                provider = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(provider)
+                expected = provider.receipt()
+                require(journal.get('coreSourceProvider') == expected, 'owner Core source binding differs')
+                result['coreSourceProvider'] = expected
+            else:
+                require('coreSourceProvider' not in journal, 'unexpected owner Core source binding')
             guard = journal['cluster']
             for group, stage in [('fresh', 'fresh-core'), ('handoff', 'core-after'), ('handoff', 'local-after')]:
                 path = directory / 'owner' / group / (stage + '.json')
@@ -386,6 +396,14 @@ def verify(directory):
                 and value.get('scenarios') == scenarios
                 and value.get('results') == {scenario: 'passed' for scenario in scenarios},
                 'selected architecture/scenario lacks exact-run acceptance')
+        if os.environ.get('CORE_RESTORE_OWNER_TRIAL', 'false') == 'true':
+            import importlib.util
+            spec = importlib.util.spec_from_file_location('verify_core_provider', ROOT / 'tests/velero-ownership/source_provider.py')
+            provider = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(provider)
+            require(value.get('coreSourceProvider') == provider.receipt(), 'public Core source binding differs')
+        else:
+            require('coreSourceProvider' not in value, 'unexpected public Core source binding')
         verify_public_proofs(directory.parent / 'proofs' / arch, value)
     return {'selectedArchitectures': arches, 'selectedScenarios': scenarios, 'accepted': True}
 
