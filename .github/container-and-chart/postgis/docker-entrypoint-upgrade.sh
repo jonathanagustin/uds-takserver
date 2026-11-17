@@ -27,6 +27,7 @@ fi
 
 pgdata="${PGDATA:-/var/lib/postgresql/data}"
 old_data="${pgdata}.pg${old_major}"
+migration_state="${pgdata}.pg${old_major}-to-pg${new_major}.state"
 db_user="${POSTGRES_USER:-postgres}"
 
 log() { printf '%s\n' "$*" >&2; }
@@ -66,12 +67,55 @@ server_version() {
   fi
 }
 
-# A previous attempt moved the data aside and did not finish. Put it back
-# when the new directory is not a PostgreSQL 18 cluster yet.
-if [[ -d "${old_data}" && "$(server_version "${pgdata}")" != "${new_major}" ]]; then
-  log "found an unfinished upgrade at ${old_data}; moving it back"
-  rm -rf "${pgdata}"
-  mv "${old_data}" "${pgdata}"
+# initdb writes PG_VERSION before migration starts. Keep an atomic journal
+# beside PGDATA, on the same persistent volume, instead of treating that
+# version file as a completion marker. Flush each stage before its effects.
+write_stage() {
+  local stage="$1" temporary
+  temporary="$(mktemp "${migration_state}.XXXXXX")"
+  printf '%s\n' "${stage}" > "${temporary}"
+  mv "${temporary}" "${migration_state}"
+  sync -f "${migration_state}"
+}
+
+recovery_required() {
+  log "unfinished PostgreSQL upgrade: $*"
+  log "preserving ${pgdata}, ${old_data}, and ${migration_state}; refusing normal startup"
+  log "restore the pre-upgrade volume snapshot before retrying; see docs/data.md#interrupted-postgresql-upgrades"
+  exit 1
+}
+
+if [[ -e "${migration_state}" ]]; then
+  stage="$(cat "${migration_state}")"
+  case "${stage}" in
+    preparing)
+      # No pg_upgrade or new server can have run before the durable linking
+      # stage. Only this stage permits automatic restoration of the old data.
+      if [[ -d "${old_data}" && "$(server_version "${old_data}")" == "${old_major}" ]]; then
+        log "retrying interrupted preparation from ${old_data}"
+        rm -rf "${pgdata}"
+        mv "${old_data}" "${pgdata}"
+      elif [[ -e "${old_data}" || "$(server_version "${pgdata}")" != "${old_major}" ]]; then
+        recovery_required "preparation journal does not match the data directories"
+      fi
+      ;;
+    complete)
+      [[ "$(server_version "${pgdata}")" == "${new_major}" ]] || recovery_required "completed journal has no PostgreSQL ${new_major} data"
+      # Both the migration and the new server's clean shutdown completed.
+      # It is safe to resume cleanup even if the old directory is half gone.
+      rm -rf "${old_data}"
+      rm -f "${migration_state}"
+      sync -f "$(dirname "${pgdata}")"
+      ;;
+    *)
+      # Linking may have disabled the old cluster, and the new server may
+      # have written shared files. Never delete either directory or guess.
+      recovery_required "journal stage '${stage}' requires operator recovery"
+      ;;
+  esac
+elif [[ -e "${old_data}" ]]; then
+  # Also reject ambiguous leftovers from images that did not journal.
+  recovery_required "old data exists without a migration journal"
 fi
 
 current="$(server_version "${pgdata}")"
@@ -111,6 +155,7 @@ if [[ "${current}" == "${old_major}" ]]; then
   esac
 
   log "upgrading PostgreSQL ${old_major} in ${pgdata} to ${new_major} (locale ${collate}, ${locale_provider})"
+  write_stage preparing
   mv "${pgdata}" "${old_data}"
   mkdir -p "${pgdata}"
   chmod 700 "${pgdata}"
@@ -144,6 +189,7 @@ if [[ "${current}" == "${old_major}" ]]; then
   rm -f "${pwfile:-}"
 
   cd /tmp
+  write_stage linking
   if ! "${new_bindir}/pg_upgrade" \
     --old-bindir="${old_bindir}" \
     --new-bindir="${new_bindir}" \
@@ -152,14 +198,13 @@ if [[ "${current}" == "${old_major}" ]]; then
     --username="${db_user}" \
     --link \
     --socketdir="${socket_dir}"; then
-    log "pg_upgrade failed; putting the PostgreSQL ${old_major} data directory back"
+    log "pg_upgrade failed; preserving both data directories"
     if [[ -d /tmp/pg_upgrade_output.d ]]; then
       find /tmp/pg_upgrade_output.d -type f -print -exec cat {} \; >&2 || true
     fi
-    rm -rf "${pgdata}"
-    mv "${old_data}" "${pgdata}"
-    exit 1
+    recovery_required "pg_upgrade did not complete"
   fi
+  write_stage postgis
 
   # initdb wrote default client auth, which allows only local connections.
   # The PostgreSQL 15 cluster's rules are what let pods on the pod network in
@@ -173,8 +218,12 @@ if [[ "${current}" == "${old_major}" ]]; then
 
   log "updating PostGIS extensions"
   "${new_bindir}/pg_ctl" -D "${pgdata}" -w -o "-c listen_addresses= -c unix_socket_directories=${socket_dir}" start
-  mapfile -t databases < <("${new_bindir}/psql" -h "${socket_dir}" -U "${db_user}" -d postgres -At -v ON_ERROR_STOP=1 \
-    -c "SELECT datname FROM pg_database WHERE datallowconn;")
+  # Capture the status before mapfile: process substitution would hide a
+  # failed query and incorrectly commit an upgrade with no extensions done.
+  database_list="$("${new_bindir}/psql" -h "${socket_dir}" -U "${db_user}" -d postgres -At -v ON_ERROR_STOP=1 \
+    -c "SELECT datname FROM pg_database WHERE datallowconn;")"
+  [[ -n "${database_list}" ]] || recovery_required "database enumeration returned no databases"
+  mapfile -t databases <<< "${database_list}"
   for database in "${databases[@]}"; do
     has="$("${new_bindir}/psql" -h "${socket_dir}" -U "${db_user}" -d "${database}" -At -v ON_ERROR_STOP=1 \
       -c "SELECT 1 FROM pg_extension WHERE extname = 'postgis';")"
@@ -189,7 +238,10 @@ if [[ "${current}" == "${old_major}" ]]; then
     PATH="${new_bindir}:${PATH}" /tmp/analyze_new_cluster.sh
   fi
   "${new_bindir}/pg_ctl" -D "${pgdata}" -w -m fast stop
+  write_stage complete
   rm -rf "${old_data}"
+  rm -f "${migration_state}"
+  sync -f "$(dirname "${pgdata}")"
   log "PostgreSQL ${new_major} data directory is ready"
   clear_passwd
 elif [[ -n "${current}" && "${current}" != "${new_major}" ]]; then

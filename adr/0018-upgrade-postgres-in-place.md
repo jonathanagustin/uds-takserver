@@ -21,6 +21,7 @@ PostGIS 3.4 is not built for PostgreSQL 18. The PostgreSQL project's bookworm pa
 - A data directory that is already 18 starts unchanged. Any other major makes the container exit. An empty directory is a new cluster: the official entrypoint and `10_postgis.sh` create it.
 - Give the TAK Postgres startup probe and the CloudTAK Postgres startup probe ten minutes. `pg_upgrade` finishes before the server listens, and the liveness probe would otherwise kill the pod.
 - Rollback is a volume snapshot, or a `pg_dumpall` taken before the rollout, restored onto `15-3.4`. `--link` shares the table files, so the old directory is gone after a successful start and cannot be booted with PostgreSQL 15.
+- Persist an atomic migration journal beside `PGDATA`. Preparation can retry from the original directory; linking and extension-update interruptions require operator recovery. Only a journal marked complete after a clean shutdown permits cleanup and normal startup. An unjournaled leftover old directory is ambiguous and must also refuse startup. See [interrupted upgrades](../docs/data.md#interrupted-postgresql-upgrades).
 
 ## Consequences
 
