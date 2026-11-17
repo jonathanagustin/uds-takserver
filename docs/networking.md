@@ -253,7 +253,7 @@ The k3s Corefile imports the `*.override` keys in name order, and the first matc
 
 Pods in an ambient namespace can get a different, equally correct answer. The UDS operator writes a `MeshInternal` ServiceEntry for every exposed host, with the gateway Service as its endpoint. ztunnel's DNS proxy answers names that have a ServiceEntry before CoreDNS sees the query. It allocates an address from `240.240.0.0/16` and routes connections to that address to the ServiceEntry endpoint, the same gateway. Names without a ServiceEntry, and pods outside the mesh, get the CoreDNS answer. On a cluster without `coredns-custom` the ServiceEntries alone still steer ambient pods, as long as public DNS answers the name at all.
 
-The reconcile does nothing when `coredns-custom` does not exist, which is the case on a cluster with real DNS, or when `IN_CLUSTER_DNS` is not `true`.
+The reconcile does nothing when `coredns-custom` does not exist, which is the case on a cluster with real DNS. Setting `IN_CLUSTER_DNS=false` removes the module's existing `00-takserver.override` key and restarts CoreDNS so the remaining DNS configuration takes effect. Other overrides are preserved, and an already disabled configuration does not trigger another restart.
 
 `uds run test:dns` checks the answers from inside the API pod and that the API Deployment has no `hostAliases`. It accepts the gateway ClusterIP, or a `240.240.0.0/16` address when the name's ServiceEntry points at the expected gateway Service. Earlier versions of this package gave the API pod a hostAlias for `sso.<domain>`. An upgrade removes it.
 

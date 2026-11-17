@@ -109,6 +109,7 @@ export interface Cluster {
     data: Record<string, string>,
   ): Promise<void>;
   patchConfigMapKey(namespace: string, name: string, key: string, value: string, present: boolean): Promise<void>;
+  removeConfigMapKey(namespace: string, name: string, key: string): Promise<void>;
   serviceExists(namespace: string, name: string): Promise<boolean>;
   restartDeployment(namespace: string, name: string, hasAnnotations: boolean): Promise<void>;
   getSecret(namespace: string, name: string): Promise<SecretDoc | undefined>;
@@ -185,6 +186,9 @@ const live: TakClientCluster = {
   patchConfigMapKey: async (namespace, name, key, value, present) => {
     const op = present ? "replace" : "add";
     await K8s(kind.ConfigMap, { namespace, name }).Patch([{ op, path: `/data/${pointer(key)}`, value }]);
+  },
+  removeConfigMapKey: async (namespace, name, key) => {
+    await K8s(kind.ConfigMap, { namespace, name }).Patch([{ op: "remove", path: `/data/${pointer(key)}` }]);
   },
   serviceExists: async (namespace, name) => {
     const found = await read(() => K8s(kind.Service).InNamespace(namespace).Get(name));
