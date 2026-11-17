@@ -57,12 +57,16 @@ run_case() {
     # production entrypoint must restore PG15 and redo the migration, rather
     # than starting this empty PG18 directory. Use real PostgreSQL files.
     docker run --rm --user "${uid}:${uid}" --entrypoint /bin/bash \
-      -e POSTGRES_USER="${user}" -e PGDATA="${pgdata}" \
+      -e POSTGRES_USER="${user}" -e POSTGRES_PASSWORD=postgres -e PGDATA="${pgdata}" \
       -v "${volume}:${mount}" "${image}" -ec '
         printf "preparing\n" > "${PGDATA}.pg15-to-pg18.state"
         sync -f "${PGDATA}.pg15-to-pg18.state"
         mv "${PGDATA}" "${PGDATA}.pg15"
-        /usr/lib/postgresql/18/bin/initdb -D "${PGDATA}" --username="${POSTGRES_USER}" --auth=trust
+        # The numeric Bitnami UID has no passwd entry in this image. Reuse
+        # the pinned official entrypoint helper so initdb gets its NSS setup.
+        source /usr/local/bin/docker-entrypoint.sh
+        docker_setup_env
+        PATH="/usr/lib/postgresql/18/bin:${PATH}" docker_init_database_dir --auth=trust
       '
   fi
   docker run -d --name "${volume}" --user "${uid}:${uid}" \

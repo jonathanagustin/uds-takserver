@@ -202,5 +202,70 @@ class UpgradeRestartTests(unittest.TestCase):
         self.assertEqual([event['point'] for event in self.points()], ['ordinary-startup'])
 
 
+class SmokePreparationTests(unittest.TestCase):
+    def test_smoke_retry_initialization_resolves_numeric_uid(self):
+        """Execute smoke's actual retry shell payload; Docker/server responses are fixtures."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = root / 'bin'
+            binary.mkdir()
+            entrypoint = root / 'entrypoint.sh'
+            entrypoint.write_text('docker_setup_env() { : "${POSTGRES_PASSWORD:?}"; }\n'
+                'docker_init_database_dir() { UID_LOOKUP_READY=true "$SMOKE_INITDB" -D "$PGDATA" --username="$POSTGRES_USER" "$@"; }\n')
+            initdb = root / 'initdb'
+            initdb.write_text('#!/bin/sh\n'
+                'if [ "${UID_LOOKUP_READY:-}" != true ]; then echo "initdb: missing numeric UID lookup" >&2; exit 1; fi\n'
+                'mkdir -p "$PGDATA"\nprintf "18\\n" > "$PGDATA/PG_VERSION"\n')
+            initdb.chmod(0o755)
+            docker = binary / 'docker'
+            docker.write_text(r"""#!/usr/bin/env python3
+import json, os, pathlib, subprocess, sys
+args = sys.argv[1:]
+if args[0] == 'run' and '--entrypoint' in args:
+    env = dict(os.environ)
+    for i, arg in enumerate(args[:-1]):
+        if arg == '-e':
+            key, value = args[i + 1].split('=', 1)
+            env[key] = value
+    data = pathlib.Path(env['SMOKE_ROOT']) / env['POSTGRES_USER'] / 'data'
+    data.mkdir(parents=True)
+    (data / 'PG_VERSION').write_text('15\n')
+    env['PGDATA'] = str(data)
+    command = args[-1].replace('/usr/local/bin/docker-entrypoint.sh', env['SMOKE_ENTRYPOINT'])
+    command = command.replace('/usr/lib/postgresql/18/bin/initdb', env['SMOKE_INITDB'])
+    result = subprocess.run(['bash', '-ec', command], env=env)
+    if result.returncode:
+        sys.exit(result.returncode)
+    assert (data / 'PG_VERSION').read_text().strip() == '18'
+    assert pathlib.Path(str(data) + '.pg15/PG_VERSION').read_text().strip() == '15'
+    assert pathlib.Path(str(data) + '.pg15-to-pg18.state').read_text().strip() == 'preparing'
+    with open(env['SMOKE_CALLS'], 'a') as out:
+        out.write(json.dumps({'user': env['POSTGRES_USER'], 'prepared': True}) + '\n')
+elif args[0] == 'exec' and 'psql' in args:
+    query = args[args.index('-c') + 1]
+    if 'SELECT marker' in query:
+        print('keep-me|original-timestamp')
+    elif 'server_version_num' in query:
+        print('180006')
+    elif 'extversion' in query:
+        print('3.6.4')
+elif args[:2] == ['run', '-d']:
+    print('fixture-container')
+""")
+            docker.chmod(0o755)
+            calls = root / 'calls.jsonl'
+            result = subprocess.run(['bash', str(ROOT / '.github/container-and-chart/postgis/smoke.sh'),
+                                     'fixture-image'], capture_output=True, text=True, timeout=15,
+                                    env={**os.environ, 'PATH': str(binary) + os.pathsep + os.defpath,
+                                         'SMOKE_ROOT': str(root), 'SMOKE_ENTRYPOINT': str(entrypoint),
+                                         'SMOKE_INITDB': str(initdb), 'SMOKE_CALLS': str(calls)})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('PASS bitnami-retry:', result.stdout)
+            self.assertIn('PASS cloudtak-retry:', result.stdout)
+            self.assertEqual([json.loads(line) for line in calls.read_text().splitlines()],
+                             [{'user': 'postgres', 'prepared': True},
+                              {'user': 'cloudtak', 'prepared': True}])
+
+
 if __name__ == '__main__':
     unittest.main()
