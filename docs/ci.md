@@ -6,7 +6,7 @@ Docs, device, benchmark, demo, unit-test-only, and repository metadata changes s
 
 ## Zarf CLI compatibility
 
-The pinned UDS CLI 0.41.0 embeds Zarf 0.89.0. Direct Zarf package commands avoid `--no-progress`, which Zarf 1.x removed. Package publication also omits the removed `--confirm` flag; this path publishes an already signed archive and does not supply signing-key credentials. Deployment variables use `--set-variables`. Create-time `--set` still selects package templates, while `uds run --set` and `uds run --no-progress` are separate UDS task options.
+The pinned UDS CLI 0.41.0 embeds Zarf 0.89.0. Direct Zarf package commands avoid `--no-progress`, which Zarf 1.x removed. Package publication also omits the removed `--confirm` flag; these archive-publication calls do not supply inline signing-key credentials. Release signing remains a separate prior step. Deployment variables use `--set-variables`. Create-time `--set` still selects package templates, while `uds run --set` and `uds run --no-progress` are separate UDS task options.
 
 Package-schema migration remains separate. [Zarf 1.0 deprecates `v1alpha1`](https://github.com/zarf-dev/zarf/releases/tag/v1.0.0), which the authored packages currently use implicitly. Moving to `zarf.dev/v1beta1` requires replacing legacy package variables and validating bundle overrides and rendered resources; changing only `apiVersion` is insufficient. UDS 0.41.0 already supports beta schemas, so that migration can be qualified while retaining the production CLI pin. CLI argument checks and small local package creation do not establish deployment compatibility.
 
