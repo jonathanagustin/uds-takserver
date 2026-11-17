@@ -341,6 +341,14 @@ paths, exception messages and unknown fields. Its file hash is bound into the
 unaccepted receipt. A successful trial job or completed progress stage cannot
 replace the required receipt and public phase proofs.
 
+Private identity transcripts have a separate 16 MiB byte limit and 4,096-stage
+limit, enforced by both writer and reader. These are complete multi-phase
+journals, not individual phase proofs. The reader refuses links, duplicate JSON
+fields, and files changed while reading. Individual phase snapshots and public
+JSON proofs retain their 256 KiB bounds and full semantic/hash verification.
+Large private transcripts are never copied into public artifacts; diagnostic
+companions alone cannot establish acceptance.
+
 The command runner retained this tail **before** redaction; it may begin inside
 a credential or omit the original error. It is therefore unsafe to publish even
 a subsequently redacted excerpt. Categories are diagnostic signatures, not

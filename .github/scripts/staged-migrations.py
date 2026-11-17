@@ -186,6 +186,40 @@ def identity_phase_proofs(directory, journal, fresh=False):
     return proofs
 
 
+IDENTITY_JOURNAL_LIMIT = 16 * 1024 * 1024
+IDENTITY_JOURNAL_STAGES = 4096
+
+
+def identity_journal(path):
+    """Read a bounded private transcript, not an individual public phase proof."""
+    before = path.lstat()
+    require(stat.S_ISREG(before.st_mode) and before.st_size <= IDENTITY_JOURNAL_LIMIT,
+            'identity journal exceeds private bound or is nonregular')
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    with os.fdopen(os.open(path, flags), 'rb') as stream:
+        opened = os.fstat(stream.fileno())
+        require((opened.st_dev, opened.st_ino) == (before.st_dev, before.st_ino), 'identity journal changed')
+        data = stream.read(IDENTITY_JOURNAL_LIMIT + 1)
+        after = os.fstat(stream.fileno())
+    current = path.lstat()
+    fields = lambda v: (v.st_dev, v.st_ino, v.st_size, v.st_mtime_ns, v.st_ctime_ns)
+    require(fields(before) == fields(after) == fields(current) and len(data) == before.st_size and
+            len(data) <= IDENTITY_JOURNAL_LIMIT, 'identity journal changed or exceeds private bound')
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            require(key not in value, 'duplicate identity journal field')
+            value[key] = item
+        return value
+    try:
+        value = json.loads(data.decode('utf-8'), object_pairs_hook=unique)
+    except RecursionError:
+        raise ValueError('identity journal nesting exceeds bound') from None
+    require(isinstance(value, dict) and isinstance(value.get('stages'), list) and
+            len(value['stages']) <= IDENTITY_JOURNAL_STAGES, 'identity journal stage bound differs')
+    return value
+
+
 def identity_receipt(directory, arch):
     methods = identity_methods()
     fresh = os.environ.get('FRESH_STRICT', 'false') == 'true'
@@ -194,7 +228,7 @@ def identity_receipt(directory, arch):
     for method in methods:
         folder = directory / ('identity' if method == 'manual' else 'package-identity')
         last_path = folder / 'journal.json'
-        journal = bounded_json(last_path)
+        journal = identity_journal(last_path)
         require(journal.get('schema') == 1 and journal.get('completed') is True and journal.get('accepted') is True
                 and journal.get('recoveryOnly', False) is False and journal.get('scenario') == 'identities'
                 and journal.get('architecture') == arch
@@ -469,7 +503,7 @@ RETAINED_HOOK_FIELDS={
 
 
 def diagnostic_journal_hash(path):
-    # Diagnostic only: this never admits an oversized journal as acceptance proof.
+    # Diagnostic only: this never replaces semantic private-journal and phase verification.
     before=path.lstat()
     require(path.is_file() and not path.is_symlink() and before.st_size<=16*1024*1024,'diagnostic-journal-unavailable')
     digest=hashlib.sha256()
@@ -680,7 +714,7 @@ def receipt_failure(error, operation, directory, arch):
               'frames': frames[-8:], 'identityMethods': {}}
     for method in identity_methods() if os.environ.get('SCENARIO') in ('identities', 'all') else []:
         try:
-            journal = bounded_json(directory / ('identity' if method == 'manual' else 'package-identity') / 'journal.json')
+            journal = identity_journal(directory / ('identity' if method == 'manual' else 'package-identity') / 'journal.json')
             facts = {'schemaMatches': type(journal.get('schema')) is int and journal['schema'] == 1,
                      'completed': journal.get('completed') is True,
                      'accepted': journal.get('accepted') is True,
