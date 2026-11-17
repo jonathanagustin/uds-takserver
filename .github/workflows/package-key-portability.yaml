@@ -34,6 +34,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Run real key and publication controls with the system Bash
+        shell: bash
         env:
           DEV_PACKAGE_TEST_BASH: /bin/bash
         run: |
