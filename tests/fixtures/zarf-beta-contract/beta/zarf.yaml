@@ -7,9 +7,9 @@ metadata:
   version: 0.1.0
 values:
   files:
-  - values.yaml
+    - values.yaml
 components:
-- name: contract
-  import:
-    local:
-    - path: common/zarf.yaml
+  - name: contract
+    import:
+      local:
+        - path: common/zarf.yaml
