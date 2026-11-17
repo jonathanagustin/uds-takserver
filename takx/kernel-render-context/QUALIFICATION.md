@@ -558,6 +558,38 @@ This is compile evidence, with no client runtime or private SDK equivalence clai
 
 Actual Scene JNI query/visibility/removal controls pass with zero strict JNI
 diagnostics: `63da8c1f115bfdc32aae612aa9c526f3862a78c2d89fa93596da3255e41f7cc3`.
+
+## Complete locked native source projection (2026-11-17)
+
+The separate portable `native_sources.py` source preparation now reconstructs
+all 1,396 locked official native files and applies the 42 exact current native
+images from the full 61-path Context/Texture/client sparse projection. Three
+new native headers produce 1,399 final native files (21,050,902 bytes). All 16
+original CMake graph files remain byte-identical. The output separately retains
+the three genuine GLES1 declaration files (83,947 bytes), the exact upstream
+license and the project license. The successful source receipt is
+`cce4c16543cbb1c4d72349711d6daa4625dae26d01e5bd8ed99302ef775994e5`.
+Total source/receipt/license output is 22,327,094 bytes; all 1,400 bounded Git
+blob reads succeeded. Twenty-one offline source/producer guards pass, including
+six new source-projection controls for bytes, membership, separation, bounds,
+stalled-child cleanup and failure records.
+
+The first real attempt verified all 1,396 native source blobs, then refused a
+missing GLES1 declaration blob in the partial cache. It retains the failure
+record and has no success receipt. Only the three exact official-revision
+headers were subsequently acquired into a separate private object cache; all
+lengths, SHA-256 hashes and Git blob IDs match the existing checked-in registry.
+The accepted source recipe performs no acquisition and uses no private receipt
+as authority for source identity.
+
+This is a complete locked Kernel native source projection, not a verified native
+provider, complete dependency build tree or new native/runtime qualification.
+The 14 cross-bound provider proofs, actual Cesium sources, locked tinygltf header
+trees, final whole-Java/JNI header composition, reviewed Linux amd64 toolchain,
+actual full CMake configuration, fresh compilation, linking, provider audit and
+actual-library controls remain required. No Native03 or Context library is
+substituted for another consumer's source composition. All native/provider,
+renderer, SDK and client acceptance flags remain false.
 The public 5.8 vehicle metadata profile resolves the observed vehicle API
 references. A complete 5.8 Platform compile still reports 15 initial contour API
 errors; failed Platform outputs are not adopted for a Client compile. This is

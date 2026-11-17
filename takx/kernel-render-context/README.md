@@ -114,3 +114,55 @@ JNI headers and ordered classpath. It is a Java composition proof; full SDK and
 client acceptance remain false. `tests/SceneJNIControls.java` is a separate actual
 Scene JNI fixture with an owned georeferenced triangle, query/ID/URI visibility,
 removal and cursor closure checks; it does not qualify mesh rendering.
+
+## Complete locked Kernel native source projection
+
+`native_sources.py` advances source preparation beyond the sparse patch view.
+Its default verification starts no process. The explicit phase reads all 1,396
+locked official native files from an already cached Git repository and joins the
+42 exact final native images from this profile's current 61-path sparse output.
+Three of those images are new headers, giving 1,399 final native files. Every
+other source and the complete original CMake source lists remain unchanged.
+The three genuine GLES1 declaration files, upstream license and project license
+are retained separately with their provenance. No dependency is substituted.
+
+```sh
+python3 -B takx/kernel-render-context/native_sources.py
+python3 -B takx/kernel-render-context/native_sources.py --phase prepare \
+  --source /path/to/cached-official-git \
+  --prepared-source /path/to/current-sparse-output/source \
+  --output /path/to/new-complete-native-source-output --git /tools/git
+```
+
+The recipe checks locked blob IDs, byte lengths, hashes, full source membership,
+all paired sparse Java images and unchanged CMake files. It has a 300-second
+aggregate deadline, 20-second owned source commands, 16 MiB stdout/64 KiB stderr limits,
+64 MiB output cap and 2 GiB free-space floor. Failed output retains a failure
+record and receives no success receipt. No compiler, configuration, dependency
+download, library load or JVM phase is provided.
+
+The aggregate deadline starts before input preflight. Sparse input traversal
+permits only the 61 expected files and their parent directories, rejects any
+unexpected member before reading its contents, and caps the total at 4 MiB.
+
+The explicit Git tool must support `--no-lazy-fetch` and `--no-replace-objects`.
+An unsupported tool fails without a fetching fallback. In particular, the basic
+developer container's Git 2.39 does not support `--no-lazy-fetch`; that image alone
+does not qualify this source phase. The local replay used macOS ARM64 and an
+explicit compatible Git; Linux execution of this recipe remains unqualified.
+
+This output is a complete locked Kernel native **source projection**, not a
+verified native provider or a complete dependency build tree. The existing
+baseline expects 483 Core, 159 JNI and 173 Cesium translation units; this source
+phase does not configure or qualify that graph. A future builder must still join
+all 14 verified dependency families (including actual Cesium sources), generate
+the locked tinygltf/tinygltfloader header trees and final whole-Java JNI headers,
+configure with the reviewed Linux amd64 toolchain,
+compile every source and changed-header consumer, link, audit providers and run
+the actual-library controls. Source composition and runtime evidence must match
+each consumer: the Context composition does not replace Texture's Native03
+provider. All native/provider/renderer/SDK/client acceptance flags stay false.
+
+The local source replay and retained missing-cache failure are recorded in
+[QUALIFICATION.md](QUALIFICATION.md). These are source integrity records, without
+a dependency provider or native runtime qualification.
