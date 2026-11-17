@@ -126,6 +126,7 @@ class IssueHealthCertTests(unittest.TestCase):
             return run(["bash", str(SCRIPT)], env=env, timeout=60)
         finally:
             api.server.shutdown()
+            api.server.server_close()
 
     def assert_issued(self, data):
         for name in ("ca.pem", "client.pem", "client.key"):
