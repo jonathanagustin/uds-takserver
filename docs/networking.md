@@ -179,6 +179,14 @@ The test bundle selects `envoy-gateway` and `envoy-default-gateway` and sets `qu
 - A client with no certificate must be refused with a TLS alert. No answer at all fails the test, so a broken route cannot pass as a refusal.
 - A client with the admin certificate must stream a CoT event, and its uid must appear in `/Marti/api/subscriptions/all`. TAK can take about 30 seconds to add a new stream to that list, so the script waits up to about 90 seconds. If the uid still is not listed, the client reconnects once before the test fails, like the port 8089 check in `tests/api-smoke.sh`.
 
+Both client paths resolve the IPv4 peer and use a connected UDP transport. The
+kernel selects the local interface from the route to that peer, including a
+cluster or gateway address; the test does not bind every local interface or
+force loopback. Local route/stream tests run with
+`uv run --no-project --with-requirements tests/requirements-quic.txt python -B -m unittest tests.test_quic_cot`.
+Their controlled TLS-alert peer tests the refusal verdict; the real TAK
+certificate-refusal and CoT checks remain part of the cluster test above.
+
 The script exits early when the QUIC Service is missing, unless Envoy Gateway is installed, because then the flag did not reach the chart. See [ADR 20](../adr/0020-quic-through-envoy-gateway.md).
 
 ## Tenant gateway to 8447
