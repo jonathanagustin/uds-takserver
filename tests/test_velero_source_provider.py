@@ -196,7 +196,27 @@ class OwnerProviderTests(unittest.TestCase):
         self.assertEqual(len(downloads), 1)
         self.assertEqual(downloads[0]['with']['name'], 'core-restore-source-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.architecture }}')
         self.assertNotIn('continue-on-error', job)
-        self.assertTrue(all('continue-on-error' not in s for s in job['steps']))
+        optional_names = {'Encrypt optional first failure diagnostic',
+                          'Upload only encrypted first failure diagnostic'}
+        optional = [s for s in job['steps'] if s.get('name') in optional_names]
+        self.assertEqual(len(optional), 2)
+        for step in job['steps']:
+            if step.get('name') in optional_names:
+                self.assertIs(step['continue-on-error'], True)
+                self.assertEqual(step['timeout-minutes'], 2)
+            else:
+                self.assertNotIn('continue-on-error', step)
+        encrypt, upload = optional
+        self.assertEqual(encrypt['id'], 'encrypt-first-failure')
+        self.assertEqual(encrypt['if'],
+                         "always() && steps.staged-trial.outcome == 'failure' && inputs.diagnostic_recipient != ''")
+        self.assertEqual(inputs['diagnostic_recipient']['default'], '')
+        self.assertEqual(upload['if'],
+                         "always() && steps.encrypt-first-failure.outcome == 'success' && steps.encrypt-first-failure.outputs.ready == 'true'")
+        self.assertEqual(upload['with']['path'],
+                         '${{ runner.temp }}/staged-encrypted-diagnostic/first-failure.age')
+        self.assertEqual(upload['with']['retention-days'], 7)
+        self.assertEqual(upload['with']['if-no-files-found'], 'error')
         self.assertIn(' verify --directory ', job['steps'][-1]['run'])
         shell=(ROOT / '.github/scripts/staged-migrations.sh').read_text()
         self.assertLess(shell.index('source_provider.py --cli'),shell.index('deploy-slim-core.sh'))
