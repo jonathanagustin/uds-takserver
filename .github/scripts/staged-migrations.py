@@ -80,7 +80,9 @@ def restore_task_default(directory):
     require(head.returncode == 0 and head.stdout.decode().strip() == os.environ.get('GITHUB_SHA'),
             'staged restoration source differs from checkout')
     plan = json.loads(regular(directory / 'plan.json', 65536))
-    require(set(plan) == {'schema', 'sourceSHA', 'files'} and plan['schema'] == 1
+    selected = os.environ.get('CORE_RESTORE_OWNER_TRIAL', 'false') == 'true'
+    require(set(plan) == ({'schema', 'sourceSHA', 'files', 'coreSourceProvider'} if selected else {'schema', 'sourceSHA', 'files'})
+            and plan['schema'] == (2 if selected else 1)
             and plan['sourceSHA'] == os.environ['GITHUB_SHA']
             and set(plan['files']) == {'core', 'detach', 'clean', 'config'}, 'valid bound candidate required')
     bound = {}
@@ -93,6 +95,13 @@ def restore_task_default(directory):
         regular_file(path)
         require(sha(path) == entry['sha256'], 'bound input changed')
         bound[key] = (path, entry['sha256'])
+    if selected:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('restoration_core_provider', ROOT / 'tests/velero-ownership/source_provider.py')
+        provider = importlib.util.module_from_spec(spec); spec.loader.exec_module(provider)
+        require(plan['coreSourceProvider'] == provider.receipt(), 'bound Core provider differs')
+        for name in ('core', 'detach', 'clean'):
+            provider.verify_bundle(bound[name][0], plan['coreSourceProvider'])
     task = ROOT / 'tasks.yaml'
     actual, reviewed = regular(task), reviewed_bytes('tasks.yaml')
     helpers = ('.github/container-and-chart/docker/build.sh', '.github/container-and-chart/docker/version.txt',
@@ -186,6 +195,40 @@ def identity_phase_proofs(directory, journal, fresh=False):
     return proofs
 
 
+IDENTITY_JOURNAL_LIMIT = 16 * 1024 * 1024
+IDENTITY_JOURNAL_STAGES = 4096
+
+
+def identity_journal(path):
+    """Read a bounded private transcript, not an individual public phase proof."""
+    before = path.lstat()
+    require(stat.S_ISREG(before.st_mode) and before.st_size <= IDENTITY_JOURNAL_LIMIT,
+            'identity journal exceeds private bound or is nonregular')
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    with os.fdopen(os.open(path, flags), 'rb') as stream:
+        opened = os.fstat(stream.fileno())
+        require((opened.st_dev, opened.st_ino) == (before.st_dev, before.st_ino), 'identity journal changed')
+        data = stream.read(IDENTITY_JOURNAL_LIMIT + 1)
+        after = os.fstat(stream.fileno())
+    current = path.lstat()
+    fields = lambda v: (v.st_dev, v.st_ino, v.st_size, v.st_mtime_ns, v.st_ctime_ns)
+    require(fields(before) == fields(after) == fields(current) and len(data) == before.st_size and
+            len(data) <= IDENTITY_JOURNAL_LIMIT, 'identity journal changed or exceeds private bound')
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            require(key not in value, 'duplicate identity journal field')
+            value[key] = item
+        return value
+    try:
+        value = json.loads(data.decode('utf-8'), object_pairs_hook=unique)
+    except RecursionError:
+        raise ValueError('identity journal nesting exceeds bound') from None
+    require(isinstance(value, dict) and isinstance(value.get('stages'), list) and
+            len(value['stages']) <= IDENTITY_JOURNAL_STAGES, 'identity journal stage bound differs')
+    return value
+
+
 def identity_receipt(directory, arch):
     methods = identity_methods()
     fresh = os.environ.get('FRESH_STRICT', 'false') == 'true'
@@ -194,7 +237,7 @@ def identity_receipt(directory, arch):
     for method in methods:
         folder = directory / ('identity' if method == 'manual' else 'package-identity')
         last_path = folder / 'journal.json'
-        journal = bounded_json(last_path)
+        journal = identity_journal(last_path)
         require(journal.get('schema') == 1 and journal.get('completed') is True and journal.get('accepted') is True
                 and journal.get('recoveryOnly', False) is False and journal.get('scenario') == 'identities'
                 and journal.get('architecture') == arch
@@ -312,6 +355,16 @@ def receipt(directory, arch):
                     and journal.get('driverSHA256') == sha(ROOT / 'tests/velero-ownership/drive.py')
                     and [step.get('name') for step in journal['steps']] == OWNER_STEPS
                     and all(step.get('status') == 'passed' for step in journal['steps']), 'owner round-trip not accepted')
+            if os.environ.get('CORE_RESTORE_OWNER_TRIAL', 'false') == 'true':
+                import importlib.util
+                spec = importlib.util.spec_from_file_location('receipt_core_provider', ROOT / 'tests/velero-ownership/source_provider.py')
+                provider = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(provider)
+                expected = provider.receipt()
+                require(journal.get('coreSourceProvider') == expected, 'owner Core source binding differs')
+                result['coreSourceProvider'] = expected
+            else:
+                require('coreSourceProvider' not in journal, 'unexpected owner Core source binding')
             guard = journal['cluster']
             for group, stage in [('fresh', 'fresh-core'), ('handoff', 'core-after'), ('handoff', 'local-after')]:
                 path = directory / 'owner' / group / (stage + '.json')
@@ -352,6 +405,14 @@ def verify(directory):
                 and value.get('scenarios') == scenarios
                 and value.get('results') == {scenario: 'passed' for scenario in scenarios},
                 'selected architecture/scenario lacks exact-run acceptance')
+        if os.environ.get('CORE_RESTORE_OWNER_TRIAL', 'false') == 'true':
+            import importlib.util
+            spec = importlib.util.spec_from_file_location('verify_core_provider', ROOT / 'tests/velero-ownership/source_provider.py')
+            provider = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(provider)
+            require(value.get('coreSourceProvider') == provider.receipt(), 'public Core source binding differs')
+        else:
+            require('coreSourceProvider' not in value, 'unexpected public Core source binding')
         verify_public_proofs(directory.parent / 'proofs' / arch, value)
     return {'selectedArchitectures': arches, 'selectedScenarios': scenarios, 'accepted': True}
 
@@ -469,7 +530,7 @@ RETAINED_HOOK_FIELDS={
 
 
 def diagnostic_journal_hash(path):
-    # Diagnostic only: this never admits an oversized journal as acceptance proof.
+    # Diagnostic only: this never replaces semantic private-journal and phase verification.
     before=path.lstat()
     require(path.is_file() and not path.is_symlink() and before.st_size<=16*1024*1024,'diagnostic-journal-unavailable')
     digest=hashlib.sha256()
@@ -592,7 +653,7 @@ def identity_progress(directory):
     return result
 
 
-def identity_failure_callsites(directory):
+def identity_failure_callsites(directory, diagnostic=False):
     """Only reviewed path/line/source hashes; never exception text or values."""
     import importlib.util
     spec = importlib.util.spec_from_file_location('identity_failure_evidence', ROOT / 'tests/workload-identities/failure_evidence.py')
@@ -601,7 +662,10 @@ def identity_failure_callsites(directory):
     result = []
     for method in identity_methods():
         try:
-            value = capture.public(directory / ('identity' if method == 'manual' else 'package-identity'))
+            folder = directory / ('identity' if method == 'manual' else 'package-identity')
+            if diagnostic:
+                folder = folder / 'retained-diagnostic-callsite'
+            value = capture.public(folder)
             kind = value['exceptionType']
             category = ('guard-rejection' if kind in ('ValueError', 'EvidenceError') else
                         'schema' if kind in ('KeyError', 'TypeError', 'AttributeError', 'JSONDecodeError') else
@@ -628,6 +692,9 @@ def failure_categories(directory, progress):
     if 'identities' in SCENARIOS.get(os.environ.get('SCENARIO'), []):
         calls = identity_failure_callsites(directory)
         result['identityFailures'] = calls
+        diagnostic_calls = identity_failure_callsites(directory, diagnostic=True)
+        if diagnostic_calls:
+            result['identityDiagnosticFailures'] = diagnostic_calls
         if calls:
             result['scope'] = 'reviewed-callsite-only'
             result['status'] = 'captured'
@@ -657,6 +724,49 @@ def failure_categories(directory, progress):
     return result
 
 
+def receipt_failure(error, operation, directory, arch):
+    """Fixed predicates and our source frames only; never private exception text."""
+    require(operation in ('receipt-generation', 'public-proof-verification'), 'invalid diagnostic operation')
+    source = Path(__file__).resolve()
+    frames, current = [], error.__traceback__
+    while current:
+        if Path(current.tb_frame.f_code.co_filename).resolve() == source:
+            frames.append({'file': '.github/scripts/staged-migrations.py',
+                           'line': current.tb_lineno, 'sourceSHA256': sha(source)})
+        current = current.tb_next
+    allowed = {'ValueError', 'OSError', 'FileNotFoundError', 'PermissionError',
+               'KeyError', 'TypeError', 'AttributeError', 'JSONDecodeError'}
+    result = {'schema': 1, 'scope': 'receipt-validation-diagnostic-only', 'operation': operation,
+              'exceptionType': type(error).__name__ if type(error).__name__ in allowed else 'unclassified',
+              'frames': frames[-8:], 'identityMethods': {}}
+    for method in identity_methods() if os.environ.get('SCENARIO') in ('identities', 'all') else []:
+        try:
+            journal = identity_journal(directory / ('identity' if method == 'manual' else 'package-identity') / 'journal.json')
+            facts = {'schemaMatches': type(journal.get('schema')) is int and journal['schema'] == 1,
+                     'completed': journal.get('completed') is True,
+                     'accepted': journal.get('accepted') is True,
+                     'notRecoveryOnly': journal.get('recoveryOnly', False) is False,
+                     'scenarioMatches': journal.get('scenario') == 'identities',
+                     'architectureMatches': journal.get('architecture') == arch,
+                     'driverMatches': journal.get('driverSHA256') == sha(ROOT / 'tests/workload-identities/drive.py'),
+                     'probeMatches': journal.get('probeSourceSHA256') == sha(ROOT / 'tests/workload-identities/ProtocolProbe.java')}
+            if method == 'package':
+                fresh = os.environ.get('FRESH_STRICT', 'false') == 'true'
+                stages = {e.get('stage') for e in journal.get('stages', []) if isinstance(e, dict)}
+                facts.update(methodMatches=journal.get('method') == 'package',
+                             packageDriverMatches=journal.get('packageDriverSHA256') == sha(ROOT / 'tests/workload-identities/package_roundtrip.py'),
+                             packagePhasesMatch=journal.get('packagePhases') ==
+                                 ['shared', 'transition', 'strict', 'rollback', 'shared'] + (['strict'] if fresh else []),
+                             freshRequestedMatches=journal.get('freshStrictRequested') is fresh,
+                             freshAcceptedMatches=journal.get('freshStrictAccepted') is fresh,
+                             finalStagePresent='package-roundtrip-verified' in stages,
+                             stoppedAbsent='stopped' not in stages)
+            result['identityMethods'][method] = {'status': 'captured', 'predicates': facts}
+        except (ValueError, OSError, KeyError, TypeError, AttributeError):
+            result['identityMethods'][method] = {'status': 'unavailable'}
+    return result
+
+
 def publish(directory, output, arch):
     """Always publish a small allowlist; never recursively copy private evidence."""
     scenarios, arches = selection()
@@ -666,7 +776,9 @@ def publish(directory, output, arch):
     (output / 'receipts').mkdir()
     try:
         value = receipt(directory, arch)
-    except (ValueError, OSError, KeyError, TypeError, AttributeError):
+    except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
+        diagnostic = receipt_failure(error, 'receipt-generation', directory, arch)
+        (public / 'receipt-failure.json').write_text(json.dumps(diagnostic, indent=2) + '\n')
         value = {'schema': 1, 'sourceSHA': os.environ['GITHUB_SHA'], 'runID': os.environ['GITHUB_RUN_ID'],
                  'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'], 'architecture': arch, 'scenarios': scenarios,
                  'accepted': False, 'results': {name: 'failed-or-incomplete' for name in scenarios}}
@@ -702,7 +814,10 @@ def publish(directory, output, arch):
     if value['accepted']:
         try:
             verify_public_proofs(public, value)
-        except (ValueError, OSError, KeyError, TypeError, AttributeError):
+        except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
+            diagnostic = receipt_failure(error, 'public-proof-verification', directory, arch)
+            (public / 'receipt-failure.json').write_text(json.dumps(diagnostic, indent=2) + '\n')
+            value['publishedProofHashes']['receipt-failure'] = sha(public / 'receipt-failure.json')
             value['accepted'] = False
             value['results'] = {name: 'failed-or-incomplete' for name in scenarios}
     if progress['accepted'] != value['accepted']:

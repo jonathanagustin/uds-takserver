@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -76,7 +77,8 @@ def validation_fixture(root):
            'cert-account':('metadata','identity-spec','object-fields'),
            'cert-role':('metadata','rbac','object-fields'),'cert-binding':('metadata','rbac','object-fields'),
            'cert-job':('metadata','job-spec','object-fields')}
-    source_names=('pepr/capabilities/workload.ts','pepr/capabilities/cloudtak-admin.ts','pepr/capabilities/takclient-credentials.ts')
+    source_names=('pepr/capabilities/workload.ts','pepr/capabilities/cloudtak-admin.ts','pepr/capabilities/takclient-credentials.ts',
+                  'pepr/capabilities/takclient.ts','pepr/capabilities/takclient-pki.ts','pepr/capabilities/takclient-capability.ts','.github/container-and-chart/docker/Dockerfile','.github/container-and-chart/docker/publish-cert-configmap.sh')
     def sha(value):return AGE.digest(json.dumps(value,sort_keys=True,separators=(',',':')).encode())
     def meta(name):return {'name':name,'namespace':'takserver','annotations':{'helm.sh/hook':'pre-install,pre-upgrade'}}
     objects=[{'apiVersion':'v1','kind':'Secret','metadata':meta('takserver-keystore'),'data':{'KEYSTORE_SOURCE':'PRIVATE_KEYSTORE_SOURCE'}},
@@ -130,6 +132,120 @@ def save_validation(folder,payload,journal):
 
 
 class EncryptedDiagnosticGuards(unittest.TestCase):
+    def test_cleanup_drift_uses_authenticated_private_validation_channel(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder,output,env,payload,journal,owner=validation_fixture(Path(directory))
+            expected={'kind':'Secret','namespace':'takserver','name':'takserver-keystore',
+                      'uid':'bound-uid','resourceVersion':'1','metadataSHA256':'a'*64}
+            payload.update(kind='cleanup-resource-drift',snapshot={'schema':1,'expected':expected,
+                'observed':{**expected,'resourceVersion':'2'},'changedFields':['resourceVersion']})
+            save_validation(folder,payload,journal)
+            def source(name):return AGE.digest((AGE.ROOT/name).read_bytes())
+            with patch.dict(os.environ,env,clear=True),patch.object(AGE,'reviewed_source_hash',side_effect=source):
+                capsule=AGE.package_input(Path(directory))
+            self.assertIsInstance(capsule,int)
+            os.close(capsule)
+
+    def test_pvc_state_extension_passes_exact_source_encrypted_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder,output,env,payload,journal,owner=validation_fixture(Path(directory))
+            expected={'kind':'PersistentVolumeClaim','namespace':'takserver','name':'retained-data',
+                      'uid':'bound-uid','resourceVersion':'1','metadataSHA256':'a'*64}
+            state={'specSHA256':'b'*64,'statusSHA256':'c'*64,'finalizersSHA256':'d'*64,
+                   'pvcProtection':True,'otherFinalizerCount':0,
+                   'statusFieldsSHA256':{key:'f'*64 for key in ('phase','accessModes','capacity','conditions',
+                       'allocatedResources','resizeStatus','allocatedResourceStatuses',
+                       'currentVolumeAttributesClassName','modifyVolumeStatus','other')}}
+            state['conditionFacts']={'shape':'list','count':1,'knownTypes':{'Resizing':['True']},'otherTypeCount':0,
+                'fieldsSHA256':{key:'0'*64 for key in ('type','status','detail','timestamps','other')},
+                'managedOwners':{'count':1,'codes':['K3s'],'unknownCount':0,'sha256':'1'*64}}
+            state['conditionFacts'].pop('fieldsSHA256')  # Model the bounded ownership-detail fallback.
+            payload.update(kind='cleanup-resource-drift',snapshot={'schema':1,'expected':expected,
+                'observed':{**expected,'resourceVersion':'2'},'changedFields':['resourceVersion'],
+                'pvcState':{'expected':state,'observed':{**state,'finalizersSHA256':'e'*64,'pvcProtection':False}}})
+            save_validation(folder,payload,journal)
+            def source(name):return AGE.digest((AGE.ROOT/name).read_bytes())
+            with patch.dict(os.environ,env,clear=True),patch.object(AGE,'reviewed_source_hash',side_effect=source):
+                descriptor=AGE.package_input(Path(directory))
+            self.assertIsInstance(descriptor,int);os.close(descriptor)
+
+    def test_input_rejection_reports_only_fixed_reason_without_encrypting(self):
+        cases = {'journal': 'package-journal', 'progress': 'package-progress',
+                 'progress-binding': 'package-binding', 'missing-reference': 'missing-private-reference',
+                 'retained-file': 'retained-file', 'retained-binding': 'retained-binding',
+                 'retained-schema': 'retained-schema', 'source': 'reviewed-source'}
+        for case, expected in cases.items():
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                folder, _output, env, payload, journal, _owner = validation_fixture(root)
+                if case == 'journal':
+                    (folder/'journal.json').write_text('PRIVATE_INVALID_JSON_SENTINEL')
+                elif case == 'progress':
+                    (folder/'journal-progress.json').unlink()
+                elif case == 'progress-binding':
+                    value = json.loads((folder/'journal-progress.json').read_text())
+                    value['journalSHA256'] = 'f'*64
+                    (folder/'journal-progress.json').write_text(json.dumps(value))
+                elif case == 'missing-reference':
+                    journal.pop('firstPrivateFailure')
+                    journal.pop('retainedSourceValidationFailure')
+                    path = folder/'journal.json'
+                    path.write_text(json.dumps(journal))
+                    progress = {'schema': 1, 'guard': journal['guard'], 'journalSHA256': AGE.digest(path.read_bytes())}
+                    (folder/'journal-progress.json').write_text(json.dumps(progress))
+                elif case == 'retained-file':
+                    (folder/AGE.VALIDATION_NAME).unlink()
+                elif case == 'retained-binding':
+                    payload['binding'] = {**payload['binding'], 'runID': '999'}
+                    save_validation(folder, payload, journal)
+                elif case == 'retained-schema':
+                    payload['snapshot']['diagnostic']['hook'] = 'PRIVATE_SCHEMA_SENTINEL'
+                    save_validation(folder, payload, journal)
+                def source(name):
+                    if case == 'source':
+                        raise ValueError('PRIVATE_SOURCE_ERROR_SENTINEL')
+                    return AGE.digest((AGE.ROOT/name).read_bytes())
+                captured = io.StringIO()
+                with patch.dict(os.environ, env, clear=True), patch.object(AGE, 'context'), \
+                        patch.object(AGE, 'reviewed_source_hash', side_effect=source), \
+                        patch.object(AGE, 'acquire_age') as acquire, \
+                        contextlib.redirect_stdout(captured), contextlib.redirect_stderr(captured):
+                    self.assertEqual(AGE.main(), 1)
+                self.assertEqual(captured.getvalue(), 'Encrypted staged diagnostic omitted: private-input:'+expected+'\n')
+                acquire.assert_not_called()
+                self.assertFalse((root/AGE.OUTPUT_NAME).exists())
+
+    def test_one_eligible_channel_survives_another_rejection(self):
+        for rejected in ('owner', 'package'):
+            with self.subTest(rejected=rejected), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                folder, _output, env, _payload, _journal, owner = package_fixture(root)
+                env.update(SCENARIO='all', IDENTITY_METHOD='combined')
+                if rejected == 'owner':
+                    owner.with_name('journal.json').write_text('PRIVATE_INVALID_OWNER_SENTINEL')
+                    expected = (folder/AGE.PACKAGE_NAME).read_bytes()
+                else:
+                    (folder/'journal.json').write_text('PRIVATE_INVALID_PACKAGE_SENTINEL')
+                    expected = owner.read_bytes()
+                with patch.dict(os.environ, env, clear=True), \
+                        patch.object(AGE, 'reviewed_source_hash', side_effect=lambda name: AGE.digest((AGE.ROOT/name).read_bytes())):
+                    descriptor = AGE.select_private(root)
+                    try:
+                        self.assertEqual(os.read(descriptor, AGE.INPUT_LIMIT+1), expected)
+                    finally:
+                        os.close(descriptor)
+
+    def test_unknown_exception_text_cannot_become_a_reason(self):
+        class PrivateError(Exception):
+            def __str__(self):
+                raise AssertionError('exception text was evaluated')
+        def reject():
+            raise PrivateError('PRIVATE_ERROR_SENTINEL')
+        with self.assertRaises(AGE.InputRejected) as failure:
+            AGE.input_check('package-binding', reject)
+        self.assertEqual(failure.exception.reason, 'package-binding')
+        self.assertEqual(AGE.InputRejected('PRIVATE_REASON_SENTINEL').reason, 'channels-unavailable')
+
     def test_core_validation_is_sealed_and_rejects_raw_or_forged_inventory(self):
         for mutation in ('valid','raw-body','unknown-key','diagnostic','unchanged','operation','kind-alias'):
             with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as temporary:
@@ -145,6 +261,56 @@ class EncryptedDiagnosticGuards(unittest.TestCase):
                 elif mutation=='unchanged':payload['snapshot']['observed']=copy.deepcopy(payload['snapshot']['baseline'])
                 elif mutation=='operation':payload['snapshot']['operation']='PRIVATE_CORE_SENTINEL'
                 elif mutation=='kind-alias':payload['kind']='stored-hooks-drift'
+                save_validation(folder,payload,journal)
+                with patch.dict(os.environ,env,clear=True),patch.object(AGE,'reviewed_source_hash',side_effect=lambda name:AGE.digest((AGE.ROOT/name).read_bytes())):
+                    if mutation=='valid':
+                        descriptor=AGE.package_input(root)
+                        try:
+                            self.assertEqual(os.read(descriptor,AGE.VALIDATION_INPUT_LIMIT+1),(folder/AGE.VALIDATION_NAME).read_bytes())
+                            with self.assertRaises(OSError):os.write(descriptor,b'foreign')
+                        finally:os.close(descriptor)
+                    else:
+                        with self.assertRaises(ValueError):AGE.package_input(root)
+
+    def test_cleanup_consumer_inventory_is_source_bound_and_sealed(self):
+        for mutation in ('valid','empty','body','foreign','kind-alias'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary);folder,_out,env,payload,journal,_owner=validation_fixture(root)
+                payload['kind']='cleanup-consumers'
+                payload['snapshot']={'schema':1,'consumers':[{'kind':'Pod','namespace':'takserver',
+                    'name':'remaining','uid':'bound-uid','resourceVersion':'123','deleting':True,
+                    'phase':'Succeeded','owners':[]}]}
+                if mutation=='empty':payload['snapshot']['consumers']=[]
+                elif mutation=='body':payload['snapshot']['consumers'][0]['spec']={'private':'PRIVATE_SENTINEL'}
+                elif mutation=='foreign':payload['snapshot']['consumers'][0]['namespace']='istio-system'
+                elif mutation=='kind-alias':payload['kind']='stored-hooks-drift'
+                save_validation(folder,payload,journal)
+                with patch.dict(os.environ,env,clear=True),patch.object(AGE,'reviewed_source_hash',side_effect=lambda name:AGE.digest((AGE.ROOT/name).read_bytes())):
+                    if mutation=='valid':
+                        descriptor=AGE.package_input(root)
+                        try:
+                            self.assertEqual(os.read(descriptor,AGE.VALIDATION_INPUT_LIMIT+1),(folder/AGE.VALIDATION_NAME).read_bytes())
+                            with self.assertRaises(OSError):os.write(descriptor,b'foreign')
+                        finally:os.close(descriptor)
+                    else:
+                        with self.assertRaises(ValueError):AGE.package_input(root)
+
+    def test_clean_inventory_is_source_bound_closed_and_sealed(self):
+        for mutation in ('valid','body','scope','kind','count','digest','source','alias'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary);folder,_out,env,payload,journal,_owner=validation_fixture(root)
+                objects=[{'name':'remaining','uid':'bound-uid','resourceVersion':'123','deleting':False,'objectSHA256':'a'*64}]
+                payload['kind']='cleanup-clean-inventory'
+                payload['snapshot']={'schema':1,'namespace':'cloudtak','kind':'secrets','reason':'unexpected-objects',
+                    'totalCount':1,'truncated':False,'objects':objects,
+                    'inventorySHA256':AGE.digest(json.dumps(objects,sort_keys=True,separators=(',',':')).encode())}
+                if mutation=='body':objects[0]['data']={'private':'PRIVATE_SENTINEL'}
+                elif mutation=='scope':payload['snapshot']['namespace']='istio-system'
+                elif mutation=='kind':payload['snapshot']['kind']='Secret'
+                elif mutation=='count':payload['snapshot']['totalCount']=True
+                elif mutation=='digest':payload['snapshot']['inventorySHA256']='0'*64
+                elif mutation=='source':payload['retainedSourceSHA256']=journal['retainedSourceSHA256']='0'*64
+                elif mutation=='alias':payload['kind']='cleanup-consumers'
                 save_validation(folder,payload,journal)
                 with patch.dict(os.environ,env,clear=True),patch.object(AGE,'reviewed_source_hash',side_effect=lambda name:AGE.digest((AGE.ROOT/name).read_bytes())):
                     if mutation=='valid':
@@ -489,6 +655,33 @@ class EncryptedDiagnosticGuards(unittest.TestCase):
                 AGE.bounded_process([sys.executable, '-c', code], limit=limit, seconds=seconds)
             self.assertLess(time.monotonic() - started, 5)
 
+    def test_encryption_declares_the_retained_validator_dependency(self):
+        source=AGE.ROOT/'tests/workload-identities/retained_state.py'
+        code='import sys,types; p=sys.argv[1]; m=types.ModuleType("retained");m.__file__=p;exec(compile(open(p).read(),p,"exec"),m.__dict__)'
+        result=subprocess.run([sys.executable,'-I','-S','-c',code,str(source)],capture_output=True,timeout=5)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn(b"No module named 'yaml'",result.stderr)
+        workflow=(AGE.ROOT/'.github/workflows/staged-migrations.yaml').read_text()
+        step=workflow.split('- name: Encrypt optional first failure diagnostic',1)[1].split('- name: Upload only encrypted',1)[0]
+        command=next(line.split('run:',1)[1].strip() for line in step.splitlines() if line.lstrip().startswith('run:'))
+        self.assertEqual(shlex.split(command),['uv','run','--no-project','--with','pyyaml==6.0.3','python3',
+                                              '.github/test-infra/staged-encrypted-diagnostic.py'])
+
+    def test_first_failure_is_sealed_and_uploaded_before_optional_public_uploads(self):
+        workflow = (AGE.ROOT / '.github/workflows/staged-migrations.yaml').read_text()
+        names = ['Run only the selected staged acceptance', 'Encrypt optional first failure diagnostic',
+                 'Upload only encrypted first failure diagnostic',
+                 'Publish only allowlisted stage evidence, including failures',
+                 'Upload exact-run sanitized acceptance evidence', 'Upload optional passive diagnostic evidence']
+        positions = [workflow.index('- name: ' + name) for name in names]
+        self.assertEqual(positions, sorted(positions))
+        # A refused or failed optional encryption/upload must not skip the
+        # independent public evidence path or turn failed acceptance green.
+        public = workflow.split('- name: Publish only allowlisted stage evidence', 1)[1].split('\n      - name:', 1)[0]
+        self.assertIn('if: always()', public)
+        self.assertNotIn('continue-on-error: true', public)
+        self.assertIn("steps.staged-trial.outcome == 'failure'", workflow)
+
     def test_workflow_only_uploads_ciphertext_after_failed_trial_successful_encryption(self):
         # String checks keep this Unit step stdlib-only.
         workflow = (AGE.ROOT / '.github/workflows/staged-migrations.yaml').read_text()
@@ -497,7 +690,7 @@ class EncryptedDiagnosticGuards(unittest.TestCase):
         encrypt = workflow.split('- name: Encrypt optional first failure diagnostic', 1)[1]
         self.assertIn("steps.staged-trial.outcome == 'failure' && inputs.diagnostic_recipient != ''", encrypt)
         self.assertIn('STAGED_AGE_RECIPIENT: ${{ inputs.diagnostic_recipient }}', encrypt)
-        upload = encrypt.split('- name: Upload only encrypted first failure diagnostic', 1)[1].split('  summary:', 1)[0]
+        upload = encrypt.split('- name: Upload only encrypted first failure diagnostic', 1)[1].split('\n      - name:', 1)[0].split('  summary:', 1)[0]
         self.assertIn("steps.encrypt-first-failure.outcome == 'success'", upload)
         self.assertIn("steps.encrypt-first-failure.outputs.ready == 'true'", upload)
         self.assertIn('path: ${{ runner.temp }}/staged-encrypted-diagnostic/first-failure.age', upload)

@@ -1,0 +1,694 @@
+--- a/takkernel/engine/src/main/jni/interop/InterfaceMarshalContext.h
++++ b/takkernel/engine/src/main/jni/interop/InterfaceMarshalContext.h
+@@ -42,6 +42,54 @@
+             template<class WrapperType>
+             TAK::Engine::Util::TAKErr marshal(Java::JNILocalRef &value, JNIEnv &env, std::unique_ptr<T, void(*)(const T *)> &&obj) NOTHROWS;
+         private :
++            // Destruction may invoke Java callbacks. Run it with a clear JNI
++            // state and restore the constructor's primary exception afterward.
++            template<class Peer>
++            static void discardFailedPeer(JNIEnv &env, Peer &peer) NOTHROWS
++            {
++                jthrowable primary = env.ExceptionOccurred();
++                if(primary) env.ExceptionClear();
++                peer.reset();
++                if(primary) {
++                    if(env.ExceptionCheck()) env.ExceptionClear();
++                    env.Throw(primary);
++                    env.DeleteLocalRef(primary);
++                }
++            }
++            // Retain the allocated Java peer until rollback has cleared its Pointer.
++            // Its constructor may register a cleaner before throwing.
++            TAK::Engine::Util::TAKErr constructWrapper(Java::JNILocalRef &peer, jweak &reference,
++                                                     JNIEnv &env, jobject pointer) NOTHROWS
++            {
++                peer = Java::JNILocalRef(env, env.AllocObject(javaWrapperType));
++                if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                if(!peer) return TAK::Engine::Util::TE_OutOfMemory;
++                env.CallNonvirtualVoidMethod(peer.get(), javaWrapperType, javaWrapperCtor, pointer, NULL);
++                if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                reference = env.NewWeakGlobalRef(peer.get());
++                if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                return reference ? TAK::Engine::Util::TE_Ok : TAK::Engine::Util::TE_OutOfMemory;
++            }
++            TAK::Engine::Util::TAKErr cachedWrapper(Java::JNILocalRef &peer, JNIEnv &env, const T *native) NOTHROWS
++            {
++                auto entry = nativeImplToManagedWrapper.find(native);
++                if(entry == nativeImplToManagedWrapper.end()) return TAK::Engine::Util::TE_InvalidArg;
++                Java::JNILocalRef candidate(env, env.NewLocalRef(entry->second));
++                if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                if(candidate) {
++                    Java::JNILocalRef pointer(env, env.GetObjectField(candidate.get(), javaWrapperPointerField));
++                    if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                    T *raw = pointer ? Pointer_get<T>(env, pointer.get()) : NULL;
++                    if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                    if(raw && raw == native) {
++                        peer = std::move(candidate);
++                        return TAK::Engine::Util::TE_Ok;
++                    }
++                }
++                env.DeleteWeakGlobalRef(entry->second);
++                nativeImplToManagedWrapper.erase(entry);
++                return TAK::Engine::Util::TE_InvalidArg;
++            }
+             template<class Ti>
+             static void onShutdown(JNIEnv &env, void *opaque) NOTHROWS
+             {
+@@ -107,25 +155,44 @@
+         template<class T>
+         inline bool InterfaceMarshalContext<T>::isWrapper(JNIEnv &env, jobject obj) NOTHROWS
+         {
+-            if(!javaWrapperType)
++            if(env.ExceptionCheck() || !javaWrapperType || !obj)
+                 return false;
+-            return ATAKMapEngineJNI_equals(&env, javaWrapperType, env.GetObjectClass(obj));
++            Java::JNILocalRef objectType(env, env.GetObjectClass(obj));
++            if(env.ExceptionCheck() || !objectType)
++                return false;
++            return env.IsSameObject(javaWrapperType, objectType.get());
+         }
+         template<class T>
+         template<class WrapperType>
+         inline TAK::Engine::Util::TAKErr InterfaceMarshalContext<T>::marshal(std::shared_ptr<T> &value, JNIEnv &env, jobject obj) NOTHROWS
+         {
++            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
+             TAK::Engine::Util::TAKErr code(TAK::Engine::Util::TE_Ok);
+             if(!obj)
+                 return TAK::Engine::Util::TE_InvalidArg;
+             TAK::Engine::Thread::LockPtr lock(NULL, NULL);
+             // check if it's a wrapper, and return
+-            if(isWrapper(env, obj)) {
++            const bool wrapper = isWrapper(env, obj);
++            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++            if(wrapper) {
+                 do {
+-                    jobject msourcePtr = env.GetObjectField(obj, javaWrapperPointerField);
+-                    if(!Pointer_makeShared<T>(&env, msourcePtr))
+-                        break;
+-                    value = *JLONG_TO_INTPTR(std::shared_ptr<T>, env.GetLongField(msourcePtr, Pointer_class.value));
++                    Java::JNILocalRef pointer(env, env.GetObjectField(obj, javaWrapperPointerField));
++                    if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                    if(!pointer) return TAK::Engine::Util::TE_InvalidArg;
++                    T *raw = Pointer_get<T>(env, pointer.get());
++                    if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                    // Disposal leaves the Pointer type intact but clears its
++                    // raw/value fields. Never dereference its retired holder.
++                    if(!raw) return TAK::Engine::Util::TE_InvalidArg;
++                    const bool shared = Pointer_makeShared<T>(&env, pointer.get());
++                    if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                    if(!shared) break;
++                    jlong holder = env.GetLongField(pointer.get(), Pointer_class.value);
++                    if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                    if(!holder) return TAK::Engine::Util::TE_InvalidArg;
++                    std::shared_ptr<T> candidate = *JLONG_TO_INTPTR(std::shared_ptr<T>, holder);
++                    if(candidate.get() != raw) return TAK::Engine::Util::TE_InvalidArg;
++                    value = std::move(candidate);
+                     return TAK::Engine::Util::TE_Ok;
+                 } while(false);
+             }
+@@ -150,8 +217,19 @@
+                 }
+             }
+ 
+-            value = std::unique_ptr<T, void(*)(const T *)>(new WrapperType(env, obj), TAK::Engine::Util::Memory_deleter_const<T, WrapperType>);
+-            managedImplToNativeWrapper[env.NewWeakGlobalRef(obj)] = value;
++            std::shared_ptr<T> candidate = std::unique_ptr<T, void(*)(const T *)>(new WrapperType(env, obj), TAK::Engine::Util::Memory_deleter_const<T, WrapperType>);
++            if(env.ExceptionCheck()) {
++                discardFailedPeer(env, candidate);
++                return TAK::Engine::Util::TE_Err;
++            }
++            jweak reference = env.NewWeakGlobalRef(obj);
++            if(!reference || env.ExceptionCheck()) {
++                if(reference) env.DeleteWeakGlobalRef(reference);
++                discardFailedPeer(env, candidate);
++                return env.ExceptionCheck() ? TAK::Engine::Util::TE_Err : TAK::Engine::Util::TE_OutOfMemory;
++            }
++            managedImplToNativeWrapper[reference] = candidate;
++            value = std::move(candidate);
+ 
+             return code;
+         }
+@@ -159,84 +237,104 @@
+         template<class WrapperType>
+         inline TAK::Engine::Util::TAKErr InterfaceMarshalContext<T>::marshal(Java::JNILocalRef &value, JNIEnv &env, const std::shared_ptr<T> &obj) NOTHROWS
+         {
+-            TAK::Engine::Util::TAKErr  code(TAK::Engine::Util::TE_Ok);
++            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++            if(!obj) return TAK::Engine::Util::TE_InvalidArg;
+             const WrapperType *impl = dynamic_cast<const WrapperType *>(obj.get());
+             if(impl) {
+-                // unwrap
+-                value = Java::JNILocalRef(env, env.NewLocalRef(impl->impl));
++                Java::JNILocalRef candidate(env, env.NewLocalRef(impl->impl));
++                if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                if(!candidate) return TAK::Engine::Util::TE_InvalidArg;
++                value = std::move(candidate);
+                 return TAK::Engine::Util::TE_Ok;
+             }
+-
+             TAK::Engine::Thread::LockPtr lock(NULL, NULL);
+-            code = TAK::Engine::Thread::Lock_create(lock, mutex);
++            auto code = TAK::Engine::Thread::Lock_create(lock, mutex);
+             TE_CHECKRETURN_CODE(code);
+-
+-            // look up in intern
+-            do {
+-                auto entry = nativeImplToManagedWrapper.find(obj.get());
+-                if(entry == nativeImplToManagedWrapper.end())
+-                    break;
+-                value = Java::JNILocalRef(env, env.NewLocalRef(entry->second));
+-                if(value)
+-                    return code;
+-                // weak ref was cleared
+-                env.DeleteWeakGlobalRef(entry->second);
+-                nativeImplToManagedWrapper.erase(entry);
+-            } while(false);
+-
+-            Java::JNILocalRef mpointer(env, NewPointer(&env, obj));
+-            value = Java::JNILocalRef(env, env.NewObject(javaWrapperType, javaWrapperCtor, mpointer.get(), NULL));
+-            nativeImplToManagedWrapper[obj.get()] = env.NewWeakGlobalRef(value);
++            Java::JNILocalRef candidate(env, NULL);
++            code = cachedWrapper(candidate, env, obj.get());
++            if(code == TAK::Engine::Util::TE_Ok) {
++                value = std::move(candidate);
++                return code;
++            }
++            if(code != TAK::Engine::Util::TE_InvalidArg) return code;
++            Java::JNILocalRef pointer(env, NewPointer(&env, obj));
++            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++            if(!pointer) return TAK::Engine::Util::TE_OutOfMemory;
++            jweak reference = NULL;
++            code = constructWrapper(candidate, reference, env, pointer.get());
++            if(code != TAK::Engine::Util::TE_Ok) {
++                if(reference) env.DeleteWeakGlobalRef(reference);
++                lock.reset();
++                Pointer_destruct<T>(&env, pointer.get());
++                return code;
++            }
++            nativeImplToManagedWrapper[obj.get()] = reference;
++            value = std::move(candidate);
+             return TAK::Engine::Util::TE_Ok;
+         }
+         template<class T>
+         template<class WrapperType>
+         inline TAK::Engine::Util::TAKErr InterfaceMarshalContext<T>::marshal(Java::JNILocalRef &value, JNIEnv &env, const T &obj) NOTHROWS
+         {
+-            TAK::Engine::Util::TAKErr  code(TAK::Engine::Util::TE_Ok);
++            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
+             const WrapperType *impl = dynamic_cast<const WrapperType *>(&obj);
+             if(impl) {
+-                // unwrap
+-                value = Java::JNILocalRef(env, env.NewLocalRef(impl->impl));
++                Java::JNILocalRef candidate(env, env.NewLocalRef(impl->impl));
++                if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++                if(!candidate) return TAK::Engine::Util::TE_InvalidArg;
++                value = std::move(candidate);
+                 return TAK::Engine::Util::TE_Ok;
+             }
+-
+-            // look up in intern
+-            do {
+-                TAK::Engine::Thread::LockPtr lock(NULL, NULL);
+-                code = TAK::Engine::Thread::Lock_create(lock, mutex);
+-                TE_CHECKBREAK_CODE(code);
+-
+-                auto entry = nativeImplToManagedWrapper.find(&obj);
+-                if(entry == nativeImplToManagedWrapper.end())
+-                    break;
+-                value = Java::JNILocalRef(env, env.NewLocalRef(entry->second));
+-                if(value)
+-                    return code;
+-                // weak ref was cleared
+-                env.DeleteWeakGlobalRef(entry->second);
+-                nativeImplToManagedWrapper.erase(entry);
+-            } while(false);
+-            return TAK::Engine::Util::TE_InvalidArg;
++            TAK::Engine::Thread::LockPtr lock(NULL, NULL);
++            auto code = TAK::Engine::Thread::Lock_create(lock, mutex);
++            TE_CHECKRETURN_CODE(code);
++            Java::JNILocalRef candidate(env, NULL);
++            code = cachedWrapper(candidate, env, &obj);
++            if(code == TAK::Engine::Util::TE_Ok) value = std::move(candidate);
++            return code;
+         }
+ 
+         template<class T>
+         template<class WrapperType>
+         TAK::Engine::Util::TAKErr InterfaceMarshalContext<T>::marshal(std::unique_ptr<T, void(*)(const T *)> &value, JNIEnv &env, jobject obj) NOTHROWS
+         {
++            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
+             if(!obj)
+                 return TAK::Engine::Util::TE_InvalidArg;
+-            value = std::unique_ptr<T, void(*)(const T *)>(new WrapperType(env, obj), TAK::Engine::Util::Memory_deleter_const<T, WrapperType>);
++            std::unique_ptr<T, void(*)(const T *)> candidate(new WrapperType(env, obj), TAK::Engine::Util::Memory_deleter_const<T, WrapperType>);
++            if(env.ExceptionCheck()) {
++                discardFailedPeer(env, candidate);
++                return TAK::Engine::Util::TE_Err;
++            }
++            value = std::move(candidate);
+             return TAK::Engine::Util::TE_Ok;
+         }
+         template<class T>
+         template<class WrapperType>
+         TAK::Engine::Util::TAKErr InterfaceMarshalContext<T>::marshal(Java::JNILocalRef &value, JNIEnv &env, std::unique_ptr<T, void(*)(const T *)> &&obj) NOTHROWS
+         {
+-            if(!obj.get())
+-                return TAK::Engine::Util::TE_InvalidArg;
+-            Java::JNILocalRef mpointer(env, NewPointer<T>(&env, std::move(obj)));
+-            value = Java::JNILocalRef(env, env.NewObject(javaWrapperType, javaWrapperCtor, mpointer.get(), NULL));
++            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++            if(!obj.get()) return TAK::Engine::Util::TE_InvalidArg;
++            const T *raw = obj.get();
++            TAK::Engine::Thread::LockPtr lock(NULL, NULL);
++            auto code = TAK::Engine::Thread::Lock_create(lock, mutex);
++            TE_CHECKRETURN_CODE(code);
++            Java::JNILocalRef pointer(env, NewPointer<T>(&env, std::move(obj)));
++            if(env.ExceptionCheck()) return TAK::Engine::Util::TE_Err;
++            if(!pointer) return TAK::Engine::Util::TE_OutOfMemory;
++            Java::JNILocalRef candidate(env, NULL);
++            jweak reference = NULL;
++            code = constructWrapper(candidate, reference, env, pointer.get());
++            if(code != TAK::Engine::Util::TE_Ok) {
++                if(reference) env.DeleteWeakGlobalRef(reference);
++                lock.reset();
++                Pointer_destruct<T>(&env, pointer.get());
++                return code;
++            }
++            auto old = nativeImplToManagedWrapper.find(raw);
++            if(old != nativeImplToManagedWrapper.end()) env.DeleteWeakGlobalRef(old->second);
++            nativeImplToManagedWrapper[raw] = reference;
++            value = std::move(candidate);
+             return TAK::Engine::Util::TE_Ok;
+         }
+     }
+--- a/takkernel/engine/src/main/jni/interop/Pointer.h
++++ b/takkernel/engine/src/main/jni/interop/Pointer.h
+@@ -51,6 +51,24 @@
+         template<class T>
+         inline void Pointer_destruct(JNIEnv *env, jobject jpointer) NOTHROWS
+         {
++            // A deleter may call Java and leave an exception pending. Keep JNI
++            // field cleanup clear of it and restore the first exception after.
++            struct PreservePointerException {
++                JNIEnv *env;
++                jthrowable first;
++                explicit PreservePointerException(JNIEnv *value) NOTHROWS : env(value), first(value->ExceptionOccurred())
++                { if(first) env->ExceptionClear(); }
++                void capture() NOTHROWS {
++                    if(!env->ExceptionCheck()) return;
++                    jthrowable next = env->ExceptionOccurred();
++                    env->ExceptionClear();
++                    if(!first) first = next; else env->DeleteLocalRef(next);
++                }
++                ~PreservePointerException() NOTHROWS {
++                    capture();
++                    if(first) { env->Throw(first); env->DeleteLocalRef(first); }
++                }
++            } preserve(env);
+             if(!jpointer)
+                 return;
+             jlong pointer = env->GetLongField(jpointer, Pointer_class.value);
+@@ -68,6 +86,7 @@
+                     TAK::Engine::Util::Logger_log(TAK::Engine::Util::TELL_Warning, "Pointer_destruct called with no deleter, leaking");
+             }
+ 
++            preserve.capture();
+             env->SetLongField(jpointer, Pointer_class.value, 0LL);
+             env->SetLongField(jpointer, Pointer_class.raw, 0LL);
+             env->SetLongField(jpointer, Pointer_class.deleter, 0LL);
+@@ -82,8 +101,10 @@
+         template<class T>
+         inline T *Pointer_get(JNIEnv &env, jobject jpointer) NOTHROWS
+         {
++            if(env.ExceptionCheck() || !jpointer)
++                return NULL;
+             jlong pointer = env.GetLongField(jpointer, Pointer_class.raw);
+-            if (pointer == 0LL)
++            if(env.ExceptionCheck() || pointer == 0LL)
+                 return NULL;
+             return JLONG_TO_INTPTR(T, pointer);
+         }
+@@ -91,19 +112,30 @@
+         template<class T>
+         inline T *Pointer_get(JNIEnv *env, jobject jpointer) NOTHROWS
+         {
+-            return Pointer_get<T>(*env, jpointer);
++            return env ? Pointer_get<T>(*env, jpointer) : NULL;
+         }
+         template<class T>
+         inline TAK::Engine::Util::TAKErr Pointer_get(std::shared_ptr<T> &value, JNIEnv &env, jobject mpointer) NOTHROWS
+         {
+-            TAK::Engine::Util::TAKErr code(TAK::Engine::Util::TE_Ok);
+-            if(!mpointer)
+-                return TAK::Engine::Util::TE_InvalidArg;
+-            if(!Pointer_isShared<T>(&env, mpointer) && !Pointer_makeShared<T>(&env, mpointer))
+-                return TAK::Engine::Util::TE_Err;
++            using namespace TAK::Engine::Util;
++            if(env.ExceptionCheck()) return TE_Err;
++            if(!mpointer) return TE_InvalidArg;
++            jlong holder = env.GetLongField(mpointer, Pointer_class.value);
++            if(env.ExceptionCheck()) return TE_Err;
++            if(!holder) return TE_InvalidArg;
++            T *raw = Pointer_get<T>(env, mpointer);
++            if(env.ExceptionCheck()) return TE_Err;
++            if(!Pointer_isShared<T>(&env, mpointer)) {
++                if(env.ExceptionCheck() || !Pointer_makeShared<T>(&env, mpointer)) return TE_Err;
++            }
++            if(env.ExceptionCheck()) return TE_Err;
+             jlong ptr = env.GetLongField(mpointer, Pointer_class.value);
+-            value = *JLONG_TO_INTPTR(std::shared_ptr<T>, ptr);
+-            return code;
++            if(env.ExceptionCheck()) return TE_Err;
++            if(!ptr) return TE_InvalidArg;
++            const std::shared_ptr<T> &candidate = *JLONG_TO_INTPTR(std::shared_ptr<T>, ptr);
++            if(candidate.get() != raw) return TE_InvalidArg;
++            value = candidate;
++            return TE_Ok;
+         }
+ 
+         template<class T>
+@@ -160,34 +192,52 @@
+         template<class T>
+         inline bool Pointer_makeShared(JNIEnv *env, jobject mpointer) NOTHROWS
+         {
++            if(!env || env->ExceptionCheck() || !mpointer) return false;
++            T *raw = Pointer_get<T>(*env, mpointer);
++            if(env->ExceptionCheck()) return false;
+             jint type = env->GetIntField(mpointer, Pointer_class.type);
++            if(env->ExceptionCheck()) return false;
+             jlong ptr = env->GetLongField(mpointer, Pointer_class.value);
++            if(env->ExceptionCheck() || !ptr) return false;
++            if(type == com_atakmap_interop_Pointer_SHARED) {
++                const std::shared_ptr<T> &model = *JLONG_TO_INTPTR(std::shared_ptr<T>, ptr);
++                return model.get() == raw;
++            }
++            if(!raw) return false;
++            if(type != com_atakmap_interop_Pointer_UNIQUE && type != com_atakmap_interop_Pointer_RAW)
++                return false;
++            if(JLONG_TO_INTPTR(T, ptr) != raw) return false;
+             jlong deleter = env->GetLongField(mpointer, Pointer_class.deleter);
+-            if(type == com_atakmap_interop_Pointer_REFERENCE) {
+-                // reference can't be shared
++            if(env->ExceptionCheck() || !deleter) return false;
++            typedef void(*deleter_fn)(const T *);
++            typedef std::unique_ptr<T, deleter_fn> TPtr;
++            TPtr cpointer(raw, JLONG_TO_FNPTR(deleter_fn, deleter));
++            std::shared_ptr<T> *model = NULL;
++            try {
++                model = new std::shared_ptr<T>(std::move(cpointer));
++            } catch(...) {
++                // A failed shared_ptr(unique_ptr&&) construction leaves its
++                // argument unchanged. Java still owns it: do not retire raw.
++                cpointer.release();
+                 return false;
+-            } else if(type == com_atakmap_interop_Pointer_SHARED) {
+-                // already shared
+-                return true;
+-            } else {
+-                typedef void(*deleter_fn)(const T *);
+-                typedef std::unique_ptr<T, void(*)(const T *)> TPtr;
+-                deleter_fn d =  JLONG_TO_FNPTR(deleter_fn, deleter);
+-                TPtr cpointer(JLONG_TO_INTPTR(T, ptr), d);
+-
+-                // promote to shared pointer
+-                std::shared_ptr<T> *model = new std::shared_ptr<T>(std::move(cpointer));
+-                env->SetLongField(mpointer, Pointer_class.value, INTPTR_TO_JLONG(model));
+-                env->SetIntField(mpointer, Pointer_class.type, com_atakmap_interop_Pointer_SHARED);
+-                env->SetLongField(mpointer, Pointer_class.deleter, 0LL);
+-                return true;
+-            }
++            }
++            env->SetLongField(mpointer, Pointer_class.value, INTPTR_TO_JLONG(model));
++            env->SetIntField(mpointer, Pointer_class.type, com_atakmap_interop_Pointer_SHARED);
++            env->SetLongField(mpointer, Pointer_class.deleter, 0LL);
++            return true;
+         }
+         template<class T>
+         inline bool Pointer_isShared(JNIEnv *env, jobject mpointer) NOTHROWS
+         {
++            if(!env || env->ExceptionCheck() || !mpointer) return false;
++            T *raw = Pointer_get<T>(*env, mpointer);
++            if(env->ExceptionCheck()) return false;
+             jint type = env->GetIntField(mpointer, Pointer_class.type);
+-            return (type == com_atakmap_interop_Pointer_SHARED);
++            if(env->ExceptionCheck() || type != com_atakmap_interop_Pointer_SHARED) return false;
++            jlong ptr = env->GetLongField(mpointer, Pointer_class.value);
++            if(env->ExceptionCheck() || !ptr) return false;
++            const std::shared_ptr<T> &model = *JLONG_TO_INTPTR(std::shared_ptr<T>, ptr);
++            return model.get() == raw;
+         }
+     }
+ }
+--- a/takkernel/engine/src/main/jni/interop/core/ManagedLayer.cpp
++++ b/takkernel/engine/src/main/jni/interop/core/ManagedLayer.cpp
+@@ -32,11 +32,14 @@
+ }
+ 
+ ManagedLayer::ManagedLayer(JNIEnv &env_, jobject impl_) NOTHROWS :
+-    impl(env_.NewGlobalRef(impl_)),
++    impl(env_.ExceptionCheck() ? nullptr : env_.NewGlobalRef(impl_)),
+     mutex(TEMT_Recursive)
+ {
++    if(env_.ExceptionCheck() || !impl) return;
+     static bool clinit = Layer_class_init(env_);
++    if(env_.ExceptionCheck() || !clinit) return;
+     Java::JNILocalRef mname(env_, env_.CallObjectMethod(impl, Layer_class.getName));
++    if(env_.ExceptionCheck()) return;
+     JNIStringUTF_get(name, env_, (jstring)mname);
+ 
+ }
+@@ -70,6 +73,7 @@
+         return;
+     visibilityListeners[clistener] = env->NewWeakGlobalRef(mlistener);
+     env->CallVoidMethod(impl, Layer_class.addOnLayerVisibleChangedListener, mlistener.get());
++    if(env->ExceptionCheck()) return;
+ }
+ const char* ManagedLayer::getName () const throw ()
+ {
+@@ -78,7 +82,10 @@
+ bool ManagedLayer::isVisible () const
+ {
+     LocalJNIEnv env;
+-    return env->CallBooleanMethod(impl, Layer_class.isVisible);
++    if(env->ExceptionCheck()) return false;
++    const bool value = env->CallBooleanMethod(impl, Layer_class.isVisible);
++    if(env->ExceptionCheck()) return false;
++    return value;
+ }
+ void ManagedLayer::removeVisibilityListener (atakmap::core::Layer::VisibilityListener *clistener)
+ {
+--- a/takkernel/engine/src/main/jni/interop/feature/Interop.cpp
++++ b/takkernel/engine/src/main/jni/interop/feature/Interop.cpp
+@@ -305,6 +305,7 @@
+     jmethodID Interop_createGeometry = env.GetStaticMethodID(Interop_class, "createGeometry", "(Lcom/atakmap/interop/Pointer;Ljava/lang/Object;)Lcom/atakmap/map/layer/feature/geometry/Geometry;");
+     Java::JNILocalRef mgeomPointer(env, NewPointer(&env, std::move(cgeom)));
+     mgeom = Java::JNILocalRef(env, env.CallStaticObjectMethod(Interop_class, Interop_createGeometry, mgeomPointer.get(), NULL));
++    if(env.ExceptionCheck()) return TE_Err;
+     return TE_Ok;
+ }
+ jobject TAKEngineJNI::Interop::Feature::Interop_create(JNIEnv *env, const Style &cstyle) NOTHROWS
+@@ -320,6 +321,7 @@
+     TAK::Engine::Feature::StylePtr retval(cstyle.clone(), Style::destructStyle);
+     Java::JNILocalRef mstylePtr(env, NewPointer(&env, std::move(retval)));
+     mstyle = Java::JNILocalRef(env, env.CallStaticObjectMethod(Interop_class, Interop_createStyle, mstylePtr.get(), NULL));
++    if(env.ExceptionCheck()) return TE_Err;
+     return TE_Ok;
+ }
+ jobject TAKEngineJNI::Interop::Feature::Interop_create(JNIEnv *env, const AttributeSet &cattr) NOTHROWS
+@@ -590,6 +592,7 @@
+         Geometry2Ptr cspatialFilter(nullptr, nullptr);
+         LegacyAdapters_adapt(cspatialFilter, *cparams.spatialFilter);
+         Java::JNILocalRef mspatialFilter(env, Interop_create(&env, *cspatialFilter));
++        if(env.ExceptionCheck()) return TE_Err;
+         env.SetObjectField(mparams, FeatureQueryParameters_class.spatialFilter, mspatialFilter);
+     }
+ 
+--- a/takkernel/engine/src/main/jni/interop/feature/ManagedFeatureDataStore2.cpp
++++ b/takkernel/engine/src/main/jni/interop/feature/ManagedFeatureDataStore2.cpp
+@@ -29,6 +29,26 @@
+ 
+ namespace
+ {
++    class PreserveFeatureStoreException
++    {
++        JNIEnv &env;
++        jthrowable first;
++    public:
++        explicit PreserveFeatureStoreException(JNIEnv &value) NOTHROWS : env(value), first(value.ExceptionOccurred())
++        { if(first) env.ExceptionClear(); }
++        void capture() NOTHROWS
++        {
++            if(!env.ExceptionCheck()) return;
++            jthrowable next = env.ExceptionOccurred();
++            env.ExceptionClear();
++            if(!first) first = next; else env.DeleteLocalRef(next);
++        }
++        ~PreserveFeatureStoreException() NOTHROWS
++        {
++            capture();
++            if(first) { env.Throw(first); env.DeleteLocalRef(first); }
++        }
++    };
+     struct {
+         jclass id;
+         jmethodID queryFeatures;
+@@ -95,14 +115,17 @@
+ }
+ 
+ ManagedFeatureDataStore2::ManagedFeatureDataStore2(JNIEnv &env_, jobject impl_) NOTHROWS :
+-    impl(env_.NewGlobalRef(impl_)),
++    impl(env_.ExceptionCheck() ? nullptr : env_.NewGlobalRef(impl_)),
+     version(2u)
+ {
++    if(env_.ExceptionCheck() || !impl) return;
+     static bool clinit = FeatureDataStore2_init(env_);
++    if(env_.ExceptionCheck() || !clinit) return;
+     if(env_.IsInstanceOf(impl, FeatureDataStore2_class.v4.id))
+         version = 4u;
+     std::unique_ptr<FeatureDataStore2::OnDataStoreContentChangedListener, void(*)(const FeatureDataStore2::OnDataStoreContentChangedListener *)> ccb(new CallbackForwarder(callbackForwarder.listeners, callbackForwarder.mutex), Memory_deleter_const<FeatureDataStore2::OnDataStoreContentChangedListener, CallbackForwarder>);
+     Interop::Java::JNILocalRef mccbpointer(env_, Interop::NewPointer(&env_, std::move(ccb)));
++    if(env_.ExceptionCheck() || !mccbpointer) return;
+     Interop::Java::JNILocalRef mcb(
+             env_,
+             env_.NewObject(
+@@ -111,16 +134,21 @@
+                                 mccbpointer.get(),
+                                 nullptr,
+                                 INTPTR_TO_JLONG(static_cast<FeatureDataStore2 *>(this))));
++    if(env_.ExceptionCheck() || !mcb) return;
++    callbackForwarder.managed = env_.NewWeakGlobalRef(mcb);
++    if(env_.ExceptionCheck() || !callbackForwarder.managed) return;
+     env_.CallVoidMethod(impl, FeatureDataStore2_class.addOnDataStoreContentChangedListener, mcb.get());
+-    callbackForwarder.managed = env_.NewWeakGlobalRef(mcb);
++    if(env_.ExceptionCheck()) return;
+ }
+ ManagedFeatureDataStore2::~ManagedFeatureDataStore2() NOTHROWS
+ {
+     if(impl) {
+         LocalJNIEnv env;
++        PreserveFeatureStoreException preserve(*env);
+         if(callbackForwarder.managed) {
+             Interop::Java::JNILocalRef mcb(*env, env->NewLocalRef(callbackForwarder.managed));
+             env->CallVoidMethod(impl, FeatureDataStore2_class.removeOnDataStoreContentChangedListener, mcb.get());
++            preserve.capture();
+             env->DeleteWeakGlobalRef(callbackForwarder.managed);
+         }
+         {
+--- a/takkernel/engine/src/main/jni/interop/feature/ManagedFeatureDefinition.cpp
++++ b/takkernel/engine/src/main/jni/interop/feature/ManagedFeatureDefinition.cpp
+@@ -123,6 +123,7 @@
+         if(env->ExceptionCheck())
+             return TE_Err;
+         jint geomCoding = env->CallIntMethod(impl, FeatureDefinition_class.getGeomCoding);
++        if(env->ExceptionCheck()) return TE_Err;
+         if(geomCoding == com_atakmap_map_layer_feature_FeatureDefinition_GEOM_WKT) {
+             Java::JNILocalRef result(*env, (jstring)env->CallObjectMethod(impl, FeatureDefinition_class.getRawGeom));
+             if(env->ExceptionCheck())
+@@ -261,6 +262,7 @@
+         if(env->ExceptionCheck())
+             return TE_Err;
+         jint styleCoding = env->CallIntMethod(impl, FeatureDefinition_class.getStyleCoding);
++        if(env->ExceptionCheck()) return TE_Err;
+         if(styleCoding == com_atakmap_map_layer_feature_FeatureDefinition_STYLE_OGR) {
+             Java::JNILocalRef result(*env,  (jstring)env->CallObjectMethod(impl, FeatureDefinition_class.getRawStyle));
+             if(env->ExceptionCheck())
+--- a/takkernel/engine/src/main/jni/interop/renderer/core/ManagedGLLayer2.cpp
++++ b/takkernel/engine/src/main/jni/interop/renderer/core/ManagedGLLayer2.cpp
+@@ -41,13 +41,17 @@
+ 
+ ManagedGLLayer2::ManagedGLLayer2(JNIEnv &env_, jobject impl_) NOTHROWS :
+     renderable(env_, impl_, true),
+-    impl(renderable.impl)
++    impl(renderable.impl),
++    gllayer3(false)
+ {
++    if(env_.ExceptionCheck() || !impl) return;
+     static bool clinit = ManagedGLLayer2_class_init(env_);
++    if(env_.ExceptionCheck() || !clinit) return;
+     std::shared_ptr<atakmap::core::Layer> csub;
+     Java::JNILocalRef msub(env_, env_.CallObjectMethod(impl, GLLayer3_class.getSubject));
+-    TAKEngineJNI::Interop::Core::Interop_marshal(csub, env_, msub);
+-    TAK::Engine::Core::LegacyAdapters_adapt(csubject, csub);
++    if(env_.ExceptionCheck()) return;
++    if(TAKEngineJNI::Interop::Core::Interop_marshal(csub, env_, msub) != TAK::Engine::Util::TE_Ok || env_.ExceptionCheck()) return;
++    if(TAK::Engine::Core::LegacyAdapters_adapt(csubject, csub) != TAK::Engine::Util::TE_Ok) return;
+ 
+     gllayer3 = env_.IsInstanceOf(impl, GLLayer3_class.id);
+ }
+--- a/takkernel/engine/src/main/jni/interop/renderer/core/ManagedGLLayerSpi2.cpp
++++ b/takkernel/engine/src/main/jni/interop/renderer/core/ManagedGLLayerSpi2.cpp
+@@ -49,6 +49,7 @@
+     code = LegacyAdapters_adapt(subject, subject2Ptr);
+     TE_CHECKRETURN_CODE(code);
+     LocalJNIEnv env;
++    if(env->ExceptionCheck()) return TE_Err;
+     JNILocalRef msubject(*env, NULL);
+     code = TAKEngineJNI::Interop::Core::Interop_marshal(msubject, *env, subject);
+     TE_CHECKRETURN_CODE(code);
+@@ -56,9 +57,12 @@
+     code = TAKEngineJNI::Interop::Renderer::Core::Interop_marshal(mview, *env, renderer);
+     TE_CHECKRETURN_CODE(code);
+     JNILocalRef marg(*env, NULL);
++    if(env->ExceptionCheck()) return TE_Err;
+     code = JNIPair_create(marg, *env, mview, msubject);
+     TE_CHECKRETURN_CODE(code);
++    if(env->ExceptionCheck()) return TE_Err;
+     JNILocalRef mretval(*env, env->CallObjectMethod(impl, GLLayerSpi2_class.create, marg.get()));
++    if(env->ExceptionCheck()) return TE_Err;
+     if(!mretval)
+         return TE_InvalidArg;
+     return TAKEngineJNI::Interop::Renderer::Core::Interop_marshal(value, *env, mretval);
+--- a/takkernel/engine/src/main/jni/jnativefeaturedatastore4.cpp
++++ b/takkernel/engine/src/main/jni/jnativefeaturedatastore4.cpp
+@@ -221,7 +221,12 @@
+ JNIEXPORT jobject JNICALL Java_com_atakmap_map_layer_feature_NativeFeatureDataStore4_wrap
+         (JNIEnv *env, jclass clazz, jobject mdatastore)
+ {
++    if(env->ExceptionCheck()) return NULL;
+     FeatureDataStore3Ptr cdatastore(new TAKEngineJNI::Interop::Feature::ManagedFeatureDataStore2(*env, mdatastore), Memory_deleter_const<FeatureDataStore3, TAKEngineJNI::Interop::Feature::ManagedFeatureDataStore2>);
++    if(env->ExceptionCheck()) {
++        cdatastore.reset();
++        return NULL;
++    }
+     return NewPointer(env, std::move(cdatastore));
+ }
+ JNIEXPORT void JNICALL Java_com_atakmap_map_layer_feature_NativeFeatureDataStore4_destruct
+--- a/takkernel/engine/src/main/jni/jnativelayer.cpp
++++ b/takkernel/engine/src/main/jni/jnativelayer.cpp
+@@ -96,6 +96,7 @@
+ JNIEXPORT jobject JNICALL Java_com_atakmap_map_layer_NativeLayer_addOnLayerVisibleChangedListener
+   (JNIEnv *env, jclass jclazz, jlong ptr, jobject mlistener)
+ {
++    if(env->ExceptionCheck()) return NULL;
+     TAKErr code(TE_Ok);
+     atakmap::core::Layer *clayer = JLONG_TO_INTPTR(atakmap::core::Layer, ptr);
+     if(!clayer) {
+@@ -104,14 +105,27 @@
+     }
+     std::shared_ptr<atakmap::core::Layer::VisibilityListener> clistener;
+     code = Core::Interop_marshal(clistener, *env, mlistener);
++    if(env->ExceptionCheck()) return NULL;
+     if(ATAKMapEngineJNI_checkOrThrow(env, code))
+         return NULL;
+     clayer->addVisibilityListener(clistener.get());
++    if(env->ExceptionCheck()) {
++        // Registration may have mutated Java before throwing. Attempt removal
++        // without the primary pending, then restore that exact throwable.
++        jthrowable first = env->ExceptionOccurred();
++        env->ExceptionClear();
++        clayer->removeVisibilityListener(clistener.get());
++        if(env->ExceptionCheck()) env->ExceptionClear();
++        env->Throw(first);
++        env->DeleteLocalRef(first);
++        return NULL;
++    }
+     return NewPointer(env, clistener);
+ }
+ JNIEXPORT void JNICALL Java_com_atakmap_map_layer_NativeLayer_removeOnLayerVisibleChangedListener
+   (JNIEnv *env, jclass jclazz, jlong ptr, jobject mlistenerPointer)
+ {
++    if(!mlistenerPointer) return;
+     TAKErr code(TE_Ok);
+     atakmap::core::Layer *clayer = JLONG_TO_INTPTR(atakmap::core::Layer, ptr);
+     if(clayer)

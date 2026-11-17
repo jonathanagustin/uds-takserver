@@ -141,6 +141,60 @@ class IdentityPublicationTests(unittest.TestCase):
                     with self.assertRaises(ValueError): S.receipt(root, 'amd64')
                 (root/'package-identity/journal.json').write_text(json.dumps(journal))
 
+    def test_large_private_journal_keeps_phase_validation_and_public_limits(self):
+        actual_sha = S.sha
+        def sha(path):
+            return 'c' * 64 if path.name == 'package_roundtrip.py' else actual_sha(path)
+        with tempfile.TemporaryDirectory() as temporary, self.env(), \
+             patch.object(S.platform, 'machine', return_value='x86_64'), \
+             patch.object(S, 'sha', side_effect=sha), \
+             patch.dict(os.environ, {'IDENTITY_METHOD': 'package', 'FRESH_STRICT': 'true'}):
+            root = Path(temporary); journal = self.package_journal(root, True)
+            journal['private'] = 'PRIVATE_SECRET' * 25000
+            path = root / 'package-identity/journal.json'; path.write_text(json.dumps(journal))
+            self.assertGreater(path.stat().st_size, 256 * 1024)
+            with self.assertRaises(ValueError): S.bounded_json(path)
+            value = S.publish(root, root / 'public', 'amd64')
+            self.assertTrue(value['accepted']); self.assertTrue(S.verify(root / 'public/receipts')['accepted'])
+            for output in (root / 'public').rglob('*.json'):
+                self.assertLess(output.stat().st_size, 256 * 1024)
+                self.assertNotIn('PRIVATE_SECRET', output.read_text())
+            phase = root / 'package-identity/phases' / journal['phaseEvidence'][0]['reference']['file']
+            phase.write_text('{}')
+            self.assertFalse(S.publish(root, root / 'tampered', 'amd64')['accepted'])
+
+    def test_private_journal_bounds_duplicates_links_and_writer_agree(self):
+        self.assertEqual(S.IDENTITY_JOURNAL_LIMIT, driver.IDENTITY_JOURNAL_LIMIT)
+        self.assertEqual(S.IDENTITY_JOURNAL_STAGES, driver.IDENTITY_JOURNAL_STAGES)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); path = root / 'journal.json'
+            for data in ('{"stages":[],"stages":[]}', '{"stages":{}}',
+                         json.dumps({'stages': [{}] * (S.IDENTITY_JOURNAL_STAGES + 1)})):
+                path.write_text(data)
+                with self.assertRaises(ValueError): S.identity_journal(path)
+            path.write_text(json.dumps({'stages': [], 'private': 'x' * 100}))
+            with patch.object(S, 'IDENTITY_JOURNAL_LIMIT', 32), self.assertRaises(ValueError):
+                S.identity_journal(path)
+            original = S.os.fstat
+            observed = []
+            def changed_during_read(fd):
+                observed.append(True)
+                if len(observed) == 2:
+                    path.write_text('{"stages":[],"changed":true}')
+                return original(fd)
+            with patch.object(S.os, 'fstat', side_effect=changed_during_read), self.assertRaises(ValueError):
+                S.identity_journal(path)
+            link = root / 'link.json'; link.symlink_to(path)
+            with self.assertRaises(ValueError): S.identity_journal(link)
+            instance = driver.Driver(root / 'writer.json')
+            instance.state['private'] = 'x' * 100
+            with patch.object(driver, 'IDENTITY_JOURNAL_LIMIT', 32), self.assertRaises(ValueError):
+                instance.journal('preflight')
+            self.assertFalse(instance.evidence.exists())
+            instance.state['stages'] = [{'stage': 'fixture'}] * driver.IDENTITY_JOURNAL_STAGES
+            with self.assertRaises(ValueError): instance.journal('preflight')
+            self.assertFalse(instance.evidence.exists())
+
     def test_combined_request_cannot_reuse_manual_only_acceptance(self):
         with tempfile.TemporaryDirectory() as temporary, self.env(), patch.object(S.platform, 'machine', return_value='x86_64'):
             root = Path(temporary); self.journal(root)

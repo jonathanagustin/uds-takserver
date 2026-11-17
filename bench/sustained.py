@@ -8,6 +8,8 @@ import math
 import os
 from pathlib import Path
 
+from bench import postgis_study
+
 RAMP_DEADLINE = 120
 WARMUP = 300
 DURATION = 1200
@@ -23,11 +25,15 @@ DB_COUNTERS = ('blks_hit', 'blks_read', 'temp_files', 'temp_bytes', 'checkpoints
 def enabled(env=None):
     env = os.environ if env is None else env
     mode = env.get('BENCH_STUDY', 'short')
-    if mode not in ('short', 'synthetic-baseline'):
-        raise ValueError('BENCH_STUDY must be short or synthetic-baseline')
+    if mode not in ('short', 'synthetic-baseline', postgis_study.MODE):
+        raise ValueError('BENCH_STUDY must be short, synthetic-baseline or synthetic-postgis')
     if mode == 'synthetic-baseline':
         if env.get('BENCH_PROFILE') != 'baseline' or env.get('BENCH_CLIENTS') != '50':
             raise ValueError('synthetic-baseline requires baseline profile and exactly 50 clients')
+        return True
+    if mode == postgis_study.MODE:
+        if env.get('BENCH_PROFILE') != postgis_study.PROFILE or env.get('BENCH_CLIENTS') != '50':
+            raise ValueError('synthetic-postgis requires postgis profile and exactly 50 clients')
         return True
     return False
 

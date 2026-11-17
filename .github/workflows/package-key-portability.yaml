@@ -1,0 +1,48 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+name: Package key portability
+on:
+  pull_request:
+    paths:
+      - .github/scripts/dev-package.sh
+      - .github/scripts/publish-dev-package.py
+      - tests/test_dev_package_key.py
+      - .github/workflows/package-key-portability.yaml
+  push:
+    branches: [main]
+    paths:
+      - .github/scripts/dev-package.sh
+      - .github/scripts/publish-dev-package.py
+      - tests/test_dev_package_key.py
+      - .github/workflows/package-key-portability.yaml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  keys:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Run real key and publication controls with the system Bash
+        shell: bash
+        env:
+          DEV_PACKAGE_TEST_BASH: /bin/bash
+        run: |
+          set -euo pipefail
+          /bin/bash -c 'printf "%s\n" "$BASH_VERSION"'
+          python3 -B -m unittest \
+            tests.test_dev_package_key.PackageKeyTests \
+            tests.test_dev_package_key.PackagePublicationTests.test_existing_tag_skip_missing_archive_and_exact_upstream_retry_arguments \
+            tests.test_dev_package_key.PackagePublicationTests.test_final_publication_failure_propagates_without_rebuild_or_outer_retry \
+            tests.test_dev_package_key.PackagePublicationTests.test_hash_failures_emit_no_reference_and_never_contact_registry \
+            tests.test_dev_package_key.PackagePublicationTests.test_shasum_only_path_matches_gnu_hash_and_preserves_publication -v

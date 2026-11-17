@@ -31,6 +31,75 @@ VARIABLES={'DOMAIN','TAK_IMAGE_TAG','FILESYSTEM_BACKUP','POSTGRES_STORAGE_CLASS'
 # https://github.com/defenseunicorns/uds-core/blob/v1.16.0/bundles/k3d-slim-dev/uds-bundle.yaml
 CORE_NAMESPACES=('kube-system','istio-system','pepr-system','keycloak')
 APPLICATION_NAMESPACE='takclients'
+# Core 1.16.0 (fd9769cd9e791d9b6ad86251af0f4899992a9ae5),
+# controllers/istio/{ambient-waypoint,egress-ambient,istio-resources}.ts:
+# the shared Gateway is removed when its last ambient remoteHost user leaves.
+EGRESS_NAMESPACE='istio-egress-ambient'
+EGRESS_WAYPOINT='egress-waypoint'
+EGRESS_APP_OWNERS={'takserver-takserver':('uds-takserver-config','takserver'),
+                   'cloudtak-cloudtak':('uds-cloudtak','cloudtak')}
+EGRESS_SPEC={'gatewayClassName':'istio-waypoint',
+             'listeners':[{'name':'mesh','port':15008,'protocol':'HBONE',
+                           'allowedRoutes':{'namespaces':{'from':'All'},
+                                            'kinds':[{'group':'networking.istio.io','kind':'ServiceEntry'}]}}],
+             'infrastructure':{'parametersRef':{'group':'','kind':'ConfigMap','name':'egress-waypoint-config'}}}
+
+
+def ambient_host_consumers(items):
+    D.require(isinstance(items,list) and len(items)<=2048,'ambient egress Package inventory bound differs')
+    result={}
+    for package in items:
+        meta=package.get('metadata',{});network=(package.get('spec') or {}).get('network') or {}
+        if meta.get('deletionTimestamp') or (network.get('serviceMesh') or {}).get('mode','ambient') not in ('ambient',None):continue
+        # Match Core's ordering: Anywhere participants never create the singleton.
+        if not any(rule.get('direction')=='Egress' and rule.get('remoteGenerated')!='Anywhere' and rule.get('remoteHost')
+                   for rule in network.get('allow') or []):continue
+        name,namespace=meta.get('name'),meta.get('namespace')
+        D.require(isinstance(name,str) and isinstance(namespace,str) and name and namespace,'ambient egress Package identity missing')
+        identity=name+'-'+namespace
+        D.require(identity not in result,'ambient egress Package identity collision')
+        result[identity]=package
+    return result
+
+
+def egress_uid(obj):
+    value=obj.get('metadata',{}).get('uid')
+    D.require(isinstance(value,str) and re.fullmatch('[A-Za-z0-9-]{1,128}',value),'ambient egress UID missing')
+    return value
+
+
+def validate_egress_gateway(gateway,consumers,removing=False):
+    meta=gateway.get('metadata',{});labels=meta.get('labels',{});annotations=meta.get('annotations',{})
+    D.require(meta.get('namespace')==EGRESS_NAMESPACE and meta.get('name')==EGRESS_WAYPOINT and
+              not meta.get('ownerReferences') and not any(k.startswith('meta.helm.sh/') for k in annotations),
+              'shared ambient Gateway ownership differs')
+    D.require(labels.get('uds/package')=='shared-ambient-egress-resource' and
+              labels.get('istio.io/gateway-name')==EGRESS_WAYPOINT and gateway.get('spec')==EGRESS_SPEC,
+              'shared ambient Gateway source contract differs')
+    users={key.removeprefix('uds.dev/user-'):value for key,value in annotations.items() if key.startswith('uds.dev/user-')}
+    D.require(all(value=='user' for value in users.values()) and
+              (set(users)<=set(consumers) if removing else set(users)==set(consumers)),
+              'shared ambient Gateway consumer annotations differ')
+    D.require(removing or not meta.get('deletionTimestamp'),'live shared ambient Gateway is deleting')
+    return egress_uid(gateway)
+
+
+def validate_egress_deployment(deployment,gateway_uid,removing=False):
+    meta=deployment.get('metadata',{});owners=meta.get('ownerReferences',[])
+    D.require(meta.get('namespace')==EGRESS_NAMESPACE and meta.get('name')==EGRESS_WAYPOINT and
+              meta.get('labels',{}).get('gateway.networking.k8s.io/gateway-name')==EGRESS_WAYPOINT and
+              meta.get('labels',{}).get('gateway.networking.k8s.io/gateway-class-name')=='istio-waypoint' and
+              meta.get('labels',{}).get('gateway.istio.io/managed')=='istio.io-mesh-controller' and
+              len(owners)==1,'shared ambient Deployment ownership differs')
+    owner=owners[0]
+    # Istio 1.31.2 e2f3a7949a358af7dd901a6f9ccd6ecdd7270271,
+    # manifests/charts/istio-control/istio-discovery/files/waypoint.yaml:
+    # this GC owner reference deliberately has no controller/blockOwnerDeletion.
+    D.require(owner=={'apiVersion':'gateway.networking.k8s.io/v1','kind':'Gateway',
+                      'name':EGRESS_WAYPOINT,'uid':gateway_uid},
+              'shared ambient Deployment Gateway owner reference differs')
+    D.require(removing or not meta.get('deletionTimestamp'),'live shared ambient Deployment is deleting')
+    return egress_uid(deployment)
 
 
 def owned_application_namespace(obj):
@@ -112,11 +181,14 @@ def cli_preflight(command):
         missing=[flag for flag in flags if flag not in available]
         D.require(not missing,'pinned Zarf '+operation+' CLI lacks required flags: '+', '.join(missing))
 
-def require_clean_objects(namespace,kind,objects):
+def clean_objects(namespace,kind,objects):
     if namespace=='pepr-system':
         objects=[x for x in objects if x['metadata']['name'] in D.PEPR or x['metadata'].get('labels',{}).get('name')=='takserver-oidc']
     if kind=='serviceaccounts':objects=[x for x in objects if x['metadata']['name']!='default']
-    D.require(not objects,'retained application state prevents clean strict install: '+kind)
+    return objects
+
+def require_clean_objects(namespace,kind,objects):
+    D.require(not clean_objects(namespace,kind,objects),'retained application state prevents clean strict install: '+kind)
 
 PACKAGE_FAILURE='PRIVATE-package-command-failure.json'
 APPLICATION_FAILURE='PRIVATE-application-check-failure.json'
@@ -199,11 +271,109 @@ class PackageTrial(D.Driver):
         D.require(D.render_inputs.bind_chart_overrides(self.bound['plan'],os.environ['GITHUB_SHA'],D.ROOT)==self.bound['chartBinding'],
                   'baseline chart source binding changed')
 
+    def ambient_packages(self):
+        return ambient_host_consumers(json.loads(self.kube('get','packages.uds.dev','--all-namespaces','-o','json'))['items'])
+
+    def ambient_objects(self):
+        namespace=self.get('namespace',EGRESS_NAMESPACE,EGRESS_NAMESPACE)
+        def singleton(kind):
+            objects=[obj for obj in self.get(kind,namespace=EGRESS_NAMESPACE)['items']
+                     if obj['metadata']['name']==EGRESS_WAYPOINT]
+            D.require(len(objects)<=1,'shared ambient resource is not a singleton')
+            return objects[0] if objects else None
+        return egress_uid(namespace),singleton('gateways.gateway.networking.k8s.io'),singleton('deployments')
+
+    def ambient_package_uids(self,packages):
+        D.require(set(packages)<=set(EGRESS_APP_OWNERS),'shared ambient egress has another consumer')
+        result={}
+        for identity,package in packages.items():
+            release,namespace=EGRESS_APP_OWNERS[identity]
+            D.helm_owner(package,release,namespace)
+            result[identity]=egress_uid(package)
+        return result
+
+    def capture_ambient_egress(self,packages):
+        script=(D.ROOT/'.github/scripts/deploy-slim-core.sh').read_text()
+        version=re.search(r'^slim_core_version=([0-9.]+)$',script,re.M)
+        D.require(version is not None and (os.environ.get('SLIM_CORE_VERSION') or version[1])=='1.16.0',
+                  'shared ambient egress requires the reviewed Core 1.16.0 profile')
+        contributors=self.ambient_package_uids(packages)
+        namespace_uid,gateway,deployment=self.ambient_objects()
+        D.require(gateway is not None and deployment is not None,'shared ambient egress resources missing')
+        gateway_uid=validate_egress_gateway(gateway,contributors)
+        return {'namespaceUID':namespace_uid,'gatewayUID':gateway_uid,
+                'deploymentUID':validate_egress_deployment(deployment,gateway_uid),
+                'contributorUIDs':contributors,'removed':False}
+
+    def bind_ambient_egress(self,fresh=False):
+        old=self.state.get('ambientEgressBinding')
+        D.require(fresh or 'ambientEgressBinding' not in self.state,'ambient egress baseline already bound')
+        if fresh:
+            D.require(self.state.get('applicationNamespaceRemoved') is True,'ambient egress rebind outside fresh install')
+            if old is None:return  # Never adopt an exemption absent at the original baseline.
+            D.require(old['removed'] is True,'ambient egress rebind without verified removal')
+        packages=self.ambient_packages()
+        if not fresh and (not packages or not set(packages)<=set(EGRESS_APP_OWNERS)):
+            # Shared/foreign contributors keep the original exact Core UID guard.
+            self.state['ambientEgressBinding']=None
+            return
+        D.require(bool(packages) and (not fresh or set(packages)==set(old['contributorUIDs'])),
+                  'ambient egress contributors changed during reinstall')
+        current=self.capture_ambient_egress(packages)
+        if fresh:
+            D.require(current['namespaceUID']==old['namespaceUID'],'shared ambient Core namespace changed')
+            self.state['previousAmbientEgressBinding']=copy.deepcopy(old)
+        elif 'takserver-takserver' in packages:
+            D.require(current['contributorUIDs']['takserver-takserver']==self.state['packageUID'],
+                      'ambient egress application Package binding differs')
+        self.state['ambientEgressBinding']=current
+
+    def verify_ambient_egress(self):
+        binding=self.state.get('ambientEgressBinding')
+        if binding is None:return
+        if not self.state.get('applicationNamespaceRemoved'):
+            packages=self.ambient_packages()
+            D.require(set(packages)==set(binding['contributorUIDs']),'shared ambient egress consumer set changed')
+            D.require(self.capture_ambient_egress(packages)==binding,'shared ambient egress identity changed')
+            return
+        # Core intentionally garbage-collects this singleton after its last user.
+        # Observe cleanup; never delete or patch the Gateway, Deployment or Core.
+        deadline=min(self.deadline,time.monotonic()+60)
+        stable=0
+        while True:
+            self.guard()
+            packages=self.ambient_packages()
+            D.require(set(packages)<=set(binding['contributorUIDs']),'new ambient egress consumer during removal')
+            uids=self.ambient_package_uids(packages)
+            D.require(all(binding['contributorUIDs'][key]==value for key,value in uids.items()),
+                      'ambient egress Package identity changed during removal')
+            namespace_uid,gateway,deployment=self.ambient_objects()
+            D.require(namespace_uid==binding['namespaceUID'],'shared ambient Core namespace changed')
+            if gateway is not None:
+                D.require(validate_egress_gateway(gateway,binding['contributorUIDs'],True)==binding['gatewayUID'],
+                          'shared ambient Gateway identity changed during removal')
+            if deployment is not None:
+                D.require(validate_egress_deployment(deployment,binding['gatewayUID'],True)==binding['deploymentUID'],
+                          'shared ambient Deployment identity changed during removal')
+            absent=not packages and gateway is None and deployment is None
+            if binding['removed']:
+                D.require(absent,'shared ambient resource reappeared after removal')
+                return
+            stable=stable+1 if absent else 0
+            if stable>=3:
+                binding['removed']=True
+                return
+            D.require(time.monotonic()<deadline,'shared ambient egress cleanup timeout')
+            time.sleep(1)
+
     def core_snapshot(self):
+        self.verify_ambient_egress()
+        egress=self.state.get('ambientEgressBinding');seen_egress=False
         result={}
         namespaces=self.get('namespaces',namespace='default')['items']
         retained=sorted(obj['metadata']['name'] for obj in namespaces if obj['metadata']['name'] not in (D.NS,'cloudtak'))
         D.require(set(CORE_NAMESPACES)<=set(retained),'required Core namespaces missing')
+        if egress:D.require(EGRESS_NAMESPACE in retained,'bound shared ambient Core namespace missing')
         binding=self.state.get('applicationNamespaceBinding')
         if binding and APPLICATION_NAMESPACE not in retained:
             D.require(self.state.get('applicationNamespaceRemoved') is True,'bound application namespace missing')
@@ -217,11 +387,19 @@ class PackageTrial(D.Driver):
             else:result['namespace/'+ns]=namespace['metadata']['uid']
             for kind in ('deployments','statefulsets','daemonsets','packages.uds.dev'):
                 for obj in self.get(kind,namespace=ns)['items']:
+                    if egress and ns==EGRESS_NAMESPACE and kind=='deployments' and obj['metadata']['name']==EGRESS_WAYPOINT:
+                        D.require(not self.state.get('applicationNamespaceRemoved'),'shared ambient Deployment reappeared after removal')
+                        D.require(validate_egress_deployment(obj,egress['gatewayUID'])==egress['deploymentUID'],
+                                  'shared ambient Deployment identity changed during snapshot')
+                        seen_egress=True
+                        continue
                     if ns=='pepr-system' and obj['metadata']['name'] in D.PEPR:continue
                     if ns=='velero' and kind=='daemonsets' and obj['metadata']['name']=='node-agent':
                         annotations=obj['metadata'].get('annotations',{})
                         if annotations.get('meta.helm.sh/release-name')=='uds-takserver-config' and annotations.get('meta.helm.sh/release-namespace')==D.NS:continue
                     result[ns+'/'+kind+'/'+obj['metadata']['name']]=obj['metadata']['uid']
+        if egress and not self.state.get('applicationNamespaceRemoved'):
+            D.require(seen_egress,'bound shared ambient Deployment missing from snapshot')
         result['mesh']=D.sha(self.get('configmap','istio','istio-system').get('data',{}))
         return result
 
@@ -252,9 +430,9 @@ class PackageTrial(D.Driver):
                 self.journal('retained-core-drift',**snapshot['diagnostic'])
                 self.capture_retained_validation(snapshot,(self.state.get('packagePhases') or ['shared'])[-1],
                                                  kind='core-inventory-drift')
-            except Exception:
+            except Exception as error:
                 # Optional diagnostics never replace this original invariant.
-                pass
+                self.capture_retained_diagnostic_callsite(error)
             raise ValueError('retained Core identity/config changed')
 
     def capture_phase(self,phase,account):
@@ -296,21 +474,30 @@ class PackageTrial(D.Driver):
             try:
                 snapshot=self._retained_source_failure
                 if snapshot is not None:self.capture_retained_validation(snapshot,phase)
-            except Exception:
+            except Exception as error:
                 # Optional evidence must never replace the original invariant.
                 # Interrupts inherit BaseException and deliberately propagate.
+                self.capture_retained_diagnostic_callsite(error)
                 try:self.journal('retained-source-diagnostic-unavailable',phase=phase)
                 except Exception:pass
             raise
         finally:
             self._retained_source_failure=None
 
+    def capture_retained_diagnostic_callsite(self, error):
+        # Keep the primary invariant's first-failure capture independent. Only
+        # reviewed source locations, hashes and fixed exception types can escape.
+        try:F.write(self.evidence.parent/'retained-diagnostic-callsite',error)
+        except Exception:pass
+
     def capture_retained_validation(self, snapshot, phase, kind='stored-hooks-drift'):
         # First private failure wins; later cleanup failures cannot replace it.
         if 'firstPrivateFailure' in self.state or 'packageCommandFailure' in self.state:return
         D.require(phase in D.PHASES, 'unknown retained validation phase')
-        D.require(kind in ('stored-hooks-drift','core-inventory-drift'),'unknown retained validation kind')
-        (R.validate_source_failure if kind=='stored-hooks-drift' else R.validate_core_failure)(snapshot)
+        D.require(kind in ('stored-hooks-drift','core-inventory-drift','cleanup-consumers','cleanup-resource-drift','cleanup-clean-inventory'),'unknown retained validation kind')
+        {'stored-hooks-drift':R.validate_source_failure,'core-inventory-drift':R.validate_core_failure,
+         'cleanup-consumers':R.validate_consumer_failure,'cleanup-resource-drift':R.validate_cleanup_drift,
+         'cleanup-clean-inventory':R.validate_clean_inventory_failure}[kind](snapshot)
         hashes={'packageDriverSHA256':digest(Path(__file__)), 'driverSHA256':digest(HERE/'drive.py'),
                 'retainedSourceSHA256':digest(HERE/'retained_state.py')}
         payload={'schema':1,'type':'retained-source-validation','kind':kind,
@@ -463,12 +650,15 @@ class PackageTrial(D.Driver):
         D.require(Path(self.bound['archive']).name.startswith('zarf-package-takserver-'+self.state['architecture']+'-'),'bound archive architecture differs from guarded node')
         self.require_cloudtak()
         self.bind_application_namespace()
+        self.bind_ambient_egress()
         self.state['coreSnapshot']=self.core_snapshot();self.compile_probe()
         self.state['dataInvariants']=R.capture(self)
         self.create({'apiVersion':'v1','kind':'ServiceAccount','metadata':{'name':self.state['negativeAccount']},'automountServiceAccountToken':False})
         self.observe('shared')
 
     def clean_application_state(self):
+        # Retain only the last rejected probe, never a later re-query or object body.
+        self._clean_application_inventory_failure=None
         for ns,kinds in [(D.NS,('deployments','statefulsets','jobs','pods','persistentvolumeclaims','secrets','configmaps','services','serviceaccounts','roles','rolebindings','packages.uds.dev')),
                          ('cloudtak',('deployments','statefulsets','jobs','pods','persistentvolumeclaims','secrets','configmaps','services','serviceaccounts','roles','rolebindings','packages.uds.dev')),
                          ('pepr-system',('deployments','secrets'))]:
@@ -476,15 +666,45 @@ class PackageTrial(D.Driver):
             if not namespace.strip():continue
             for kind in kinds:
                 objects=self.get(kind,namespace=ns)['items']
+                if kind=='secrets' and ns in R.APP_RELEASES:
+                    retained=[]
+                    for obj in objects:
+                        if obj['metadata']['name']=='private-registry':
+                            R.preserved_registry(self,obj,self.state.get('preservedRegistrySecrets',[]))
+                        else:retained.append(obj)
+                    objects=retained
                 if kind=='configmaps':
                     retained=[]
                     for obj in objects:
-                        if obj['metadata']['name'] in ('kube-root-ca.crt','istio-ca-root-cert','uds-trust-bundle'):
-                            R.preserved_trust(self,obj,self.state['preservedTrustMaps'])
+                        if obj['metadata']['name'] in ('kube-root-ca.crt','istio-ca-root-cert','istio-ca-crl','uds-trust-bundle'):
+                            try:R.preserved_trust(self,obj,self.state['preservedTrustMaps'])
+                            except ValueError:
+                                try:self._clean_application_inventory_failure=R.clean_inventory_failure(ns,kind,[obj],'preserved-trust-changed')
+                                except Exception:pass  # Optional diagnostics cannot waive the original guard.
+                                raise
                         else:retained.append(obj)
                     objects=retained
+                remaining=clean_objects(ns,kind,objects)
+                if remaining:
+                    try:self._clean_application_inventory_failure=R.clean_inventory_failure(ns,kind,remaining)
+                    except Exception:pass  # Preserve the original clean-state rejection.
                 require_clean_objects(ns,kind,objects)
         return {'clean':True}
+
+    def wait_clean_application_state(self):
+        self._clean_application_inventory_failure=None
+        try:self.wait(self.clean_application_state,300)
+        except ValueError as failure:
+            snapshot=self._clean_application_inventory_failure
+            # This prefix belongs to the reviewed Driver.wait implementation;
+            # no error message is persisted, and guard failures are not relabeled.
+            if str(failure).startswith('convergence timeout: ') and snapshot is not None:
+                try:self.capture_retained_validation(snapshot,'rollback',kind='cleanup-clean-inventory')
+                except Exception as error:
+                    self.capture_retained_diagnostic_callsite(error)
+                    try:self.journal('retained-source-diagnostic-unavailable',phase='rollback')
+                    except Exception:pass
+            raise
 
     def fresh_strict(self):
         self.guard();self.core_unchanged();self.inputs_unchanged()
@@ -492,21 +712,45 @@ class PackageTrial(D.Driver):
         # Remove only this exact application's installed Zarf package, never a bundle/Core.
         for entry in list(self.state['created']):
             if entry['kind']=='ServiceAccount' and not entry.get('deleted'):self.delete_created(entry['kind'],entry['name'])
+        self.state['preservedRegistrySecrets']=R.capture_registry(self)
         self.state['preservedTrustMaps']=R.capture_trust(self)
         self.state['retainedCleanup']=R.cleanup_snapshot(self,self.state['dataInvariants'])
+        setup_hook=R.setup_hook_snapshot(self)
         installed=self.get('secret','zarf-package-takserver','zarf')
         self.state['removedPackageSecretUID']=installed['metadata']['uid'];self.journal('application-remove-start')
         self.run_package(['uds','zarf','package','remove','takserver','--confirm'],900)
         self.state['applicationNamespaceRemoved']=True
         self.core_unchanged()
-        self.wait(lambda:R.consumers_gone(self),300)
-        for record in self.state['retainedCleanup']:
-            R.conditional_delete(self,record)
+        try:
+            R.cleanup_setup_hook(self,setup_hook)
+            self.wait(lambda:R.consumers_gone(self),300)
+        except ValueError:
+            self.state['accepted']=False
+            try:
+                self.capture_retained_validation(R.consumer_failure(self),'rollback',kind='cleanup-consumers')
+            except Exception as error:
+                self.capture_retained_diagnostic_callsite(error)
+                try:self.journal('retained-source-diagnostic-unavailable',phase='rollback')
+                except Exception:pass
+            raise
+        for index,record in enumerate(self.state['retainedCleanup']):
+            self._retained_cleanup_drift=None
+            try:
+                record=R.quiescent_cleanup_record(self,record)
+                self.state['retainedCleanup'][index]=record
+                R.conditional_delete(self,record)
+            except ValueError:
+                try:
+                    if self._retained_cleanup_drift is not None:
+                        self.capture_retained_validation(self._retained_cleanup_drift,'rollback',kind='cleanup-resource-drift')
+                except Exception as error:self.capture_retained_diagnostic_callsite(error)
+                raise
             self.journal('retained-object-conditionally-removed',kind=record['kind'],name=record['name'],uid=record['uid'])
-        self.wait(self.clean_application_state,300)
+        self.wait_clean_application_state()
         # New install has new Deployment/Package UIDs; retain old observations in journal.
         self.state['previousInstall']={k:self.state[k] for k in ('packageUID','deploymentUIDs','peprUIDs','backendTargets')}
         self.run_package(deploy_command(self.bound,'strict'),1500)
+        self.bind_ambient_egress(fresh=True)
         self.bind_application_namespace(fresh=True)
         self.inputs_unchanged();self.core_unchanged()
         package=self.get('package',D.NS);deployments={x['metadata']['name']:x for x in self.get('deployments')['items'] if x['metadata']['name'] in D.APPS}
