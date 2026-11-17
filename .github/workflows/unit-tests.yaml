@@ -74,6 +74,7 @@ jobs:
           coverage() { uv tool run --from "coverage==${COVERAGE_VERSION}" coverage "$@"; }
           python3 -B -m unittest discover -s tests -p 'test_move_ca_key.py' -v
           python3 -B -m unittest discover -s tests -p 'test_issue_health_cert.py' -v
+          python3 -B -m unittest discover -s tests -p 'test_issue_web_cert.py' -v
           python3 -B -m unittest discover -s tests -p 'test_nats_roundtrip.py' -v
           python3 -B -m unittest tests.test_fit_runner -v
           coverage run --branch --source=tests -m unittest discover -s tests -p 'test_upgrade_*.py' -v

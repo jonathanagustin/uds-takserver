@@ -222,10 +222,12 @@ fi
 
 set -euo pipefail
 
-ns="$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)"
-token="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
-ca="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-api="https://kubernetes.default.svc/api/v1/namespaces/${ns}"
+sa="${SA_DIR:-/var/run/secrets/kubernetes.io/serviceaccount}"
+ns="$(cat "${sa}/namespace")"
+token="$(cat "${sa}/token")"
+ca="${sa}/ca.crt"
+kube_api="${KUBE_API:-https://kubernetes.default.svc}"
+api="${kube_api}/api/v1/namespaces/${ns}"
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
 
@@ -234,8 +236,11 @@ api_curl -f --cacert "${ca}" -H "Authorization: Bearer ${token}" \
 
 secret_code="$(api_curl -o "${work}/secret.json" -w '%{http_code}' --cacert "${ca}" \
   -H "Authorization: Bearer ${token}" "${api}/secrets/takserver-certs")"
-if [[ "${secret_code}" != "200" ]]; then
+if [[ "${secret_code}" == "404" ]]; then
   : > "${work}/secret.json"
+elif [[ "${secret_code}" != "200" ]]; then
+  echo "Reading Secret takserver-certs returned HTTP ${secret_code}" >&2
+  exit 1
 fi
 
 declare -A merged=()
@@ -352,4 +357,26 @@ while IFS=$'\t' read -r name _; do
   fi
 done < "${work}/after-fields.txt"
 echo "Secret takserver-certs holds the certificate files. ConfigMap cert-migration has no private keys."
+
+# TAK reads this keystore at startup. After publication, a content annotation
+# restarts only the API when its web keystore changes, including on a retry
+# where issuance has already succeeded. A missing Deployment is first install.
+web_keystore="${WEB_KEYSTORE:-takserver-web.jks}"
+if [[ -n "${merged[${web_keystore}]:-}" ]]; then
+  deploy_api="${kube_api}/apis/apps/v1/namespaces/${ns}/deployments/takserver-api"
+  digest="$(printf '%s' "${merged[${web_keystore}]}" | sha256sum | cut -d ' ' -f 1)"
+  printf '{"spec":{"template":{"metadata":{"annotations":{"uds.dev/web-keystore-sha256":"%s"}}}}}' \
+    "${digest}" > "${work}/reload.json"
+  # Reapplying the same annotation leaves the pod template unchanged and
+  # does not create a new ReplicaSet. No Deployment read grant is needed.
+  code="$(api_curl -o "${work}/reload-resp" -w '%{http_code}' --cacert "${ca}" \
+    -H "Authorization: Bearer ${token}" -H "Content-Type: application/merge-patch+json" \
+    -X PATCH --data-binary @"${work}/reload.json" "${deploy_api}")"
+  if [[ "${code}" == "200" ]]; then
+    echo "Applied the TAK API web-keystore content annotation"
+  elif [[ "${code}" != "404" ]]; then
+    echo "Reloading the TAK API returned HTTP ${code}" >&2
+    exit 1
+  fi
+fi
 # @lulaEnd 614ae906-f071-5d33-af56-6b7157bdc9a2
