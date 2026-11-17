@@ -262,6 +262,8 @@ class TrialTests(unittest.TestCase):
 
     def driver(self, directory):
         driver = object.__new__(D.Driver)
+        driver.core_provider = None
+        driver.restore_helper = 'tests/backup-restore.sh'
         driver.directory = Path(directory)
         driver.context = 'k3d-uds'
         driver.state = {'steps': [], 'accepted': False}

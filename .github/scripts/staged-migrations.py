@@ -80,7 +80,9 @@ def restore_task_default(directory):
     require(head.returncode == 0 and head.stdout.decode().strip() == os.environ.get('GITHUB_SHA'),
             'staged restoration source differs from checkout')
     plan = json.loads(regular(directory / 'plan.json', 65536))
-    require(set(plan) == {'schema', 'sourceSHA', 'files'} and plan['schema'] == 1
+    selected = os.environ.get('CORE_RESTORE_OWNER_TRIAL', 'false') == 'true'
+    require(set(plan) == ({'schema', 'sourceSHA', 'files', 'coreSourceProvider'} if selected else {'schema', 'sourceSHA', 'files'})
+            and plan['schema'] == (2 if selected else 1)
             and plan['sourceSHA'] == os.environ['GITHUB_SHA']
             and set(plan['files']) == {'core', 'detach', 'clean', 'config'}, 'valid bound candidate required')
     bound = {}
@@ -93,6 +95,13 @@ def restore_task_default(directory):
         regular_file(path)
         require(sha(path) == entry['sha256'], 'bound input changed')
         bound[key] = (path, entry['sha256'])
+    if selected:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('restoration_core_provider', ROOT / 'tests/velero-ownership/source_provider.py')
+        provider = importlib.util.module_from_spec(spec); spec.loader.exec_module(provider)
+        require(plan['coreSourceProvider'] == provider.receipt(), 'bound Core provider differs')
+        for name in ('core', 'detach', 'clean'):
+            provider.verify_bundle(bound[name][0], plan['coreSourceProvider'])
     task = ROOT / 'tasks.yaml'
     actual, reviewed = regular(task), reviewed_bytes('tasks.yaml')
     helpers = ('.github/container-and-chart/docker/build.sh', '.github/container-and-chart/docker/version.txt',
@@ -346,6 +355,16 @@ def receipt(directory, arch):
                     and journal.get('driverSHA256') == sha(ROOT / 'tests/velero-ownership/drive.py')
                     and [step.get('name') for step in journal['steps']] == OWNER_STEPS
                     and all(step.get('status') == 'passed' for step in journal['steps']), 'owner round-trip not accepted')
+            if os.environ.get('CORE_RESTORE_OWNER_TRIAL', 'false') == 'true':
+                import importlib.util
+                spec = importlib.util.spec_from_file_location('receipt_core_provider', ROOT / 'tests/velero-ownership/source_provider.py')
+                provider = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(provider)
+                expected = provider.receipt()
+                require(journal.get('coreSourceProvider') == expected, 'owner Core source binding differs')
+                result['coreSourceProvider'] = expected
+            else:
+                require('coreSourceProvider' not in journal, 'unexpected owner Core source binding')
             guard = journal['cluster']
             for group, stage in [('fresh', 'fresh-core'), ('handoff', 'core-after'), ('handoff', 'local-after')]:
                 path = directory / 'owner' / group / (stage + '.json')
@@ -386,6 +405,14 @@ def verify(directory):
                 and value.get('scenarios') == scenarios
                 and value.get('results') == {scenario: 'passed' for scenario in scenarios},
                 'selected architecture/scenario lacks exact-run acceptance')
+        if os.environ.get('CORE_RESTORE_OWNER_TRIAL', 'false') == 'true':
+            import importlib.util
+            spec = importlib.util.spec_from_file_location('verify_core_provider', ROOT / 'tests/velero-ownership/source_provider.py')
+            provider = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(provider)
+            require(value.get('coreSourceProvider') == provider.receipt(), 'public Core source binding differs')
+        else:
+            require('coreSourceProvider' not in value, 'unexpected public Core source binding')
         verify_public_proofs(directory.parent / 'proofs' / arch, value)
     return {'selectedArchitectures': arches, 'selectedScenarios': scenarios, 'accepted': True}
 
