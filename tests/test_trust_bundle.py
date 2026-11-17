@@ -180,8 +180,10 @@ class TrustImportDeadline(unittest.TestCase):
             # No certificate is imported until the real TLS fetch succeeds.
             (root/'bundle/ca-bundle.pem').write_text('no certificate in this owned fixture\n')
             if mode=='partial-bundle':(root/'bundle/ca-bundle.pem').write_bytes(self.cert.read_bytes())
+            # Keep the resolved JDK available after narrowing the child PATH.
+            (root/'bin/keytool').symlink_to(Path(shutil.which('keytool')).resolve())
             if mode=='missing-timeout':
-                for tool in ('bash','cp','chmod','rm','seq','awk','basename','openssl','keytool'):
+                for tool in ('bash','cp','chmod','rm','seq','awk','basename','openssl'):
                     (root/'bin'/tool).symlink_to(Path(shutil.which(tool)).resolve())
             if mode in ('partial','partial-bundle','oversize'):
                 body='#!/bin/sh\ncat '+str(self.cert)+'\n'
