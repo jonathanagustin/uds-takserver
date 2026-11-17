@@ -159,9 +159,10 @@ mode. It neither renders nor signs media and does not start a cluster. The
 combined-reel publisher keeps its separate, unchanged six-file contract.
 
 Publication requires a committed review record at
-`demo/ui-reel/reviews/<run>-<attempt>.json` in the publisher checkout. There is
-**no completed review record for run 42940218710**: its 555-frame privacy review
-remains open. Posters and periodic samples do not establish a complete review.
+`demo/ui-reel/reviews/<run>-<attempt>.json` in the publisher checkout. There is a
+completed agent-assisted [review record for run 42940218710, attempt 1](reviews/42940218710-1.json).
+Its [review notes and coverage](reviews/README.md) describe the complete 555-frame
+inspection and its limits. Publication remains pending. Posters and periodic samples alone do not establish a complete review.
 Inspect every frame at readable resolution, including transient notifications,
 cuts and fades; check synthetic locations and identities, legibility, metadata,
 and absence of credentials or operational data. Record the review only after it

@@ -6,7 +6,9 @@ import hashlib
 import io
 import importlib.util
 import json
+import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tempfile
@@ -189,6 +191,27 @@ class BindingTests(unittest.TestCase):
         self.assertEqual(signing['with']['subject-digest'],'${{ steps.index.outputs.digest }}')
         self.assertNotIn('predicate-type',steps[names.index(expected[0])]['with'])
 
+    def test_slsa_step_reads_registry_bundle_and_keeps_verifier_failure_fatal(self):
+        root=Path(__file__).resolve().parents[2]
+        job=yaml.load((root/'.github/workflows/release.yaml').read_text(),Loader=yaml.BaseLoader)['jobs']['provenance']
+        step=next(s for s in job['steps'] if s['name']=='Verify the provenance')
+        subject='ghcr.io/'+B.REPO+'/takserver@sha256:'+'a'*64
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory);capture=path/'arguments.json'
+            helper=path/'gh'
+            helper.write_text('#!'+sys.executable+'\nimport json,os,sys\n'
+                              'open(os.environ["CAPTURE"],"w").write(json.dumps(sys.argv[1:]))\n'
+                              'sys.exit(int(os.environ["VERIFY_EXIT"]))\n')
+            helper.chmod(0o755)
+            for code in (0,7):
+                env={**os.environ,'PATH':directory,'CAPTURE':str(capture),'VERIFY_EXIT':str(code),
+                     'SUBJECT':subject,'GITHUB_REPOSITORY':B.REPO,'GITHUB_REPOSITORY_OWNER':'wrong-owner'}
+                result=subprocess.run(['/bin/bash','-c',step['run']],env=env,capture_output=True,timeout=10)
+                self.assertEqual(result.returncode,code)
+                self.assertEqual(json.loads(capture.read_text()),[
+                    'attestation','verify','oci://'+subject,'--bundle-from-oci','--repo',B.REPO,
+                    '--signer-workflow',B.REPO+'/.github/workflows/release.yaml'])
+
     def test_rerun_selects_exact_authenticated_attempt_without_old_substitution(self):
         old=self.output()
         self.metadata['workflow']['runAttempt']='2'
@@ -256,6 +279,70 @@ class BindingTests(unittest.TestCase):
             meta.write_text('{"private-secret":true}')
             result=subprocess.run(command,capture_output=True,text=True)
             self.assertNotEqual(result.returncode,0);self.assertNotIn('private-secret',result.stderr)
+
+    def test_prepare_serializes_public_identity_without_environment_or_api_extras(self):
+        sentinel = 'private-credential-sentinel-not-public'
+        env = {'GITHUB_REPOSITORY': B.REPO, 'WORKFLOW_SHA': '2'*40,
+               'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_REF': 'refs/heads/main',
+               'RELEASE_ID': '123', 'RELEASE_SOURCE_SHA': '1'*40,
+               'CHECKED_SOURCE_SHA': '1'*40, 'RELEASE_TAG': 'v0.14.0',
+               'GITHUB_RUN_ID': '456', 'GITHUB_RUN_ATTEMPT': '1',
+               'GH_TOKEN': sentinel, 'UNRELATED_PRIVATE_KEY': sentinel}
+        def api(path, payload=None):
+            self.assertIsNone(payload)
+            if path.startswith('/git/ref/'):
+                return {'ref': 'refs/tags/v0.14.0', 'object': {'type': 'commit', 'sha': '1'*40},
+                        'private_field': sentinel}
+            return {'id': 123, 'url': 'https://api.github.com/repos/'+B.REPO+'/releases/123',
+                    'tag_name': 'v0.14.0', 'prerelease': False, 'draft': True,
+                    'body': sentinel, 'author': {'credential': sentinel}}
+        trusted_metadata = B.trusted_metadata
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); meta = root/'metadata.json'; index = root/'index.json'
+            # Replacement must retain the staging policy instead of inheriting
+            # an existing permissive mode from a previous preparation attempt.
+            meta.write_text('previous'); meta.chmod(0o644)
+            args = ['binding', 'prepare', '--metadata', str(meta), '--index', str(index),
+                    '--digest', self.metadata['indexDigest']]
+            with patch.dict(os.environ, env, clear=True), patch.object(sys, 'argv', args), \
+                    patch.object(B, 'trusted_metadata', side_effect=lambda digest:
+                                 trusted_metadata(digest, api=api, head='2'*40)), \
+                    patch.object(B, 'registry_index', return_value=self.raw), \
+                    patch.object(sys, 'stdout', new_callable=io.StringIO) as stdout, \
+                    patch.object(sys, 'stderr', new_callable=io.StringIO) as stderr:
+                self.assertEqual(B.main(), 0)
+            self.assertEqual(json.loads(meta.read_bytes()), self.metadata)
+            self.assertEqual(index.read_bytes(), self.raw)
+            self.assertEqual(json.loads(stdout.getvalue()), B.predicate(self.metadata, self.raw))
+            self.assertEqual(stderr.getvalue(), '')
+            for output in (meta.read_text(), index.read_text(), stdout.getvalue(), stderr.getvalue()):
+                self.assertNotIn(sentinel, output)
+            self.assertEqual(stat.S_IMODE(meta.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(index.stat().st_mode), 0o600)
+            self.assertEqual({path.name for path in root.iterdir()}, {'metadata.json', 'index.json'})
+
+    def test_prepare_refuses_extra_private_fields_and_oversized_identity_before_writes(self):
+        for section in (None, 'release', 'workflow', 'oversized'):
+            metadata = copy.deepcopy(self.metadata)
+            sentinel = 'private-credential-sentinel-not-public'
+            if section == 'oversized':
+                metadata['workflow']['runID'] = '9' * B.LIMIT
+            else:
+                target = metadata if section is None else metadata[section]
+                target['credential'] = sentinel
+            with self.subTest(section=section), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); meta = root/'metadata.json'; index = root/'index.json'
+                args = ['binding', 'prepare', '--metadata', str(meta), '--index', str(index),
+                        '--digest', self.metadata['indexDigest']]
+                with patch.object(sys, 'argv', args), \
+                        patch.object(B, 'trusted_metadata', return_value=metadata), \
+                        patch.object(B, 'registry_index', return_value=self.raw), \
+                        patch.object(sys, 'stdout', new_callable=io.StringIO) as stdout, \
+                        patch.object(sys, 'stderr', new_callable=io.StringIO) as stderr:
+                    self.assertEqual(B.main(), 1)
+                self.assertEqual(stdout.getvalue(), '')
+                self.assertNotIn(sentinel, stderr.getvalue())
+                self.assertEqual(list(root.iterdir()), [])
 
 
 if __name__ == '__main__':unittest.main()
