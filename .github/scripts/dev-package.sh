@@ -165,7 +165,7 @@ prebuilt() {
   done
   echo "dev-package: pulling ${r} (waited ${waited}s)" >&2
   rm -f "${file}"
-  if ! zarf package pull "oci://${r}" --output-directory . --no-progress >&2 || [[ ! -f "${file}" ]]; then
+  if ! zarf package pull "oci://${r}" --output-directory . >&2 || [[ ! -f "${file}" ]]; then
     echo "dev-package: pull of ${r} failed; creating the package here" >&2
     echo false
     return

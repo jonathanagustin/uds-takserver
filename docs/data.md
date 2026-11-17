@@ -52,6 +52,21 @@ A directory that is not PostgreSQL 15 or 18 makes the `18-3.6` container exit.
 
 The upgrade test deploys the last release and writes a row. Then it deploys this branch and checks the row, its timestamp, the PVC, the server major version, and the PostGIS version. Since 0.7.0 the last release is already on PostgreSQL 18, so that job no longer runs the in-place upgrade from 15. A second job, `validate-upgrade-pg15`, pins release 0.6.0 with `UPGRADE_BASELINE_TAG=v0.6.0`, so the upgrade from 15 stays tested. It runs on pushes to `main`, and on a pull request with the `upgrade-pg15` label when a commit is pushed.
 
+### Interrupted PostgreSQL upgrades
+
+The entrypoint journals the migration in `${PGDATA}.pg15-to-pg18.state`, beside the data directory on the same volume. `PG_VERSION=18` alone does not mean the migration finished: `initdb` writes it before any existing data is transferred.
+
+| Journal stage | Restart behavior |
+| --- | --- |
+| `preparing` | No linking or new-server writes have started. Restore the original `.pg15` directory and retry the migration automatically. |
+| `linking` or `postgis` | Preserve both directories and refuse startup. The old cluster may be disabled or share files that the new server has changed. |
+| `complete` | Migration, extension updates, and a clean server shutdown finished. Resume removal of the old directory and journal, then start normally. |
+| Unknown stage, inconsistent directories, or an old `.pg15` directory without a journal | Preserve the files and refuse startup because safe recovery cannot be inferred. |
+
+If the log requests operator recovery, stop the database workload and application writers, preserve the failed volume for investigation, and restore the **entire pre-upgrade volume snapshot** before retrying. This includes the parent directory holding the data directory, old directory, and journal. Follow the rollback procedure above if returning to PostgreSQL 15. Do not delete the journal to force startup or assume the `.pg15` directory is a usable rollback copy after linking.
+
+The native image smoke checks exercise both normal migration and restart after PG18 initialization with retained rows in the Bitnami and CloudTAK layouts. Offline regression tests also kill the entrypoint during linking, extension updates, and final cleanup to verify that incomplete states cannot reach ordinary startup.
+
 ## Backup
 
 For a step-by-step recovery procedure, see
