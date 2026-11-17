@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.17.0](https://github.com/jonathanagustin/uds-takserver/compare/v0.16.7...v0.17.0) (2026-11-17)
+
+
+### Features
+
+* build public vehicle CoT metadata library ([#586](https://github.com/jonathanagustin/uds-takserver/issues/586)) ([9a57499](https://github.com/jonathanagustin/uds-takserver/commit/9a574990c5b5f742f255284503e583a072315785))
+* qualify signed Core source candidates on native ARM runners ([#623](https://github.com/jonathanagustin/uds-takserver/issues/623)) ([36266a9](https://github.com/jonathanagustin/uds-takserver/commit/36266a94e9a9c01dfbc7b1d62e29337a34ad2b14))
+* reuse verified Draco components in read-only PR builds ([#621](https://github.com/jonathanagustin/uds-takserver/issues/621)) ([d934830](https://github.com/jonathanagustin/uds-takserver/commit/d9348304397a810b162c0da2a3ecd27bfa561f40))
+
+
+### Bug Fixes
+
+* bind cleanup ConfigMaps to their source authorities ([#610](https://github.com/jonathanagustin/uds-takserver/issues/610)) ([38b7fd2](https://github.com/jonathanagustin/uds-takserver/commit/38b7fd2d667b0ff2ab6a8d62918b5a8b2b1529a4))
+* bind Zarf-rewritten config images to registry authority ([#611](https://github.com/jonathanagustin/uds-takserver/issues/611)) ([57873f4](https://github.com/jonathanagustin/uds-takserver/commit/57873f45a2d042d7bfda98138fe7c5dfc94319a8))
+* bound full identity journals separately from phase proofs ([#624](https://github.com/jonathanagustin/uds-takserver/issues/624)) ([3c5d656](https://github.com/jonathanagustin/uds-takserver/commit/3c5d656251bd910c00b74f6ac47c780aa2767f01))
+* check elevation JNI construction and callback boundaries ([#591](https://github.com/jonathanagustin/uds-takserver/issues/591)) ([1759ccd](https://github.com/jonathanagustin/uds-takserver/commit/1759ccd18e4e8372c4276e231000d6395c46698d))
+* check feature-renderer JNI callbacks and pointer ownership ([#595](https://github.com/jonathanagustin/uds-takserver/issues/595)) ([e2a6069](https://github.com/jonathanagustin/uds-takserver/commit/e2a60690d09950e3623be0779bd0cf224681e221))
+* create private Core signing identity file with supported API ([#615](https://github.com/jonathanagustin/uds-takserver/issues/615)) ([f6df6ec](https://github.com/jonathanagustin/uds-takserver/commit/f6df6ec2d92bbd3332293ea1b64fbc287bb65cf8))
+* preserve Core CRD schema during fresh Velero chart installation ([#620](https://github.com/jonathanagustin/uds-takserver/issues/620)) ([910563c](https://github.com/jonathanagustin/uds-takserver/commit/910563cfc367436c6593a136841ec9602a5b7488))
+* preserve package keys across Bash versions and hash failures ([#628](https://github.com/jonathanagustin/uds-takserver/issues/628)) ([fa5236a](https://github.com/jonathanagustin/uds-takserver/commit/fa5236a6f40dea927f52a5cc619a23ab7213777d))
+* reconcile baseline Core CRD metadata through its signed package ([#618](https://github.com/jonathanagustin/uds-takserver/issues/618)) ([7768eb6](https://github.com/jonathanagustin/uds-takserver/commit/7768eb65b665e9f02997110b8ef3a274b4865c94))
+* refresh extracted admin certificates after reinstall ([#614](https://github.com/jonathanagustin/uds-takserver/issues/614)) ([1484964](https://github.com/jonathanagustin/uds-takserver/commit/1484964bb3e2dfe53d4de45d614e17bd51baf0e9))
+
 ## [0.16.7](https://github.com/jonathanagustin/uds-takserver/compare/v0.16.6...v0.16.7) (2026-11-14)
 
 
