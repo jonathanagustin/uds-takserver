@@ -39,3 +39,16 @@ has not yet been completed; source/fixture checks do not meet that gate. The
 separate cache-profile observation used AMD64 emulation on ARM and different
 Make/binutils versions, so it cannot supply that proof. No geometry corruption
 or invalidation of the earlier geometry/PIC results has been demonstrated.
+
+A new native Linux amd64 run on 2026-11-17 qualified the explicit GNU89
+configuration with GCC 14.2.0, Make 4.4.1 and binutils 2.44. The entrypoint
+started with a new output directory, verified the locked archive and original
+patch, and completed the entire source build and install. Both generated headers
+selected `HAVE_LONG_INT_64`; the real eight-byte signed arithmetic probe passed
+before make and after the geometry/error, whole-archive PIC and runtime controls.
+All 18 profile tests passed with the fresh receipt enabled, with zero skips.
+The locally retained `complete.json` has SHA-256
+`31ae2c25d5f241f1435f1a19f9e750e06e58d03257c415b127b955c441e9b84b`.
+This qualifies this historical component recipe on that host. It does not run
+the full upstream suite or establish SDK, JNI, security, target-image ABI or
+live TAKX acceptance; those receipt fields remain false.
