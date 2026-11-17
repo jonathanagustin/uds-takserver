@@ -617,19 +617,27 @@ class TesterExitTests(unittest.TestCase):
         self.assertIn("terminated 1", completed.stdout)
         self.assertIn("socket-closed", completed.stdout)
 
+    def test_reap_preserves_timeout_output(self):
+        for text in (True, False):
+            proc = subprocess.Popen([sys.executable, "-c",
+                "print('row', flush=True); import time; time.sleep(30)"],
+                stdout=subprocess.PIPE, text=text, start_new_session=True)
+            result = tester_exit.reap(proc, .2)
+            self.assertEqual(result, "row\n" if text else b"row\n")
     def test_reap_kills_a_process_that_ignores_sigterm(self):
         proc = subprocess.Popen(
             [
                 sys.executable,
                 "-c",
-                "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)",
+                "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print(\"row\",flush=True); time.sleep(30)",
             ],
             start_new_session=True,
             stdout=subprocess.PIPE,
             text=True,
         )
         started = time.monotonic()
-        tester_exit.reap(proc, 0.3)
+        result = tester_exit.reap(proc, 0.3)
+        self.assertEqual(result, "row\n")
         self.assertIsNotNone(proc.poll())
         self.assertLess(time.monotonic() - started, 8)
         self.assertNotEqual(proc.returncode, 0)
