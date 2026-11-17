@@ -28,7 +28,7 @@ export DEMO_PACKAGE_REF
 DEMO_PACKAGE_REF="$(python3 .github/scripts/published_package_ref.py "${DEMO_VERSION}")"
 uds zarf package pull "${DEMO_PACKAGE_REF}" \
   --architecture amd64 --certificate-identity-regexp "${RELEASE_WORKFLOW}" --certificate-oidc-issuer "${RELEASE_ISSUER}" \
-  -o "${release_dir}" --no-progress
+  -o "${release_dir}"
 export DEMO_RELEASE_PACKAGE="${release_dir}/zarf-package-takserver-amd64-${DEMO_VERSION}-upstream.tar.zst"
 test -s "${DEMO_RELEASE_PACKAGE}"
 

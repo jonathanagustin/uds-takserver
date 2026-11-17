@@ -5,6 +5,7 @@
 """Live ADR 24 check: revoke one stream while other clients stay connected."""
 
 import base64
+from contextlib import contextmanager
 import http.client
 import json
 import os
@@ -14,12 +15,35 @@ import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 import time
 
 
 def kubectl(*args, data=None):
-    return subprocess.run(["uds", "zarf", "tools", "kubectl", *args], input=data,
-                          text=True, capture_output=True, check=True, timeout=200).stdout
+    try:
+        return subprocess.run(["uds", "zarf", "tools", "kubectl", *args], input=data,
+                              text=True, capture_output=True, check=True, timeout=200).stdout
+    except subprocess.CalledProcessError as error:
+        # Secret reads and bootstrap status can return private child output.
+        # Keep command arguments, input and captured streams out of diagnostics.
+        raise RuntimeError(f"Kubernetes operation failed (exit {error.returncode})") from None
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Kubernetes operation timed out") from None
+    except OSError:
+        raise RuntimeError("Kubernetes operation could not start") from None
+
+
+@contextmanager
+def control_material(root, data):
+    """SSLContext needs files; keep this extra client material private and short-lived."""
+    with tempfile.TemporaryDirectory(prefix="takclient-control-", dir=root) as directory:
+        paths = []
+        for key in ("client.pem", "client.key"):
+            path = Path(directory) / key
+            with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stream:
+                stream.write(base64.b64decode(data[key], validate=True))
+            paths.append(path)
+        yield paths
 
 
 def snapshot():
@@ -121,9 +145,9 @@ def main():
         }))
         kubectl("wait", "takclient", control, "-n", "takclients", "--for=condition=Ready", "--timeout=180s")
         secret = json.loads(kubectl("get", "secret", control, "-n", "takclients", "-o", "json"))
-        for key in ("client.pem", "client.key"):
-            (root / f"control-{key}").write_bytes(base64.b64decode(secret["data"][key]))
-        control_ctx = context(root / "control-client.pem", root / "control-client.key")
+        with control_material(root, secret["data"]) as (cert, key):
+            control_ctx = context(cert, key)
+        del secret
         primary = connect(client_ctx, name)
         survivor = connect(control_ctx, control)
         admin = connect(admin_ctx, "takclient-admin-control")

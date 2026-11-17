@@ -79,7 +79,7 @@ else: sys.exit(99)
                 self.assertFalse(any('create' in call or 'build' in call for call in calls))
                 if case == 'publish':
                     self.assertEqual(publications[0], ['zarf', 'package', 'publish', archive.name,
-                        'oci://ghcr.io/example/ci-packages', '--tag', key, '--retries', '3', '--confirm', '--no-progress'])
+                        'oci://ghcr.io/example/ci-packages', '--tag', key, '--retries', '3'])
                     self.assertEqual(archive.read_bytes(), before)
                     self.assertEqual((root / 'archive.sha').read_text(), hashlib.sha256(before).hexdigest())
                     self.assertIn(b'fixture publisher stdout', result.stdout)
