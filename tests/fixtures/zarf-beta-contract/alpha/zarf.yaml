@@ -1,0 +1,69 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+kind: ZarfPackageConfig
+metadata:
+  name: values-contract
+  version: 0.1.0
+variables:
+- name: DOMAIN
+  description: Domain suffix for gateway hosts. k3d-core-slim-dev uses uds.dev. The
+    global.domain package value defaults to this and overrides it when set.
+  default: uds.dev
+- name: TAK_IMAGE_TAG
+  description: Tag for images published at ghcr.io/jonathanagustin/uds-takserver.
+    Building those images is separate from this package. The tak.imageTag package
+    value defaults to this. The images list and certs.image read only this variable.
+  default: 5.7-RELEASE-14
+- name: IN_CLUSTER_DNS
+  description: On a uds-k3d cluster, the takserver-oidc watcher adds CoreDNS rewrites
+    so DOMAIN hosts resolve to the right Istio gateway inside the cluster. Skipped
+    when kube-system/coredns-custom does not exist. The dns.inCluster package value
+    defaults to this.
+  default: 'true'
+- name: PASSTHROUGH_HOSTS
+  description: Hosts under DOMAIN that the passthrough gateway serves by SNI. charts/takserver/values.yaml
+    api.cert.host and messaging.streaming.host. The dns.passthroughHosts package value
+    defaults to this.
+  default: takserver-api takserver-stream
+- name: PLUGINS_MEMORY_REQUEST
+  description: Memory request for the TAK plugins container. The takserver-oidc module
+    sets it at admission and in the watcher, so the chart and the values profiles
+    cannot. The tak.plugins.memoryRequest package value defaults to this.
+  default: 320Mi
+- name: PLUGINS_MEMORY_LIMIT
+  description: Memory limit for the TAK plugins container. The plugin heap is 128m.
+    The tak.plugins.memoryLimit package value defaults to this.
+  default: 512Mi
+- name: FILESYSTEM_BACKUP
+  description: When true, annotate the database volumes for Velero file-system backup
+    and run the node-agent. Default false. The logical dump stays the full-bundle
+    path. See adr/0021-velero-node-agent.md.
+  default: 'false'
+- name: FILESYSTEM_BACKUP_OWNER
+  description: 'Experimental file-system node-agent owner: local (default) or core.
+    Core requires a separately prepared bootstrap exemption, upstream chart overrides
+    and verified ownership handoff; never switch an existing install directly. See
+    adr/0021-velero-node-agent.md.'
+  default: local
+- name: POSTGRES_STORAGE_CLASS
+  description: StorageClass for the TAK Postgres volume. Empty (the default) keeps
+    the cluster default class, so existing installs are unchanged. Set it only on
+    a new install; a StatefulSet volume claim template cannot change later. File-system
+    backup needs a class whose volumes are not hostPath. See docs/data.md.
+  default: ''
+- name: CLOUDTAK_STORAGE_CLASS
+  description: StorageClass for the CloudTAK PostGIS volume. Empty (the default) keeps
+    the cluster default class, so existing installs are unchanged. Set it only on
+    a new install; a StatefulSet volume claim template cannot change later. File-system
+    backup needs a class whose volumes are not hostPath. See docs/data.md.
+  default: ''
+components:
+- name: contract
+  required: true
+  charts:
+  - name: contract
+    namespace: default
+    localPath: ../chart
+    version: 0.1.0
+    valuesFiles:
+    - chart-values.yaml
