@@ -1,10 +1,11 @@
 # Review rules for main
 
-This runbook explains how the repository owner can update the review rules.
-The proposed settings have not been applied. The settings update returned Hypertext Transfer Protocol (HTTP)
-403 because the connection lacks permission to administer the repository.
-Ruleset `25580922` is unchanged. The solo-maintainer policy
-keeps merges possible with one collaborator. The independent-review policy
+This runbook records the current review rules and explains how the repository
+owner can update them. The solo-maintainer settings were applied and verified
+in [#335](https://github.com/jonathanagustin/uds-takserver/issues/335#issuecomment-6870560931).
+A fresh read on 2026-11-16 confirms strict status checks and the four preserved
+check contexts. The solo-maintainer policy keeps merges possible with one
+maintainer. The independent-review policy
 requires a second person with write access. Neither policy adds collaborators
 or changes accounts.
 
@@ -16,7 +17,7 @@ With only `@jonathanagustin` able to review, keep
 approval. Enabling these requirements would block the owner's pull requests.
 Leave the existing stale-review dismissal and conversation resolution on.
 
-Two protections still work for a solo maintainer:
+The selected policy also applies two protections that work for a solo maintainer:
 
 - Remove the administrator bypass (`bypass_actors: []`) so administrators must
   use pull requests and pass the required checks.
@@ -25,9 +26,9 @@ Two protections still work for a solo maintainer:
   current base branch.
 
 Keep all four existing checks, deletion protection, force-push protection,
-and allowed merge methods. Save the current ruleset using the backup command
-below, then generate the solo update from that backup rather than replacing
-unrelated settings:
+and allowed merge methods. The following procedure remains available if these
+settings need to be restored. Save the current ruleset using the backup command
+below, then generate the solo update from that backup:
 
 ```bash
 jq '{name, target, enforcement, conditions, rules, bypass_actors: []}
@@ -66,8 +67,8 @@ of maintaining this repository alone. Do not add a bot or self-approval to
 simulate an independent review, or disable the check to hide the result.
 
 The **Code-Review** alert measures approval evidence in recent changesets.
-The reported `1/27` approved changesets is historical; changing branch rules
-does not retroactively approve those changes. Raising that score requires real
+The current retained Scorecard result reports `0/30` approved changesets;
+changing branch rules does not retroactively approve those changes. Raising that score requires real
 independent reviews of future changes. Revisit the independent-review policy
 when a second human collaborator is available.
 
@@ -78,15 +79,39 @@ GitHub's rule reference: [Available rules for rulesets](https://docs.github.com/
 
 ## What is on main today
 
-Read on 2026-11-06 from `GET /repos/jonathanagustin/uds-takserver/rulesets/25580922`.
+Read on 2026-11-16 from [`GET /repos/jonathanagustin/uds-takserver/rulesets/25580922`](https://api.github.com/repos/jonathanagustin/uds-takserver/rulesets/25580922).
 
-The ruleset is named `main`, id `25580922`, enforcement `active`, target `branch`, and it includes `~DEFAULT_BRANCH`. One ruleset is configured on the repository.
+The ruleset is named `main`, id `25580922`, enforcement `active`, target `branch`, and it includes `~DEFAULT_BRANCH`.
 
 The pull request rule requires a pull request. Approving reviews required: `0`. Code owner review: off. Approval of the most recent push: off. Dismiss stale approvals when new commits are pushed: already on. Conversation resolution: on. Allowed merges: squash and rebase. The unattributed-Copilot extra approval is off. The required-reviewers list is empty.
 
-Status checks are `hk`, `Analyze (actions)`, `Analyze (javascript-typescript)`, and `dependency-review`, each with `integration_id` `15368` (GitHub Actions). The branch does not have to be up to date with the base (`strict_required_status_checks_policy` is false). Deletion and force-push are blocked.
+Status checks are `hk`, `Analyze (actions)`, `Analyze (javascript-typescript)`, and `dependency-review`, each with `integration_id` `15368` (GitHub Actions). The branch must be up to date with the base (`strict_required_status_checks_policy` is true). Deletion and force-push are blocked.
 
-That read did not include `bypass_actors`. GitHub returns the bypass list only to a caller who can edit the ruleset. The recorded bypass is the repository admin, mode `pull_request`: an admin can skip the pull request requirements. `current_user_can_bypass` on that read was `never`.
+That read did not include `bypass_actors`, so it cannot establish the current complete bypass list. The last administration-capable verification in [#335](https://github.com/jonathanagustin/uds-takserver/issues/335#issuecomment-6870560931) recorded an empty list after removing the earlier repository-admin bypass. `current_user_can_bypass` on the fresh read was `never`; this describes only the reading account.
+
+### Current Scorecard disposition
+
+[Scorecard run 44016456793](https://github.com/jonathanagustin/uds-takserver/actions/runs/44016456793)
+analyzed main commit `2a9262af8cbd708b180e8f68763a74a09c22be4a`.
+Its retained `SARIF file` artifact contains `results.sarif` with SHA-256
+`41122610adb204758e407d8f8236067e59631018679ce5d301c4ba064cc14494`.
+The two relevant results are:
+
+| Check | Score | Current evidence |
+| --- | --- | --- |
+| Branch-Protection | 4 | Missing required approvers, code-owner review and last-push approval |
+| Code-Review | 0 | `0/30` approved changesets |
+
+These are the expected approval limitations of the selected solo-maintainer
+policy. The latest ten merged PRs inspected in the review also had no submitted
+approvals. The result does not show missing strict status checks. Keep the
+working protections and the existing policy until a real second human reviewer
+is available; adding an approval requirement would block the maintainer's own PRs.
+
+This disposition uses the current run's SARIF and the ruleset readback. The
+reading account cannot inspect the live code-scanning alert records, so it does
+not establish their current state or dismiss them. The earlier failed settings
+write is historical; no settings change was attempted during this review.
 
 A classic branch-protection read of `main` returned HTTP 403 to the token used for this check. This runbook updates the ruleset. It does not call the branch-protection API.
 
