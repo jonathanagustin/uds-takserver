@@ -99,6 +99,9 @@ jobs:
       - name: TakClient revocation endpoint contract
         run: python3 -B -m unittest tests.test_takclient_revocation -v
 
+      - name: QUIC client route and stream contracts
+        run: uv run --no-project --with-requirements tests/requirements-quic.txt python -B -m unittest tests.test_quic_cot -v
+
       - name: PostgreSQL upgrade interruption and restart safety
         run: python3 -B -m unittest tests.test_postgis_upgrade -v
 
