@@ -30,6 +30,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PUBLIC = ROOT / "docs-site" / "public" / "demo"
+REPOSITORY_CARD = "github.com/jonathanagustin/uds-takserver"
 SMALL = {"a", "an", "and", "as", "at", "by", "for", "from", "in", "of", "on", "or", "the", "to", "with"}
 
 
@@ -55,7 +56,8 @@ def chapters(path):
         if not match:
             continue
         minutes, seconds, indent, name = int(match.group(1)), int(float(match.group(2))), match.group(3), match.group(4)
-        if (minutes, seconds) == (0, 0) or name.startswith("github.com/"):
+        # This is the literal closing-card caption, not URL authorization.
+        if (minutes, seconds) == (0, 0) or name == REPOSITORY_CARD:
             continue
         if indent and not re.match(r"\d+\.", name):
             continue

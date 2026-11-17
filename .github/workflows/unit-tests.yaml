@@ -77,6 +77,9 @@ jobs:
       - name: Trust bundle live-test restoration contracts
         run: python3 -B -m unittest tests.test_trust_bundle_live tests.test_validation_mode tests.test_trust_fixture -v
 
+      - name: Demo chapter caption contracts
+        run: python3 -B -m unittest tests.test_demo_sync_assets -v
+
       - name: Install execution receipt producers
         run: python3 -B -m unittest tests.test_install_receipt tests.test_checkpoint_identity tests.test_install_artifact_inputs tests.test_collect_install_receipt tests.test_install_reuse_shadow -v
 

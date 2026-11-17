@@ -9,6 +9,7 @@ from pathlib import Path
 import stat
 import os
 import subprocess
+import sys
 import tempfile
 import warnings
 import unittest
@@ -219,18 +220,37 @@ class SceneTests(unittest.TestCase):
                 env={**os.environ,'SCENE_SOURCE_RUN_ID':run,'SCENE_SOURCE_ATTEMPT':attempt,
                      'GITHUB_REF':ref,'RELEASE_TAG':tag,'SOURCE_RUN_ID':old_run,
                      'EXPORT_SCENES':export,'GITHUB_OUTPUT':output.name}
-                result=subprocess.run(['/usr/bin/python3',str(script),'--mode-only'],env=env,
+                result=subprocess.run([sys.executable,str(script),'--mode-only'],env=env,
                                       capture_output=True,timeout=5)
                 self.assertEqual(result.returncode==0,success,(run,attempt,ref,tag,old_run,export))
                 if success:self.assertEqual(Path(output.name).read_text(),'mode=scenes\n')
 
     def test_duplicate_json_and_uncommitted_review_refused(self):
         with self.assertRaises(ValueError):p.decode('{"schema":1,"schema":1}')
-        result=subprocess.run(['/usr/bin/python3',str(Path(p.__file__)),
-                               '--source-run-id','42940218710','--source-attempt','1'],
-                              capture_output=True,timeout=5)
-        self.assertNotEqual(result.returncode,0)
-        self.assertIn(b'complete committed privacy review',result.stderr)
+        with tempfile.TemporaryDirectory(prefix='ui-scene-uncommitted-') as directory:
+            root=Path(directory);(root/'bin').mkdir();called=root/'gh-called'
+            sentinel=root/'bin/gh'
+            sentinel.write_text('#!/bin/sh\nprintf called > "$SCENE_GH_SENTINEL"\nexit 91\n')
+            sentinel.chmod(0o700)
+            env={key:value for key,value in os.environ.items() if not key.startswith('GIT_')}
+            env.update(PATH=str(root/'bin')+os.pathsep+os.environ.get('PATH',os.defpath),
+                       SCENE_GH_SENTINEL=str(called),GITHUB_REPOSITORY=REPO,GITHUB_REF=p.REF,
+                       GIT_CONFIG_NOSYSTEM='1',GIT_CONFIG_GLOBAL=os.devnull)
+            subprocess.run(['git','init','--quiet'],cwd=root,env=env,
+                           check=True,capture_output=True,timeout=5)
+            subprocess.run(['git','-c','user.name=Scene Fixture','-c','user.email=fixture@example.invalid',
+                            '-c','core.hooksPath='+os.devnull,'-c','commit.gpgsign=false',
+                            'commit','--quiet','--allow-empty','-m','scene fixture'],
+                           cwd=root,env=env,check=True,capture_output=True,timeout=5)
+            review=root/'demo/ui-reel/reviews/42-2.json';review.parent.mkdir(parents=True)
+            review.write_text(json.dumps(SceneFake().review))
+            result=subprocess.run([sys.executable,str(Path(p.__file__).resolve()),
+                                   '--source-run-id','42','--source-attempt','2'],
+                                  cwd=root,env=env,capture_output=True,timeout=5)
+            self.assertNotEqual(result.returncode,0)
+            self.assertIn(b'Scene publication refused (CalledProcessError);',result.stderr)
+            self.assertIn(b'complete committed privacy review',result.stderr)
+            self.assertFalse(called.exists(),'uncommitted review reached the GitHub CLI')
 
     def test_actual_probe_rejects_audio_wrong_rate_or_missing_frames(self):
         from types import SimpleNamespace
