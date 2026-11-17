@@ -22,6 +22,7 @@ fi
 
 run_case() {
   local name="$1" uid="$2" mount="$3" pgdata="$4" user="$5" db="$6"
+  local prepare_restart="${7:-false}"
   local volume="postgis-smoke-${name}-$$"
   docker volume rm "${volume}" >/dev/null 2>&1 || true
   docker volume create "${volume}" >/dev/null
@@ -51,6 +52,23 @@ run_case() {
   before="$(docker exec "${volume}" psql -U "${user}" -d "${db}" -At -c "SELECT marker || '|' || created_at::text FROM upgrade_test.retained_state;")"
   docker stop "${volume}" >/dev/null
   docker rm "${volume}" >/dev/null
+  if [[ "${prepare_restart}" == "true" ]]; then
+    # Recreate the persistent state left by a kill after PG18 initdb. The
+    # production entrypoint must restore PG15 and redo the migration, rather
+    # than starting this empty PG18 directory. Use real PostgreSQL files.
+    docker run --rm --user "${uid}:${uid}" --entrypoint /bin/bash \
+      -e POSTGRES_USER="${user}" -e POSTGRES_PASSWORD=postgres -e PGDATA="${pgdata}" \
+      -v "${volume}:${mount}" "${image}" -ec '
+        printf "preparing\n" > "${PGDATA}.pg15-to-pg18.state"
+        sync -f "${PGDATA}.pg15-to-pg18.state"
+        mv "${PGDATA}" "${PGDATA}.pg15"
+        # The numeric Bitnami UID has no passwd entry in this image. Reuse
+        # the pinned official entrypoint helper so initdb gets its NSS setup.
+        source /usr/local/bin/docker-entrypoint.sh
+        docker_setup_env
+        PATH="/usr/lib/postgresql/18/bin:${PATH}" docker_init_database_dir --auth=trust
+      '
+  fi
   docker run -d --name "${volume}" --user "${uid}:${uid}" \
     -e POSTGRES_PASSWORD=postgres \
     -e POSTGRES_USER="${user}" \
@@ -85,6 +103,8 @@ run_case() {
 
 run_case bitnami 1001 /bitnami/postgresql /bitnami/postgresql/data postgres cot
 run_case cloudtak 999 /var/lib/postgresql/data /var/lib/postgresql/data/pgdata cloudtak cloudtak
+run_case bitnami-retry 1001 /bitnami/postgresql /bitnami/postgresql/data postgres cot true
+run_case cloudtak-retry 999 /var/lib/postgresql/data /var/lib/postgresql/data/pgdata cloudtak cloudtak true
 
 # A new directory has to init, not try to upgrade.
 fresh="postgis-smoke-fresh-$$"
