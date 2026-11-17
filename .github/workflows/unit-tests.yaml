@@ -19,6 +19,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  dev-container:
+    name: Development container (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build toolchain and run offline checks
+        run: CONTAINER_RUNTIME=docker ./dev/run
+
   # Offline unit tests with coverage. The Pepr tests also run in
   # pepr/build.sh when the package is created, and the Python tests in the
   # Test workflow; this job measures them and writes the numbers to the job

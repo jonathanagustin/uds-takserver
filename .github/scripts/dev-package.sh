@@ -48,7 +48,7 @@ zarf() {
 # package contents. Keep tool pins, checkout attributes and runtime helpers.
 inputs() {
   git ls-files -s -z -- . \
-    ':(exclude)docs/**' ':(exclude)docs-site/**' ':(exclude)adr/**' ':(exclude)tests/**' \
+    ':(exclude)docs/**' ':(exclude)docs-site/**' ':(exclude)dev/**' ':(exclude)adr/**' ':(exclude)tests/**' \
     ':(exclude).github/**' ':(exclude)bundle/**' ':(exclude)atak/**' \
     ':(exclude)demo/**' ':(exclude)bench/**' ':(exclude)*.md' \
     ':(exclude)renovate.json' ':(exclude).release-please-manifest.json' \

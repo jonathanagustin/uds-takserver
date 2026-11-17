@@ -277,6 +277,8 @@ class PackageKeyTests(unittest.TestCase):
             git('add', *runtime)
             baseline = key()
             for name in ['.codespellrc', '.license_config.yaml', 'hk.pkl',
+                         'dev/Dockerfile', 'dev/run', 'dev/check', 'dev/requirements.txt',
+                         'dev/install-tools', 'dev/smoke',
                          '.github/scripts/collect-install-receipt.py',
                          '.github/scripts/install-reuse-shadow.py']:
                 with self.subTest(metadata=name):
