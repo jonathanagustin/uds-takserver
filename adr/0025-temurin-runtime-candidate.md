@@ -44,3 +44,18 @@ PR builds may publish input-bound candidate tags through the existing workflow.
 Do not manually publish release aliases or dispatch a release publisher for this
 experiment. Preserve earlier UBI failure evidence. If qualification fails, keep
 the proposal in draft or close it; main retains its existing runtime until merge.
+
+## First native qualification
+
+Both architecture builds, including Copa and image attestations, completed on
+candidate head 307dce8deb9551eebba0d1b0f4ee285980be1c5e. The authenticated scan
+and both upgrade paths passed. All three fresh-install paths failed; on both
+architectures the certificate Job completed but application pods could not
+mount the missing CRL Secret. This observation does not establish why the
+watcher did not produce that Secret.
+
+The candidate adds fixed CA-readiness categories to the existing material
+reconciliation callback: missing certificate, key or passphrase, or unreadable
+material. No input values or crypto exceptions are logged. Loading, signing,
+revocation and pod startup gates retain their existing behavior. Qualification
+must identify and correct the fresh-install failure before acceptance.

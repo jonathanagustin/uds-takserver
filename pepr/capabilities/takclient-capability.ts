@@ -113,7 +113,7 @@ export async function onCaMaterial(_update: unknown, phase: string): Promise<voi
     return;
   }
   const d = deps();
-  const ca = await readCa(d.cluster);
+  const ca = await readCa(d.cluster, reason => d.log(`TakClient CA material unavailable: ${reason}`));
   if (ca) {
     await ensureCrl(d.cluster, ca, d.now());
   }
