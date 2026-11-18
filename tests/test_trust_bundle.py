@@ -81,6 +81,7 @@ class TrustBundleTLS(unittest.TestCase):
                         "-subj", f"/CN={name}", "-addext", "subjectAltName=DNS:localhost",
                     ], check=True, capture_output=True)
                     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                    context.minimum_version = ssl.TLSVersion.TLSv1_2
                     context.load_cert_chain(cert, key)
                     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), QuietHandler)
                     server.socket = context.wrap_socket(server.socket, server_side=True)
@@ -150,7 +151,9 @@ class TrustImportDeadline(unittest.TestCase):
         def peer(tls):
             server=socket.socket();server.bind(('127.0.0.1',0));server.listen(1);server.settimeout(0.1)
             stop=threading.Event()
-            context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(self.cert,self.key)
+            context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version=ssl.TLSVersion.TLSv1_2
+            context.load_cert_chain(self.cert,self.key)
             def serve():
                 while not stop.is_set():
                     try:conn,_=server.accept()

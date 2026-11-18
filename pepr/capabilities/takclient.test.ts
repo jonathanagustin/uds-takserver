@@ -43,7 +43,10 @@ import {
 } from "./takclient-pki.ts";
 import {
   CALLSIGN,
+  CLIENT_NAME,
+  FINGERPRINT,
   ISSUER,
+  clientLabelValue,
   condition,
   CRL_SECRET,
   ensureCrl,
@@ -116,7 +119,11 @@ const unb64 = (value: string) => Buffer.from(value, "base64").toString("utf8");
 
 interface Store {
   configMaps: Record<string, ConfigMapDoc>;
-  secrets: Record<string, SecretDoc>;
+  secrets: Record<string, SecretDoc & { metadata?: {
+    name?: string;
+    namespace?: string;
+    labels?: Record<string, string>;
+  } }>;
 }
 
 function material(): Store {
@@ -164,11 +171,17 @@ function fake(opts: { store?: Store; clients?: TakClientDoc[]; issuedDays?: numb
     applySecretWithAnnotations: async (
       ns: string,
       name: string,
-      _labels: Record<string, string>,
+      labels: Record<string, string>,
       annotations: Record<string, string>,
       data: Record<string, string>,
     ) => {
-      store.secrets[`${ns}/${name}`] = { metadata: { annotations }, data };
+      // Kubernetes accepts DNS-subdomain Secret names up to 253 characters,
+      // but every label value must independently fit in 63 characters.
+      for (const value of Object.values(labels)) {
+        assert.match(value, /^([A-Za-z0-9]([A-Za-z0-9_.-]{0,61}[A-Za-z0-9])?)?$/,
+          "Kubernetes rejected an invalid Secret label value");
+      }
+      store.secrets[`${ns}/${name}`] = { metadata: { name, namespace: ns, labels, annotations }, data };
     },
     patchTakClientStatus: async (_ns: string, name: string, conditions: Condition[]) => {
       calls.status.push({ name, conditions });
@@ -373,6 +386,30 @@ test("the data package has the manifest, the 8089 stream, the truststore, and th
   assert.deepEqual(zip([{ name: "a.txt", data: Buffer.from("hello") }]), one);
 });
 
+test("CA readiness diagnostics classify unavailable inputs without exposing them", async () => {
+  const cases = [
+    { reason: "missing-certificate", remove: "config" },
+    { reason: "missing-key", remove: "key" },
+    { reason: "missing-passphrase", remove: "pass" },
+    { reason: "unreadable-material", remove: "invalid" },
+  ];
+  for (const { reason, remove } of cases) {
+    const { d, store } = fake();
+    if (remove === "config") delete store.configMaps["takserver/cert-migration"];
+    if (remove === "key") delete store.secrets["takserver/takserver-ca-key"];
+    if (remove === "pass") delete store.secrets["takserver/takserver-keystore"];
+    if (remove === "invalid") store.secrets["takserver/takserver-ca-key"].data!["ca-do-not-share.key"] = b64("private-input-sentinel");
+    const observations: string[] = [];
+    assert.equal(await readCa(d.cluster, value => observations.push(value)), undefined);
+    assert.deepEqual(observations, [reason]);
+    assert.equal(store.secrets[`takserver/${CRL_SECRET}`], undefined);
+  }
+  const { d } = fake();
+  const observations: string[] = [];
+  assert.ok(await readCa(d.cluster, value => observations.push(value)));
+  assert.deepEqual(observations, []);
+});
+
 test("readCa and readAdmin wait for every piece", async () => {
   const { d, store } = fake();
   assert.notEqual(await readCa(d.cluster), undefined);
@@ -486,7 +523,7 @@ test("reconcile issues a Secret, annotates the TakClient, registers it, and repo
   const files = unzip(Buffer.from(secret.data!["package.zip"], "base64"));
   assert.equal(files["certs/server.pref"].includes(`${streamHost("uds.dev")}:8089:ssl`), true);
   assert.equal(files["certs/server.pref"].includes(unb64(secret.data!.password)), true);
-  assert.deepEqual(calls.annotate[0].annotations, annotations);
+  assert.deepEqual({ ...calls.annotate[0].annotations, [CLIENT_NAME]: "takclient-test" }, annotations);
   assert.equal(calls.tak[0].path, "/user-management/api/update-groups");
   const ready = calls.status.at(-1)!.conditions[0];
   assert.equal(ready.status, "True");
@@ -494,6 +531,70 @@ test("reconcile issues a Secret, annotates the TakClient, registers it, and repo
   assert.equal(ready.observedGeneration, 1);
   // The first reconcile also writes the empty CRL.
   assert.ok(store.secrets[`takserver/${CRL_SECRET}`]);
+});
+
+test("client labels preserve short names and hash full long names within Kubernetes limits", () => {
+  for (const length of [1, 62, 63]) {
+    const name = "a".repeat(length);
+    assert.equal(clientLabelValue(name), name);
+  }
+  const long = `${"a".repeat(40)}.${"b".repeat(40)}`;
+  assert.equal(clientLabelValue(long), "sha256_9824946b940fb94d35eb8d47eaab2ad983f06e3a671bcdf54228bc87");
+  const names = [`${"a".repeat(32)}.${"b".repeat(31)}`, long, `${long.slice(0, -1)}c`,
+    ["a".repeat(63), "b".repeat(63), "c".repeat(63), "d".repeat(61)].join(".")];
+  const labels = names.map(clientLabelValue);
+  assert.equal(new Set(labels).size, names.length);
+  for (const label of labels) {
+    assert.equal(label.length, 63);
+    assert.match(label, /^sha256_[a-f0-9]{56}$/);
+  }
+});
+
+test("long DNS-subdomain names publish credentials, reconcile idempotently, and clean up independently", async () => {
+  const long = `${"a".repeat(40)}.${"b".repeat(40)}`;
+  const names = [long, `${long.slice(0, -1)}c`, "s".repeat(63), `${"c".repeat(32)}.${"d".repeat(31)}`,
+    ["e".repeat(63), "f".repeat(63), "g".repeat(63), "h".repeat(61)].join(".")];
+  const docs = names.map((name, i) => client({ metadata: { name, uid: `uid-${i}` }, spec: { callsign: `device-${i}` } }));
+  const { d, calls, store, clients } = fake({ clients: docs });
+  for (const doc of docs) {
+    const name = doc.metadata!.name!;
+    const retry = await reconcileTakClient(doc, "ADDED", d);
+    assert.equal(retry, false, `publication retried for ${name.length}-character name: ${calls.logs.at(-1)}`);
+    const secret = store.secrets[`takclients/${name}`];
+    assert.equal(secret.metadata!.name, name);
+    assert.equal(secret.metadata!.namespace, "takclients");
+    assert.equal(secret.metadata!.labels![CLIENT_NAME], clientLabelValue(name));
+    assert.equal(secret.metadata!.annotations![CLIENT_NAME], name);
+    assert.equal(secret.metadata!.labels!["app.kubernetes.io/managed-by"], "takserver-oidc");
+    assert.equal(clients.get(name)!.status!.conditions![0].status, "True");
+    const serial = secret.metadata!.annotations![SERIAL];
+    const enrollments = calls.tak.filter(call => call.path.includes("signClient/v2")).length;
+    const writes = calls.annotate.length;
+    // Replay the original event snapshot; the current API object is authoritative.
+    assert.equal(await reconcileTakClient(doc, "MODIFIED", d), false);
+    assert.equal(store.secrets[`takclients/${name}`], secret);
+    assert.equal(clients.get(name)!.metadata!.annotations![SERIAL], serial);
+    assert.equal(calls.tak.filter(call => call.path.includes("signClient/v2")).length, enrollments);
+    assert.equal(calls.annotate.length, writes);
+  }
+  assert.equal(new Set(names.map(name => store.secrets[`takclients/${name}`].metadata!.labels![CLIENT_NAME])).size, names.length);
+  assert.equal(calls.tak.filter(call => call.path.includes("signClient/v2")).length, docs.length);
+  const fingerprints = names.map(name => store.secrets[`takclients/${name}`].metadata!.annotations![FINGERPRINT]);
+  for (const [i, doc] of docs.entries()) {
+    const name = doc.metadata!.name!;
+    assert.equal(await finalizeCurrentEvent(clients.get(name)!, d), true);
+    assert.equal(store.secrets[`takclients/${name}`], undefined);
+    assert.equal(await readCredential(d.cluster, name), undefined);
+    for (const other of names.slice(i + 1)) {
+      assert.ok(store.secrets[`takclients/${other}`]);
+      assert.ok(await readCredential(d.cluster, other));
+    }
+  }
+  assert.deepEqual(calls.deleted, names.map(name => `takclients/${name}`));
+  assert.deepEqual(calls.tak.filter(call => call.method === "GET" && call.path.startsWith("/Marti/api/certadmin/cert/"))
+    .map(call => call.path), fingerprints.map(hash => `/Marti/api/certadmin/cert/${encodeURIComponent(hash)}`));
+  assert.deepEqual(calls.tak.filter(call => call.method === "DELETE" && call.path.startsWith("/user-management/api/delete-user/"))
+    .map(call => call.path), docs.map(doc => `/user-management/api/delete-user/${doc.spec!.callsign}`));
 });
 
 test("stale queued events do not revoke and reissue an already committed certificate", async () => {

@@ -1,0 +1,26 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+name: Maintenance evidence
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/scripts/scan-maintenance.py]
+permissions:
+  contents: read
+  security-events: read
+jobs:
+  snapshot:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/scan-maintenance.py > snapshot.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: metadata
+          path: snapshot.json
+          if-no-files-found: error
+          retention-days: 14

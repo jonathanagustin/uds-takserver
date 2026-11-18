@@ -1,0 +1,37 @@
+#!/bin/sh
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+set -eu
+
+HOME=/tmp/uds-dev-home
+export HOME
+mkdir -p "${HOME}"
+chmod 0700 "${HOME}"
+git config --global --add safe.directory /workspace
+
+case "${1:-check}" in
+  check)
+    shift "$(( $# > 0 ? 1 : 0 ))"
+    if [ "$#" -ne 0 ]; then
+      echo 'usage: dev/run check (or dev/run COMMAND [ARG ...])' >&2
+      exit 2
+    fi
+    /usr/local/bin/uds-dev-smoke
+    python3 -B -m unittest \
+      tests.test_dev_run tests.test_dev_tools tests.test_profiles tests.test_dev_package_key \
+      tests.test_install_receipt \
+      tests.test_collect_install_receipt tests.test_install_reuse_shadow \
+      tests.test_upgrade_agent_diagnostics tests.test_upgrade_agent_api_snapshot \
+      tests.test_runner_wedge_kernel tests.test_demo_failure_diagnostics \
+      tests.test_velero_trial tests.test_filesystem_backup_owner \
+      tests.test_cloudtak_sso_mount tests.test_expose_annotations tests.test_trust_bundle.TrustBundleChartTests
+    python3 -B -m unittest discover -s tests -p 'test_image*.py'
+    python3 -B -m unittest discover -s .github/test-infra/package-render -p 'test_*.py'
+    exec bash tests/test_runtime_paths.sh
+    ;;
+  shell)
+    shift
+    exec bash "$@"
+    ;;
+  *) exec "$@" ;;
+esac

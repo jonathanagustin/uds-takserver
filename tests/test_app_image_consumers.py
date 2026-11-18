@@ -3,6 +3,9 @@
 
 """Consumers wait for keyed producer outputs and Demo keys identify app HEAD."""
 import os
+import json
+import shutil
+import sys
 from pathlib import Path
 import re
 import subprocess
@@ -207,6 +210,76 @@ class DemoSourceTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Unsupported demo app source', result.stderr)
         self.assertFalse(self.output.exists())
+
+
+class CloudtakBakeTests(unittest.TestCase):
+    """Run the real build entry point with a clean pinned source and no Docker."""
+
+    def test_bake_arguments_with_and_without_entitlement(self):
+        shells = [shutil.which('bash')]
+        if os.environ.get('BASH32'):
+            shells.append(os.environ['BASH32'])
+        for shell in shells:
+            for allow in (False, True):
+                with self.subTest(shell=shell, allow=allow), tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+
+                    def git(where, *args):
+                        return subprocess.check_output(['git', '-C', str(where), *args],
+                                                       text=True, stderr=subprocess.DEVNULL).strip()
+
+                    def init(where):
+                        where.mkdir(parents=True, exist_ok=True)
+                        git(where, 'init', '-q')
+                        git(where, 'config', 'user.name', 'Fixture')
+                        git(where, 'config', 'user.email', 'fixture@example.invalid')
+
+                    init(root)
+                    source = root / 'upstream/cloudtak'
+                    init(source)
+                    (source / 'Dockerfile').write_text('FROM scratch\n')
+                    git(source, 'add', '.')
+                    git(source, 'commit', '-qm', 'source')
+                    pin = git(source, 'rev-parse', 'HEAD')
+                    recipe = root / '.github/container-and-chart/cloudtak'
+                    recipe.mkdir(parents=True)
+                    shutil.copyfile(ROOT / '.github/container-and-chart/cloudtak/build.sh',
+                                    recipe / 'build.sh')
+                    helper = root / '.github/scripts/copa-patch.sh'
+                    helper.parent.mkdir(parents=True)
+                    helper.write_text('#!/bin/sh\nexit 0\n')
+                    helper.chmod(0o755)
+                    (root / '.gitmodules').write_text(
+                        '[submodule "upstream/cloudtak"]\n'
+                        '\tpath = upstream/cloudtak\n\turl = https://example.invalid/cloudtak\n'
+                        '\tbranch = fixture\n')
+                    git(root, 'add', '.github', '.gitmodules')
+                    git(root, 'update-index', '--add', '--cacheinfo',
+                        f'160000,{pin},upstream/cloudtak')
+                    git(root, 'commit', '-qm', 'fixture')
+                    binary = root / 'bin'
+                    binary.mkdir()
+                    docker = binary / 'docker'
+                    docker.write_text(f'#!{sys.executable}\n' +
+                        'import json, os, sys\n'
+                        'if sys.argv[1:] == ["buildx", "bake", "--help"]:\n'
+                        '    print("--allow" if os.environ["HELP_ALLOW"] == "1" else "bake")\n'
+                        'else:\n'
+                        '    with open(os.environ["BAKE_ARGS"], "w") as out:\n'
+                        '        json.dump(sys.argv[1:], out)\n')
+                    docker.chmod(0o755)
+                    output = root / 'arguments.json'
+                    result = subprocess.run([shell, str(recipe / 'build.sh')], cwd=root,
+                        capture_output=True, text=True, env={**os.environ,
+                        'PATH': str(binary) + os.pathsep + os.environ['PATH'],
+                        'HELP_ALLOW': str(int(allow)), 'BAKE_ARGS': str(output),
+                        'PUSH_IMAGES': 'false', 'ARCH': 'amd64'})
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    expected = ['buildx', 'bake', '-f', 'docker-bake.hcl']
+                    if allow:
+                        expected += ['--allow', f'fs.read={root}']
+                    self.assertEqual(json.loads(output.read_text()),
+                                     expected + ['--load', 'cloudtak'])
 
 
 if __name__ == '__main__':

@@ -17,6 +17,7 @@ Run it inside the cluster network. kubectl port-forward does not carry UDP.
 
 import argparse
 import asyncio
+import contextlib
 import os
 import socket
 import ssl
@@ -42,19 +43,34 @@ def configuration(cert, key, password):
     return config
 
 
-async def open_stream(host, port, config):
+async def open_endpoint(host, port, config):
+    """Let the route to this one test peer select the local IPv4 interface."""
     loop = asyncio.get_running_loop()
     connection = QuicConnection(configuration=config)
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(("0.0.0.0", 0))
+    addresses = await loop.getaddrinfo(host, port, family=socket.AF_INET, type=socket.SOCK_DGRAM)
+    peer = addresses[0][4]
     transport, protocol = await loop.create_datagram_endpoint(
         lambda: QuicConnectionProtocol(connection),
-        sock=sock,
+        remote_addr=peer,
+        family=socket.AF_INET,
     )
-    protocol.connect((host, port))
-    await protocol.wait_connected()
-    reader, writer = await protocol.create_stream()
-    return transport, protocol, reader, writer
+    return transport, protocol, peer
+
+
+async def open_stream(host, port, config):
+    transport, protocol, peer = await open_endpoint(host, port, config)
+    try:
+        protocol.connect(peer)
+        await protocol.wait_connected()
+        reader, writer = await protocol.create_stream()
+        return transport, protocol, reader, writer
+    except BaseException:
+        # A failed handshake or cancellation remains the reported failure even
+        # if aioquic cannot send its closing packet.
+        with contextlib.suppress(Exception):
+            protocol.close()
+        transport.close()
+        raise
 
 
 def cot(uid):
@@ -106,16 +122,11 @@ async def reject(host, port):
     be closed by the server. Data on the stream, or a connection that stays
     open, means the server accepted a client with no certificate.
     """
-    loop = asyncio.get_running_loop()
-    connection = QuicConnection(configuration=configuration(None, None, None))
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(("0.0.0.0", 0))
-    transport, protocol = await loop.create_datagram_endpoint(
-        lambda: QuicConnectionProtocol(connection),
-        sock=sock,
-    )
+    transport, protocol, peer = await open_endpoint(host, port, configuration(None, None, None))
+    connection = protocol._quic
+    writer = None
     try:
-        protocol.connect((host, port))
+        protocol.connect(peer)
         try:
             await asyncio.wait_for(protocol.wait_connected(), 15)
         except TimeoutError:
@@ -145,6 +156,8 @@ async def reject(host, port):
         print(f"no certificate and not refused; {len(data)} bytes on the stream", file=sys.stderr)
         return 1
     finally:
+        if writer is not None:
+            writer.close()
         protocol.close()
         try:
             await asyncio.wait_for(protocol.wait_closed(), 2)
