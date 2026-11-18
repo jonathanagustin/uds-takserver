@@ -1,0 +1,9 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Maintainer-approved temporary docs-toolchain exception; tracked in #721.
+# Scope: docs-site/package-lock.json only. Remove after a compatible fix ships.
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2026-11-24
+reason = "Maintainer-approved temporary docs-toolchain exception; no fixed release is published. Track #721 and remove when a compatible fix is available. Other lockfiles and findings remain enforced."

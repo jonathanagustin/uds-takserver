@@ -1,15 +1,151 @@
 # Copyright 2026 uds-takserver authors
 # SPDX-License-Identifier: GPL-3.0-only
 
+import base64
+import binascii
+import contextlib
 import importlib.util
+import io
 import json
+import os
 from pathlib import Path
+import shutil
+import socket
+import ssl
+import stat
+import subprocess
+import tempfile
+import threading
+import traceback
 import unittest
 from unittest.mock import MagicMock, patch
 
 spec = importlib.util.spec_from_file_location("revocation", Path(__file__).with_name("takclient-revocation.py"))
 revocation = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(revocation)
+
+
+class PrivateMaterialTests(unittest.TestCase):
+    certificate = b"private-certificate-sentinel-643"
+    key = b"private-key-sentinel-643"
+
+    def material(self):
+        return {name: base64.b64encode(value).decode() for name, value in (
+            ("client.pem", self.certificate), ("client.key", self.key))}
+
+    def test_control_files_are_owner_only_even_with_a_permissive_umask(self):
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory, \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            previous = os.umask(0)
+            try:
+                with revocation.control_material(Path(directory), self.material()) as (cert, key):
+                    owned = cert.parent
+                    self.assertEqual(stat.S_IMODE(owned.stat().st_mode), 0o700)
+                    self.assertEqual(stat.S_IMODE(cert.stat().st_mode), 0o600)
+                    self.assertEqual(stat.S_IMODE(key.stat().st_mode), 0o600)
+                    self.assertEqual(cert.read_bytes(), self.certificate)
+                    self.assertEqual(key.read_bytes(), self.key)
+                self.assertFalse(owned.exists())
+                self.assertEqual(list(Path(directory).iterdir()), [])
+            finally:
+                os.umask(previous)
+        self.assertEqual(output.getvalue(), "")
+
+    def test_control_files_are_removed_on_decode_or_certificate_load_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            invalid = {**self.material(), "client.key": "not base64!"}
+            with self.assertRaises(binascii.Error):
+                with revocation.control_material(root, invalid):
+                    self.fail("invalid material reached the TLS loader")
+            self.assertEqual(list(root.iterdir()), [])
+            with self.assertRaisesRegex(ValueError, "certificate load refused"):
+                with revocation.control_material(root, self.material()):
+                    raise ValueError("certificate load refused")
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_kubernetes_failures_do_not_publish_private_arguments_or_streams(self):
+        sentinel = "private-command-sentinel-643"
+        for failure, expected in (
+            (subprocess.CalledProcessError(7, [sentinel], output=self.key.decode(), stderr=sentinel),
+             "Kubernetes operation failed (exit 7)"),
+            (subprocess.TimeoutExpired([sentinel], 200, output=self.key, stderr=sentinel),
+             "Kubernetes operation timed out"),
+            (OSError(2, sentinel, self.key.decode()), "Kubernetes operation could not start"),
+        ):
+            with self.subTest(expected=expected), \
+                    patch.object(revocation.subprocess, "run", side_effect=failure):
+                try:
+                    revocation.kubectl("get", "secret", sentinel, data=self.key.decode())
+                except RuntimeError as error:
+                    self.assertEqual(str(error), expected)
+                    diagnostic = "".join(traceback.format_exception(error))
+                    self.assertNotIn(sentinel, diagnostic)
+                    self.assertNotIn(self.key.decode(), diagnostic)
+                    self.assertTrue(error.__suppress_context__)
+                else:
+                    self.fail("the Kubernetes failure was ignored")
+
+    def test_successful_secret_read_is_returned_without_output(self):
+        payload = json.dumps({"data": self.material()})
+        output = io.StringIO()
+        with patch.object(revocation.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, payload)), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            self.assertEqual(revocation.kubectl("get", "secret", "fixture"), payload)
+        self.assertEqual(output.getvalue(), "")
+
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL is required")
+    def test_loaded_control_context_authenticates_after_its_files_are_removed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cert, key = root / "fixture.pem", root / "fixture.key"
+            subprocess.run([
+                "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost",
+                "-addext", "extendedKeyUsage=serverAuth,clientAuth",
+                "-keyout", str(key), "-out", str(cert),
+            ], check=True, capture_output=True, timeout=30)
+            server = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            server.load_cert_chain(cert, key)
+            server.load_verify_locations(cafile=cert)
+            server.verify_mode = ssl.CERT_REQUIRED
+            client = ssl.create_default_context(cafile=cert)
+            data = {"client.pem": base64.b64encode(cert.read_bytes()).decode(),
+                    "client.key": base64.b64encode(key.read_bytes()).decode()}
+            with revocation.control_material(root, data) as paths:
+                client.load_cert_chain(*paths)
+                owned = paths[0].parent
+            self.assertFalse(owned.exists())
+            failures = []
+            with socket.socket() as listener:
+                listener.settimeout(5)
+                listener.bind(("127.0.0.1", 0))
+                listener.listen(1)
+
+                def accept_control():
+                    try:
+                        raw, _address = listener.accept()
+                        with raw:
+                            raw.settimeout(5)
+                            with server.wrap_socket(raw, server_side=True) as secure:
+                                self.assertIsNotNone(secure.getpeercert())
+                                self.assertEqual(secure.recv(64), b"control")
+                                secure.sendall(b"alive")
+                    except Exception as error:
+                        failures.append(error)
+
+                worker = threading.Thread(target=accept_control, daemon=True)
+                worker.start()
+                try:
+                    with socket.create_connection(listener.getsockname(), timeout=5) as raw:
+                        with client.wrap_socket(raw, server_hostname="localhost") as secure:
+                            secure.sendall(b"control")
+                            self.assertEqual(secure.recv(64), b"alive")
+                finally:
+                    worker.join(6)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(failures, [])
 
 
 class ActiveEndpointsTests(unittest.TestCase):

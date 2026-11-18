@@ -3,11 +3,13 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Opt-in historical GEOS 3.4.3 static PIC source profile, not SDK acceptance."""
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import time
 import sys
@@ -29,7 +31,11 @@ LICENSE = {'source': 'geos-3.4.3/COPYING',
            'sha256': 'dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551'}
 TOOLS = {'gcc': '14.2.0', 'make': '4.4.1', 'binutils': '2.44'}
 PATCH = json.loads((HERE / 'patch.json').read_text())
-FILES = ('build.py', 'inputs.lock.json', 'patch.json', 'GeosGeometry.c', 'run-in.py')
+FILES = ('build.py', 'inputs.lock.json', 'patch.json', 'GeosGeometry.c', 'GeosInt64.cpp', 'run-in.py')
+CFLAGS = '-O2 -fPIC -std=gnu89'
+CXXFLAGS = '-O2 -fPIC -std=c++11'
+INTEGER_FEATURES = ('HAVE_INT64_T_64', 'HAVE_LONG_INT_64', 'HAVE_LONG_LONG_INT_64')
+CONFIGURATION_FILES = ('include/config.h', 'include/geos/platform.h', 'config.log', 'config.status', 'Makefile')
 
 
 def validate_lock(lock):
@@ -53,12 +59,77 @@ def recipe():
 def environment(cc, cxx=None):
     env = las.environment({'cc': {'path': cc}, 'cxx': {'path': cxx or cc}})
     for key in list(env):
-        if (key.startswith(('GEOS_', 'BASH_FUNC_')) or key in
+        if (key.startswith(('GEOS_', 'BASH_FUNC_', 'ac_cv_', 'pgac_cv_', 'CONFIG_')) or key in
                 ('MAKEFLAGS', 'GNUMAKEFLAGS', 'MFLAGS', 'MAKEFILES', 'CONFIG_SITE', 'CONFIG_SHELL', 'SHELL',
-                 'AR', 'RANLIB', 'LD', 'NM', 'AS', 'STRIP')):
+                 'AR', 'RANLIB', 'LD', 'NM', 'AS', 'STRIP', 'CPP', 'CXXCPP', 'LIBS')):
             env.pop(key)
-    env.update(CFLAGS='-O2 -fPIC', CXXFLAGS='-O2 -fPIC -std=c++11', CONFIG_SITE='/dev/null')
+    env.update(CFLAGS=CFLAGS, CXXFLAGS=CXXFLAGS, CONFIG_SITE='/dev/null')
     return env
+
+
+def regular_files(root, names):
+    result = {}
+    for name in names:
+        path = root / name
+        if (any(parent.is_symlink() for parent in (path, *path.parents) if parent == root or root in parent.parents)
+                or not path.is_file() or not 0 < path.stat().st_size <= 16 * 1024 ** 2):
+            raise ValueError('missing, nonregular or oversized integer configuration/control')
+        result[name] = {'bytes': path.stat().st_size, 'sha256': native.digest(path)}
+    return result
+
+
+def active_integer_features(raw):
+    """Inspect compiler-selected definitions, including conditional fallback branches."""
+    found = {}
+    for line in raw.decode('ascii').splitlines():
+        match = re.fullmatch(r'#define (HAVE_INT64_T_64|HAVE_LONG_INT_64|HAVE_LONG_LONG_INT_64|INT64_IS_REALLY32)(?: (.*))?', line)
+        if match:
+            key, value = match.groups()
+            if key in found or key == 'INT64_IS_REALLY32' or value != '1':
+                raise ValueError('unsupported or conflicting active integer feature')
+            found[key] = True
+    features = {key: key in found for key in INTEGER_FEATURES}
+    if not any(features.values()):
+        raise ValueError('no active GEOS 64-bit integer feature')
+    return features
+
+
+def integer_configuration(build, src, output, cxx, run, phase, expected=None):
+    """Qualify generated headers and a real signed int64 before make and completion."""
+    files = regular_files(build, CONFIGURATION_FILES)
+    probe = output / 'GeosInt64.cpp'
+    regular_files(output, (probe.name,))
+    if native.digest(probe) != native.digest(HERE / probe.name):
+        raise ValueError('integer probe source differs from recipe')
+    if expected is not None and (files != expected['files'] or
+            regular_files(output, ('GeosInt64.cpp', 'int64-probe')) != expected['probe_files']):
+        raise ValueError('stale integer configuration or control')
+    features, macros = {}, {}
+    flags = [*CXXFLAGS.split(), '-Werror', '-I' + str(build / 'include'), '-I' + str(src / 'include')]
+    for name, label in (('include/config.h', 'config'), ('include/geos/platform.h', 'platform')):
+        raw = run([cxx, *flags, '-x', 'c++', '-dM', '-E', '-include', build / name, '/dev/null'],
+                  'int64-' + phase + '-' + label, capture=True)
+        features[label] = active_integer_features(raw)
+        macros[label] = {'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+    if features['config'] != features['platform']:
+        raise ValueError('generated integer feature selections disagree')
+    selected = next(key for key in ('HAVE_INT64_T_64', 'HAVE_LONG_LONG_INT_64', 'HAVE_LONG_INT_64')
+                    if features['platform'][key])
+    if expected is None:
+        run([cxx, *flags, probe, '-o', output / 'int64-probe'], 'int64-probe-compile')
+    probe_files = regular_files(output, ('GeosInt64.cpp', 'int64-probe'))
+    text = run([output / 'int64-probe'], 'int64-' + phase + '-arithmetic', 10, True)
+    if text != ('int64_feature=' + selected + '\nint64_bytes=8\nint64_signed=true\nint64_arithmetic=true\n').encode():
+        raise ValueError('real 8-byte signed integer arithmetic control failed')
+    if files != regular_files(build, CONFIGURATION_FILES) or probe_files != regular_files(output, tuple(probe_files)):
+        raise ValueError('integer configuration or control changed during qualification')
+    result = {'contract': 'historical-geos-int64-v1', 'cflags': CFLAGS, 'cxxflags': CXXFLAGS,
+              'files': files, 'active_features': features['platform'], 'selected_feature': selected,
+              'macro_outputs': macros, 'probe_files': probe_files,
+              'probe_stdout_sha256': hashlib.sha256(text).hexdigest()}
+    if expected is not None and result != expected:
+        raise ValueError('integer configuration qualification changed')
+    return result
 
 
 def validate_paths(output, cache):
@@ -173,6 +244,8 @@ def main():
          '--prefix=' + str(prefix)], 'configure', 90)
     check_sources(source, expected)
     disk_bound(output, cache)
+    shutil.copyfile(HERE / 'GeosInt64.cpp', output / 'GeosInt64.cpp')
+    integer = integer_configuration(build, src, output, cxx, run, 'before')
     run([tools['make']['path'], '-C', build, '-j1'], 'source-build', 450)
     run([tools['make']['path'], '-C', build, '-j1', 'install'], 'source-install', 60)
     library = prefix / 'lib/libgeos.a'
@@ -200,6 +273,7 @@ def main():
                for word in line.split() if word.startswith('/') and Path(word).is_file()}
     if not runtime:
         raise ValueError('runtime closure unavailable')
+    integer_configuration(build, src, output, cxx, run, 'after', integer)
     check_sources(source, expected)
     native.verified(archive, ARCHIVE)
     if installed != native.inventory(prefix) or initial != recipe():
@@ -214,7 +288,8 @@ def main():
               'recipe': initial, 'archive': ARCHIVE, 'license': LICENSE, 'tools': tools,
               'source_inventory': expected, 'installed': installed, 'outputs': outputs(output),
               'runtime_closure': runtime, 'build_jobs': 1, 'disk_bytes': disk_bound(output, cache),
-              'command_deadline_s': 600, 'source_patch': PATCH, 'geometry_and_error_controls': True,
+              'command_deadline_s': 600, 'source_patch': PATCH, 'integer_configuration': integer,
+              'geometry_and_error_controls': True,
               'strict_pic': True, 'jni_acceptance': False, 'modern_geos_api_compatibility': False,
               'security_acceptance': False, 'target_image_abi_acceptance': False, 'full_ttp_acceptance': False,
               'kernel_sdk_acceptance': False, 'takx_acceptance': False, 'full_upstream_test_suite_ran': False,

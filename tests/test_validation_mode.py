@@ -298,5 +298,48 @@ class TestValidationMode(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
 
+
+class RunnerComparison(unittest.TestCase):
+    def test_profiles_select_native_pairs_and_preserve_airgap(self):
+        for profile in ('ubuntu-24.04', 'ubuntu-26.04'):
+            result = MODE.plan('workflow_dispatch', 'false', 'custom', 'none', profile)
+            self.assertEqual(result['install-matrix']['include'], [
+                {'arch': 'amd64', 'runner': profile},
+                {'arch': 'arm64', 'runner': profile + '-arm'},
+                {'arch': 'amd64', 'runner': profile, 'airgap': True}])
+            self.assertEqual(result['upgrade-matrix']['include'], result['install-matrix']['include'][:2])
+            self.assertEqual(result['pg15-matrix']['include'], result['install-matrix']['include'][:2])
+
+    def test_nonmanual_inputs_cannot_reduce_coverage(self):
+        for event in ('push', 'pull_request'):
+            self.assertEqual(MODE.plan(event, 'true', 'custom', 'upgrade-amd64', 'ubuntu-26.04'),
+                         MODE.plan(event, 'false', 'custom'))
+
+    def test_default_preserves_repository_override(self):
+        self.assertEqual(MODE.plan('workflow_dispatch', 'false', 'custom'),
+                         MODE.plan('workflow_dispatch', 'false', 'custom', 'none', 'temporary'))
+
+    def test_unknown_profile_refused(self):
+        for profile in ('self-hosted', 'arbitrary', ''):
+            with self.assertRaises(ValueError):
+                MODE.plan('workflow_dispatch', 'false', 'custom', 'none', profile)
+
+    def test_nonmanual_inputs_cannot_override_the_plan(self):
+        for event in ("push", "pull_request"):
+            for profile in ("ubuntu-24.04", "ubuntu-26.04", "unknown"):
+                self.assertEqual(MODE.plan(event, "false", "custom", profile=profile),
+                             MODE.plan(event, "false", "custom"))
+
+    def test_cli_uses_explicit_profile(self):
+        env = {**os.environ, 'EVENT_NAME': 'workflow_dispatch', 'TRUST_BUNDLE': 'false',
+             'DIAGNOSTIC_CASE': 'pg15-both', 'RUNNER_PROFILE': 'ubuntu-26.04',
+             'TEST_RUNNER': 'custom'}
+        env.pop('GITHUB_OUTPUT', None)
+        result = subprocess.run(["python3", str(SCRIPT), 'plan'], env=env,
+                             capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(dict(line.split('=', 1) for line in result.stdout.splitlines())['pg15-matrix']),
+                         {'include': [{'arch': 'amd64', 'runner': 'ubuntu-26.04'},
+                                      {'arch': 'arm64', 'runner': 'ubuntu-26.04-arm'}]})
+
 if __name__ == "__main__":
     unittest.main()

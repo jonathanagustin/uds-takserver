@@ -4,12 +4,98 @@
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / 'tests/upgrade-agent-metadata.py'
+COMMAND = ROOT / 'tests/agent-diagnostic-command.py'
+
+
+class BoundedCommandTests(unittest.TestCase):
+    def run_command(self, source):
+        return subprocess.run([sys.executable, '-B', str(COMMAND), sys.executable, '-c', source],
+                              capture_output=True, timeout=6)
+
+    def test_complete_streams_preserve_nonzero_exit_for_whole_stream_redaction(self):
+        result = self.run_command("import os; os.write(1,b'complete stdout'); os.write(2,b'complete stderr'); raise SystemExit(7)")
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual(result.stdout, b'complete stdout')
+        self.assertEqual(result.stderr, b'complete stderr')
+
+    def test_combined_byte_ceiling_omits_both_streams_without_releasing_a_prefix(self):
+        for stream in (1, 2):
+            with self.subTest(stream=stream):
+                source = ("import os; os.write(1,b'never-release-prefix'); "
+                          "os.write(2,b'never-release-error'); "
+                          f"os.write({stream}, b'x' * (1024*1024)); "
+                          "os.write(2,b'Authorization: Bearer never-release-tail')")
+                result = self.run_command(source)
+                self.assertEqual(result.returncode, 125)
+                self.assertEqual(result.stdout, b'')
+                self.assertIn(b'Omitted oversized agent diagnostic stream', result.stderr)
+                self.assertNotIn(b'never-release', result.stderr)
+                self.assertLess(len(result.stderr), 128)
+
+    def test_exact_limit_complete_stream_is_preserved(self):
+        result = self.run_command("import os; os.write(1,b'x' * (1024*1024-1)); os.write(2,b'y')")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(result.stdout), 1024*1024-1)
+        self.assertEqual(result.stderr, b'y')
+
+    def test_timeout_omits_incomplete_content_and_kills_owned_descendants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            marker = str(Path(directory) / 'escaped-child')
+            child = f"import pathlib,time; time.sleep(3.5); pathlib.Path({marker!r}).write_text('escaped')"
+            source = ("import os,subprocess,sys,time; os.write(1,b'never-release-incomplete'); "
+                      f"subprocess.Popen([sys.executable,'-c',{child!r}]); time.sleep(30)")
+            result = self.run_command(source)
+            self.assertEqual(result.returncode, 124)
+            self.assertEqual(result.stdout, b'')
+            self.assertNotIn(b'never-release', result.stderr)
+            self.assertIn(b'deadline=3s', result.stderr)
+            time.sleep(0.8)
+            self.assertFalse(Path(marker).exists())
+
+    def test_unavailable_command_has_a_fixed_reason(self):
+        result = subprocess.run([sys.executable, '-B', str(COMMAND), '/missing/diagnostic-command'],
+                                capture_output=True, timeout=6)
+        self.assertEqual(result.returncode, 127)
+        self.assertEqual(result.stdout, b'')
+        self.assertEqual(result.stderr, b'Omitted unavailable agent diagnostic command\n')
+
+    def test_outer_termination_omits_partial_content_and_kills_owned_descendants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ready, escaped = Path(directory) / 'ready', Path(directory) / 'escaped'
+            child = f"import pathlib,time; time.sleep(1); pathlib.Path({str(escaped)!r}).touch()"
+            source = ("import pathlib,subprocess,sys,time; "
+                      "print('never-release-terminated', flush=True); "
+                      f"subprocess.Popen([sys.executable,'-c',{child!r}]); "
+                      f"pathlib.Path({str(ready)!r}).touch(); time.sleep(30)")
+            process = subprocess.Popen([sys.executable, '-B', str(COMMAND),
+                                        sys.executable, '-c', source],
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                deadline = time.monotonic() + 2
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(ready.exists())
+                process.send_signal(signal.SIGTERM)
+                stdout, stderr = process.communicate(timeout=2)
+                self.assertEqual(process.returncode, 124)
+                self.assertEqual(stdout, b'')
+                self.assertIn(b'Omitted incomplete agent diagnostic stream', stderr)
+                self.assertNotIn(b'never-release', stderr)
+                time.sleep(1.1)
+                self.assertFalse(escaped.exists())
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=2)
 
 
 class AgentDiagnosticsTests(unittest.TestCase):
@@ -29,6 +115,16 @@ class AgentDiagnosticsTests(unittest.TestCase):
                                     env={**os.environ, 'PATH': str(directory) + ':' + os.environ['PATH']},
                                     capture_output=True, text=True, check=True, timeout=35)
             return result.stdout + result.stderr
+
+    def test_oversized_discovery_and_api_streams_are_omitted_whole(self):
+        for source in ('discovery', 'api'):
+            with self.subTest(source=source):
+                flood = "print('never-release-large-stream' * 50000)\n"
+                output = self.capture_fixture(flood if source == 'discovery' else 'pass\n',
+                                              flood if source == 'api' else None)
+                self.assertIn('Omitted oversized agent diagnostic stream', output)
+                self.assertNotIn('never-release-large-stream', output)
+                self.assertLess(len(output), 4096)
 
     @staticmethod
     def physical_pod():
@@ -71,7 +167,7 @@ elif 'sh' in sys.argv:
         self.assertIn('successful empty stream bytes=0', output)
         self.assertIn('previous-attempt-one', output)
         self.assertIn('older-attempt-zero', output)
-        self.assertIn('exit=0 captured_bytes=0', output)
+        self.assertRegex(output, r'exit=0 captured_bytes=[ \t]*0\b')
         self.assertLess(output.index('attempt=2'), output.index('attempt=1'))
         self.assertLess(output.index('attempt=1'), output.index('attempt=0'))
 
@@ -163,7 +259,7 @@ elif 'sh' in sys.argv:
                 if mode == 'regular':
                     self.assertIn('actual-owned-log', output)
                 else:
-                    self.assertIn('exit=66 captured_bytes=0', output)
+                    self.assertRegex(output, r'exit=66 captured_bytes=[ \t]*0\b')
                     self.assertNotIn('actual-owned-log', output)
 
     def test_physical_fallback_requires_live_api_and_discovered_node(self):

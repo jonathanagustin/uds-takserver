@@ -227,6 +227,11 @@ observed after startup, not class-loading durations. A valid pair alone does
 not justify class data sharing, probe tuning, or a performance improvement;
 repeated measurements and observer-overhead checks remain necessary.
 
+The [repeat-series protocol](startup-series.md) describes how to retain and
+validate three to five original pairs per selected architecture, including
+failed and missing observations. Its offline checks do not run a study or
+qualify class-loading duration, instrumentation overhead or tuning benefits.
+
 ## Check capacity before a larger load
 
 New records retain `capacity.containers` from the same five-second kubelet

@@ -38,6 +38,7 @@ function rules(): string {
 
 interface Recorded {
   patched: { key: string; value: string; present: boolean }[];
+  removed: string[];
   restarted: { name: string; hasAnnotations: boolean }[];
   deployments: number;
 }
@@ -47,13 +48,18 @@ function cluster(opts: {
   services?: Set<string>;
   deployment?: { spec?: { template?: { metadata?: { annotations?: Record<string, string> } } } } | undefined;
 }): { cluster: Cluster; recorded: Recorded } {
-  const recorded: Recorded = { patched: [], restarted: [], deployments: 0 };
+  const recorded: Recorded = { patched: [], removed: [], restarted: [], deployments: 0 };
   const services = opts.services ?? allGateways();
   const fake = {
     getConfigMap: async () => opts.configMap,
     serviceExists: async (namespace: string, name: string) => services.has(`${namespace}/${name}`),
     patchConfigMapKey: async (_ns: string, _name: string, key: string, value: string, present: boolean) => {
       recorded.patched.push({ key, value, present });
+      opts.configMap!.data![key] = value;
+    },
+    removeConfigMapKey: async (_ns: string, _name: string, key: string) => {
+      recorded.removed.push(key);
+      delete opts.configMap!.data![key];
     },
     getDeployment: async () => {
       recorded.deployments += 1;
@@ -116,10 +122,54 @@ test("trailing newlines do not count as a change", () => {
   assert.equal(sameOverride("rewrite", "rewrite stop"), false);
 });
 
-test("IN_CLUSTER_DNS other than true does nothing", async () => {
+test("disabled DNS without an owned override does nothing", async () => {
   const { cluster: fake, recorded } = cluster({ configMap: { data: {} } });
   await reconcileCoreDns(fake, env({ inClusterDns: "false" }));
   assert.equal(recorded.patched.length, 0);
+  assert.equal(recorded.removed.length, 0);
+  assert.equal(recorded.restarted.length, 0);
+  await reconcileCoreDns(cluster({ configMap: {} }).cluster, env({ inClusterDns: "false" }));
+  await reconcileCoreDns(cluster({ configMap: undefined }).cluster, env({ inClusterDns: "false" }));
+});
+
+test("enabling then disabling removes only our rules and reloads once per change", async () => {
+  const configMap = { data: { "uds.override": "keep" } as Record<string, string> };
+  const { cluster: fake, recorded } = cluster({ configMap, deployment: {} });
+  await reconcileCoreDns(fake, env());
+  assert.equal(configMap.data[OVERRIDE_KEY], rules());
+  await reconcileCoreDns(fake, env({ inClusterDns: "false", domain: "" }));
+  assert.deepEqual(configMap.data, { "uds.override": "keep" });
+  assert.deepEqual(recorded.removed, [OVERRIDE_KEY]);
+  assert.equal(recorded.restarted.length, 2);
+  await reconcileCoreDns(fake, env({ inClusterDns: "false" }));
+  assert.equal(recorded.removed.length, 1);
+  assert.equal(recorded.restarted.length, 2);
+});
+
+test("failed disable restart retains an empty owned key for a later retry", async () => {
+  const configMap = { data: { [OVERRIDE_KEY]: rules(), "uds.override": "keep" } };
+  const { cluster: fake, recorded } = cluster({ configMap, deployment: {} });
+  const restart = fake.restartDeployment;
+  fake.restartDeployment = async () => { throw new Error("restart unavailable"); };
+  await assert.rejects(reconcileCoreDns(fake, env({ inClusterDns: "false" })), /restart unavailable/);
+  assert.equal(configMap.data[OVERRIDE_KEY], "");
+  assert.deepEqual(recorded.removed, []);
+  fake.restartDeployment = restart;
+  await reconcileCoreDns(fake, env({ inClusterDns: "false" }));
+  assert.deepEqual(configMap.data, { "uds.override": "keep" });
+  assert.deepEqual(recorded.removed, [OVERRIDE_KEY]);
+  assert.equal(recorded.restarted.length, 1);
+  await reconcileCoreDns(fake, env({ inClusterDns: "false" }));
+  assert.equal(recorded.restarted.length, 1);
+});
+
+test("disabling removes even an empty owned override", async () => {
+  const { cluster: fake, recorded } = cluster({
+    configMap: { data: { [OVERRIDE_KEY]: "" } }, deployment: {},
+  });
+  await reconcileCoreDns(fake, env({ inClusterDns: "false" }));
+  assert.deepEqual(recorded.removed, [OVERRIDE_KEY]);
+  assert.equal(recorded.restarted.length, 1);
 });
 
 test("a cluster without coredns-custom is left alone", async () => {
@@ -285,5 +335,5 @@ test("onCoreDns reads the process env and the live client slot", async () => {
     },
   } as unknown as Cluster;
   await onCoreDns();
-  assert.equal(called, false);
+  assert.equal(called, true);
 });

@@ -166,3 +166,32 @@ cluster journals and command logs are not uploaded.
 This wiring is not restore or owner-transfer acceptance. Both native trials
 must pass real data/client restore, controller regeneration, fresh ownership,
 handoff and reversal before the draft restore behavior can become ready.
+
+## Optional encrypted owner failure evidence
+
+For a future manual main-branch dispatch with `run_owner_trial: true`, an operator
+may supply `diagnostic_recipient`, an age X25519 **public** recipient (`age1…`).
+The empty default disables this channel and acquires no encryption tool. This
+channel does not generate age keys. Keep the private identity outside repositories,
+workflow inputs and logs; supply only the existing public recipient.
+
+The owner job first publishes and uploads its existing sanitized evidence with
+14-day retention. Only a failed staged-trial step and a nonempty recipient then
+invoke the existing reviewed encryption helper. It authenticates the failed
+owner journal's source/run/attempt and encrypts only its bounded private failure
+capture. Invalid or unavailable input or encryption failure can omit this
+diagnostic; it does not change the trial failure or any acceptance gate.
+
+Only successful encryption with the helper's `ready=true` postcheck enables the
+separate `core-owner-encrypted-first-failure-…` artifact. Its sole file is
+`first-failure.age`, retained for seven days. Raw captures, keys and decrypted
+contents are not uploaded or printed. Keep any later decryption private, as
+described in [the diagnostic guidance](../../../docs/ci.md#optional-encrypted-private-failure-capture).
+
+Both optional steps have configured two-minute timeouts and continue on error.
+Artifact transport may ignore a step timeout, so this is best-effort delivery;
+the existing 230-minute owner-job ceiling remains the fallback. Sanitized public
+uploads take priority. A retry with an empty recipient omits this channel again;
+decide whether to supply a public recipient before dispatching another trial.
+This wiring cannot recover a previous runner's discarded capture, establish the
+cause of an earlier failure or fix the underlying deployment/restore behavior.

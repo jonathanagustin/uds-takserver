@@ -276,6 +276,9 @@ check_match ".github/workflows/full-core.yaml" ignore
 check_match ".github/workflows/scan.yaml" ignore
 check_match ".github/test-infra/aws/eks/main.tf" ignore
 check_match "atak/vm/Dockerfile" ignore
+check_match "dev/Dockerfile" ignore
+check_match "dev/run" ignore
+check_decide false $'dev/Dockerfile\ndev/run\ndev/check\ndev/requirements.txt\ndev/install-tools\ndev/smoke'
 check_match "upstream/atak-civ" ignore
 check_match "takx/build-commoncommo.sh" ignore
 check_match "takx/patches/desktop.patch" ignore

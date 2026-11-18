@@ -31,14 +31,14 @@ For deployment, provisioning, and connection checks in one procedure, see
 
 ```bash
 uds zarf package create atak --set ATAK_TAG=5.5.1.10 --confirm
-uds zarf package deploy zarf-package-atak-device-amd64-*.tar.zst --set DOMAIN=uds.dev --confirm
+uds zarf package deploy zarf-package-atak-device-amd64-*.tar.zst --set-variables DOMAIN=uds.dev --confirm
 ```
 
 Or deploy the package the last `main` run tested, without building it:
 
 ```bash
 uds zarf package deploy oci://ghcr.io/jonathanagustin/uds-takserver/packages/atak-device:5.5.1.10 \
-  --architecture amd64 --set DOMAIN=uds.dev --confirm
+  --architecture amd64 --set-variables DOMAIN=uds.dev --confirm
 ```
 
 The package (`atak/zarf.yaml`) has two components:
@@ -149,6 +149,8 @@ spec:
 ```
 
 When `kubectl get takclient alpha-1 -n takclients` shows `Ready`, Secret `takclients/alpha-1` has `package.zip`. Copy it to the device's `Download` folder as `atak-alpha-1.dpk`, or open it with ATAK's Import Manager. The Secret also has `client.pem`, `client.key`, and `ca.pem` for other clients.
+
+The Secret always keeps the full `TakClient` resource name. Newly issued Secrets also record that exact name in the `tak.jonathanagustin.github.io/takclient` annotation. The label with the same key keeps names up to 63 characters unchanged. For longer names, its value is `sha256_` followed by the first 56 lowercase hexadecimal characters of the SHA-256 hash of the full name, encoded as UTF-8. Use that value for label selectors, or retrieve the Secret directly by its full name. Reconciliation and deletion use the full name rather than the label. `spec.callsign` still has its separate 4-to-63-character limit.
 
 Delete the `TakClient` to remove the device. The watcher first revokes its certificate-table row through TAK's certadmin API on 8443, which closes its streaming connection and rejects reconnects. It then deletes the file user and Secret and records the serial in the CRL as a backstop. Revoking a new TAK-issued certificate does not request a TAK restart. A pending legacy migration or periodic CRL-expiry refresh can still require one. A failed certificate lookup or revoke retains the finalizer and Secret for retry.
 
