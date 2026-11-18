@@ -1,0 +1,17 @@
+{
+  "source_head": "df1eb30b32aa6311e3523726c2e75b30a3075f33",
+  "checkout": "a025424197bdafb0a70b974fc956c79614d4e825",
+  "tree": "046596da3e9fa80ff904e2e202744a413a32d6b3",
+  "run_id": 44357847600,
+  "job_id": 134990687238,
+  "artifact_id": 14451988100,
+  "archive_sha256": "743206e50f740ca3c42c2cc7a9e46a4e08f7a63fd5189588664f5b93eeade787",
+  "capsule_sha256": "b683c3d45820bd5fd5c5bdebde1bcdeca2246ab684fa72a9063f93e7574b2b8d",
+  "subject": "sha256:68ebd8be8c8464d1ab773717d143b16f3d1274f23c800aef136d01e3ac17dece",
+  "input_key": "geos-capi-local-v1-8c202c65482e404b69257532059eb4ed94df1bd3db87ff680bd9d4cc06cc3e1f",
+  "native_local_qualified": true,
+  "registry_roundtrip": false,
+  "publisher_authenticated": false,
+  "sdk_accepted": false,
+  "security_accepted": false
+}
