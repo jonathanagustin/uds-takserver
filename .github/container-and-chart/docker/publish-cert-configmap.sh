@@ -255,7 +255,8 @@ if [[ "${code}" != "201" ]] && [[ "${code}" != "200" ]] && [[ "${code}" != "409"
 fi
 echo "Created ConfigMap cert-migration"
 
-# Every file the pods need, except the CA key. The inlined split script
+# Every file the pods need, except the CA PEM key and its upstream backup
+# alias. The inlined split script
 # does this again so an older image, which still put keystores in the
 # ConfigMap, ends up with the same Secret.
 secrets_api="https://kubernetes.default.svc/api/v1/namespaces/${ns}/secrets"
@@ -270,7 +271,7 @@ secrets_api="https://kubernetes.default.svc/api/v1/namespaces/${ns}/secrets"
   for file in files/*; do
     [[ -f "${file}" ]] || continue
     name="$(basename "${file}")"
-    if [[ "${name}" == "ca-do-not-share.key" ]]; then
+    if [[ "${name}" == "ca-do-not-share.key" || "${name}" == "root-ca-do-not-share.key" ]]; then
       continue
     fi
     b64="$(base64 -w 0 "${file}")"

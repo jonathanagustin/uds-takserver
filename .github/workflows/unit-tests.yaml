@@ -73,6 +73,7 @@ jobs:
           set -euo pipefail
           coverage() { uv tool run --from "coverage==${COVERAGE_VERSION}" coverage "$@"; }
           python3 -B -m unittest discover -s tests -p 'test_move_ca_key.py' -v
+          python3 -B -m unittest tests.test_certificate_aliases -v
           python3 -B -m unittest discover -s tests -p 'test_issue_health_cert.py' -v
           python3 -B -m unittest discover -s tests -p 'test_issue_web_cert.py' -v
           uv run --no-project --with pyyaml==6.0.3 python -B -m unittest discover -s tests -p 'test_nats_roundtrip.py' -v
