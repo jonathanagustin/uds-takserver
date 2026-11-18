@@ -41,6 +41,18 @@ job summary because their read-only token cannot write to the upstream PR
 conversation. They keep the ordinary `pull_request` trigger and do not need an
 upstream write token for reporting.
 
+Docker config blobs may redirect to an exact approved distribution host,
+including `docker-images-prod.s3.dualstack.us-east-1.amazonaws.com`. Its hostname
+hash matches the bounded diagnostic retained in #736. Docker documents
+[blob redirects](https://docs.docker.com/reference/api/registry/latest/operations/GetBlob/),
+and AWS's [EKS proxy example](https://repost.aws/knowledge-center/eks-automate-http-proxy-worker-nodes)
+records this specific Docker image-storage endpoint. This is one exact hostname
+in the Docker-only policy, not an Amazon S3 suffix rule or a GHCR/API destination.
+HTTPS on port 443 without userinfo remains required, registry Authorization is
+removed before redirecting, and descriptor digest/size and source bindings still
+apply. Unknown destinations continue to fail; signed URLs and tokens are not
+added to diagnostics.
+
 ## Airgap install check
 
 Test includes an amd64 airgap install variant. It prepares the package and

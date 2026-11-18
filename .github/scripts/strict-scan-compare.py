@@ -559,7 +559,8 @@ def fetch(url, limit, headers=None, *, redirect=False):
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *_args, **_kwargs):
             raise Rejected('unexpected_api_redirect')
-    hosts = ({'production.cloudfront.docker.com', 'production.cloudflare.docker.com'} if redirect == 'docker'
+    hosts = ({'production.cloudfront.docker.com', 'production.cloudflare.docker.com',
+              'docker-images-prod.s3.dualstack.us-east-1.amazonaws.com'} if redirect == 'docker'
              else {'pkg-containers.githubusercontent.com'})
     opener = urllib.request.build_opener(SafeRedirect(hosts) if redirect else NoRedirect())
     try:
