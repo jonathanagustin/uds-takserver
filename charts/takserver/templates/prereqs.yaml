@@ -122,6 +122,11 @@ rules:
     resources: ["secrets"]
     resourceNames: ["takserver-keystore", "takserver-ca-key", "takserver-certs", "tak-health-client"]
     verbs: ["get", "update", "patch"]
+  # A renewed web keystore is loaded only after the API process restarts.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["takserver-api"]
+    verbs: ["patch"]
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create"]

@@ -210,13 +210,13 @@ nats:
   # Chart 1.0.1 still defaults to nats:2.9.21-alpine and
   # natsio/nats-server-config-reloader:0.11.0. These tags override that so the
   # pod asks for the same images zarf.yaml packages. Clustering and JetStream
-  # stay off. 2.15.1 starts on that rendered config, and reloader 0.25.0 still
+  # stay off. 2.15.3 starts on that rendered config, and reloader 0.25.0 still
   # takes -pid and -config. There is no JetStream volume, so an upgrade
   # replaces the pod and clients reconnect.
   container:
     image:
       repository: nats
-      tag: 2.15.2-alpine
+      tag: 2.15.3-alpine
     merge:
       resources:
         requests:

@@ -33,6 +33,9 @@ def make_ca(d: Path, name: str):
     key, pem = d / f"{name}.key", d / f"{name}.pem"
     run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-days", "30",
          "-subj", f"/CN={name}", "-keyout", str(key), "-out", str(pem),
+         "-addext", "basicConstraints=critical,CA:TRUE",
+         "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+         "-addext", "subjectKeyIdentifier=hash",
          "-passout", f"pass:{CAPASS}"])
     return key, pem
 
@@ -90,6 +93,7 @@ class FakeApi:
 
         self.server = HTTPServer(("127.0.0.1", 0), Handler)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(tls_dir / "server.pem", tls_dir / "server.key")
         self.server.socket = context.wrap_socket(self.server.socket, server_side=True)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -123,6 +127,7 @@ class IssueHealthCertTests(unittest.TestCase):
             return run(["bash", str(SCRIPT)], env=env, timeout=60)
         finally:
             api.server.shutdown()
+            api.server.server_close()
 
     def assert_issued(self, data):
         for name in ("ca.pem", "client.pem", "client.key"):

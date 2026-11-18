@@ -137,9 +137,11 @@ class Driver:
         try:
             action()
             record['status'] = 'passed'
-        except Exception:
+        except Exception as error:
             # Do not publish exception text: a subprocess error may carry credentials.
             record['status'] = 'failed'
+            if type(error) is CommandFailure:
+                record['commandFailure'] = error.metadata()
             try:
                 current = self.transfer.read('daemonset', 'node-agent')
                 meta = current.get('metadata', {})
@@ -296,6 +298,21 @@ OUTPUT_LIMIT = 8 * 1024 * 1024
 TAIL_LIMIT = 65536
 
 
+class CommandFailure(ValueError):
+    """A process outcome containing no argv, output or exception text."""
+    def __init__(self, exit_status, reason):
+        self.exit_status, self.reason = exit_status, reason
+        message = {'timeout': 'staged command timed out',
+                   'stdout-limit': 'staged command stdout exceeds bounded capture limit',
+                   'nonzero-exit': 'staged command failed; no automatic rollback attempted',
+                   'signal': 'staged command failed; no automatic rollback attempted'}[reason]
+        super().__init__(message)
+
+    def metadata(self):
+        # Popen uses a negative return code for a POSIX signal, not shell 128+N.
+        return {'exitStatus': self.exit_status, 'terminationReason': self.reason}
+
+
 def runner(argv, input_text=None, timeout=45, env=None, diagnostics=None):
     # kubectl JSON reads need complete stdout; oversized responses fail closed.
     # Deployment logs cannot grow memory or the retained private diagnostic.
@@ -315,7 +332,7 @@ def runner(argv, input_text=None, timeout=45, env=None, diagnostics=None):
     try:
         while streams.get_map():
             if failure is None and time.monotonic() >= deadline:
-                failure = 'staged command timed out'
+                failure = 'timeout'
                 try:
                     os.killpg(child.pid, signal.SIGKILL)
                 except ProcessLookupError:
@@ -339,7 +356,7 @@ def runner(argv, input_text=None, timeout=45, env=None, diagnostics=None):
                 del tail[:-TAIL_LIMIT]
                 if key.data == 'stdout' and failure is None:
                     if len(stdout) + len(chunk) > OUTPUT_LIMIT:
-                        failure = 'staged command stdout exceeds bounded capture limit'
+                        failure = 'stdout-limit'
                         try:
                             os.killpg(child.pid, signal.SIGKILL)
                         except ProcessLookupError:
@@ -363,8 +380,10 @@ def runner(argv, input_text=None, timeout=45, env=None, diagnostics=None):
             else:
                 with os.fdopen(descriptor, 'wb') as stream:
                     stream.write(tail)
-    require(failure is None, failure or 'staged command failed')
-    require(child.returncode == 0, 'staged command failed; no automatic rollback attempted')
+    if failure is not None:
+        raise CommandFailure(child.returncode, failure)
+    if child.returncode != 0:
+        raise CommandFailure(child.returncode, 'signal' if child.returncode < 0 else 'nonzero-exit')
     return stdout.decode(errors='replace')
 
 

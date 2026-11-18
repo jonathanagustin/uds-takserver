@@ -179,6 +179,14 @@ The test bundle selects `envoy-gateway` and `envoy-default-gateway` and sets `qu
 - A client with no certificate must be refused with a TLS alert. No answer at all fails the test, so a broken route cannot pass as a refusal.
 - A client with the admin certificate must stream a CoT event, and its uid must appear in `/Marti/api/subscriptions/all`. TAK can take about 30 seconds to add a new stream to that list, so the script waits up to about 90 seconds. If the uid still is not listed, the client reconnects once before the test fails, like the port 8089 check in `tests/api-smoke.sh`.
 
+Both client paths resolve the IPv4 peer and use a connected UDP transport. The
+kernel selects the local interface from the route to that peer, including a
+cluster or gateway address; the test does not bind every local interface or
+force loopback. Local route/stream tests run with
+`uv run --no-project --with-requirements tests/requirements-quic.txt python -B -m unittest tests.test_quic_cot`.
+Their controlled TLS-alert peer tests the refusal verdict; the real TAK
+certificate-refusal and CoT checks remain part of the cluster test above.
+
 The script exits early when the QUIC Service is missing, unless Envoy Gateway is installed, because then the flag did not reach the chart. See [ADR 20](../adr/0020-quic-through-envoy-gateway.md).
 
 ## Tenant gateway to 8447
@@ -253,7 +261,7 @@ The k3s Corefile imports the `*.override` keys in name order, and the first matc
 
 Pods in an ambient namespace can get a different, equally correct answer. The UDS operator writes a `MeshInternal` ServiceEntry for every exposed host, with the gateway Service as its endpoint. ztunnel's DNS proxy answers names that have a ServiceEntry before CoreDNS sees the query. It allocates an address from `240.240.0.0/16` and routes connections to that address to the ServiceEntry endpoint, the same gateway. Names without a ServiceEntry, and pods outside the mesh, get the CoreDNS answer. On a cluster without `coredns-custom` the ServiceEntries alone still steer ambient pods, as long as public DNS answers the name at all.
 
-The reconcile does nothing when `coredns-custom` does not exist, which is the case on a cluster with real DNS, or when `IN_CLUSTER_DNS` is not `true`.
+The reconcile does nothing when `coredns-custom` does not exist, which is the case on a cluster with real DNS. Setting `IN_CLUSTER_DNS=false` removes the module's existing `00-takserver.override` key and restarts CoreDNS so the remaining DNS configuration takes effect. Other overrides are preserved, and an already disabled configuration does not trigger another restart.
 
 `uds run test:dns` checks the answers from inside the API pod and that the API Deployment has no `hostAliases`. It accepts the gateway ClusterIP, or a `240.240.0.0/16` address when the name's ServiceEntry points at the expected gateway Service. Earlier versions of this package gave the API pod a hostAlias for `sso.<domain>`. An upgrade removes it.
 
