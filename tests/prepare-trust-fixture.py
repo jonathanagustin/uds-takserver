@@ -20,6 +20,35 @@ import tempfile
 
 
 PREFIX = "uds-private-gateway-"
+SYSTEM_CA_BUNDLES = (Path("/etc/ssl/certs/ca-certificates.crt"),
+                     Path("/etc/pki/tls/certs/ca-bundle.crt"), Path("/etc/ssl/cert.pem"))
+
+
+def host_public_roots():
+    paths = ssl.get_default_verify_paths()
+    if paths.openssl_cafile_env in os.environ:
+        # An explicit missing/empty trust override must never silently select
+        # another set of roots, even when Python cannot resolve its cafile.
+        selected = os.environ[paths.openssl_cafile_env]
+        if not selected or not Path(selected).is_file():
+            raise ValueError("configured CA file is required for private gateway host trust")
+        candidates = (Path(selected),)
+    else:
+        candidates = ((Path(paths.cafile),) if paths.cafile else ()) + SYSTEM_CA_BUNDLES
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            bundle = path.read_text()
+            if not bundle.strip():
+                raise ValueError("host CA bundle is empty")
+            context = ssl.create_default_context(cadata=bundle)
+            if not context.cert_store_stats()['x509_ca']:
+                raise ValueError("host CA bundle contains no CA certificates")
+        except (OSError, UnicodeError, ssl.SSLError):
+            raise ValueError("host CA bundle cannot be read or parsed") from None
+        return bundle
+    raise ValueError("system CA file is required for private gateway host trust")
 
 
 def validate_domain(domain):
@@ -39,6 +68,7 @@ def prepare(config, parent, mask=lambda _value: None):
     domain = validate_domain(application.get("DOMAIN", "uds.dev"))
     if core.get("DOMAIN", domain) != domain:
         raise ValueError("Core and TAK domains must agree for the private gateway fixture")
+    public_roots = host_public_roots()
     directory = Path(tempfile.mkdtemp(prefix=PREFIX, dir=parent))
     directory.chmod(0o700)
     previous_umask = os.umask(0o077)
@@ -79,11 +109,8 @@ def prepare(config, parent, mask=lambda _value: None):
         path.chmod(0o600)
         key.chmod(0o600)
         # Retain public host roots for registries and add the private gateway CA.
-        system_ca = ssl.get_default_verify_paths().cafile
-        if not system_ca or not Path(system_ca).is_file():
-            raise ValueError("system CA file is required for private gateway host trust")
         host_ca = directory / "host-ca.pem"
-        host_ca.write_text(Path(system_ca).read_text() + "\n" + ca_text)
+        host_ca.write_text(public_roots + "\n" + ca_text)
         fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(ca_text)).hexdigest()
         return {"directory": str(directory), "config": str(path), "ca": str(ca),
                 "host-ca": str(host_ca), "fingerprint": fingerprint}
