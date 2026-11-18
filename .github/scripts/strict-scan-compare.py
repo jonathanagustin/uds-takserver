@@ -448,8 +448,14 @@ def current_configuration(image, descriptor):
         require(type(token) is str and 0 < len(token) <= 16384 and '\r' not in token and '\n' not in token,
                 'invalid_current_registry_token')
         headers['Authorization'] = 'Bearer ' + token
-    return fetch(base + '/v2/' + repository + '/blobs/' + descriptor['digest'],
-                 1024 * 1024, headers, redirect=redirect)
+    try:
+        return fetch(base + '/v2/' + repository + '/blobs/' + descriptor['digest'],
+                     1024 * 1024, headers, redirect=redirect)
+    except RegistryRedirectRejected as error:
+        error.diagnostics.update(blob_stage='current-image-config',
+                                 blob_source='loopback' if parsed['loopback'] else
+                                 'docker' if host == 'docker.io' else 'ghcr')
+        raise
 
 
 def compare_inventory(images, mappings, baseline, directory, db_directory, architecture, run=child):
@@ -553,7 +559,8 @@ def fetch(url, limit, headers=None, *, redirect=False):
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *_args, **_kwargs):
             raise Rejected('unexpected_api_redirect')
-    hosts = ({'production.cloudfront.docker.com', 'production.cloudflare.docker.com'} if redirect == 'docker'
+    hosts = ({'production.cloudfront.docker.com', 'production.cloudflare.docker.com',
+              'docker-images-prod.s3.dualstack.us-east-1.amazonaws.com'} if redirect == 'docker'
              else {'pkg-containers.githubusercontent.com'})
     opener = urllib.request.build_opener(SafeRedirect(hosts) if redirect else NoRedirect())
     try:
@@ -667,7 +674,11 @@ def acquire_release(architecture, directory, run=child, release_tag=None):
     require(DIGEST.fullmatch(layer['digest']) and type(layer['size']) is int
             and layer.get('mediaType') == 'application/vnd.zarf.layer.v1.blob'
             and 0 < layer['size'] <= ARCHIVE_LIMIT, 'invalid_sbom_layer')
-    archive = fetch(base + 'blobs/' + layer['digest'], ARCHIVE_LIMIT, headers, redirect=True)
+    try:
+        archive = fetch(base + 'blobs/' + layer['digest'], ARCHIVE_LIMIT, headers, redirect=True)
+    except RegistryRedirectRejected as error:
+        error.diagnostics.update(blob_stage='released-sbom-layer', blob_source='ghcr')
+        raise
     require(len(archive) == layer['size'] and 'sha256:' + sha(archive) == layer['digest'], 'sbom_layer_mismatch')
     archive_path = directory / 'sboms.tar'
     with archive_path.open('xb') as output:

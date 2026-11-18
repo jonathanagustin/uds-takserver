@@ -370,6 +370,46 @@ class CurrentPlatformTests(unittest.TestCase):
 
 
 class RedirectDiagnosticTests(unittest.TestCase):
+    def test_docker_storage_redirect_is_exact_scoped_and_strips_authorization(self):
+        host = 'docker-images-prod.s3.dualstack.us-east-1.amazonaws.com'
+        self.assertEqual(S.sha(host.encode()),
+                         '045e09cab0f0c6072ce2eb29bf5da5e431de3e34c53c8d2a62fffc414455b1f6')
+        request = S.urllib.request.Request('https://registry-1.docker.io/v2/team/image/blobs/' + DIGEST,
+                                          headers={'Authorization': 'Bearer private-token'})
+        for mode in ('docker', True, False):
+            with self.subTest(mode=mode), patch.object(S.urllib.request, 'build_opener') as opener:
+                opener.return_value.open.return_value.__enter__.return_value.read.return_value = CONFIG
+                self.assertEqual(S.fetch(request.full_url, 1024, redirect=mode), CONFIG)
+                handler = opener.call_args.args[0]
+                target = 'https://' + host + '/private-path?token=private-token'
+                if mode == 'docker':
+                    redirected = handler.redirect_request(request, None, 307, '', {}, target)
+                    self.assertFalse(redirected.has_header('Authorization'))
+                    for bad in ('http://' + host + '/x', 'https://' + host + ':8443/x',
+                                'https://user:password@' + host + '/x',
+                                'https://' + host + '.evil.example/x',
+                                'https://other-bucket.s3.dualstack.us-east-1.amazonaws.com/x'):
+                        with self.subTest(target=bad), self.assertRaises(S.RegistryRedirectRejected):
+                            handler.redirect_request(request, None, 307, '', {}, bad)
+                else:
+                    with self.assertRaises(S.Rejected):
+                        handler.redirect_request(request, None, 307, '', {}, target)
+
+    def test_current_config_rejection_adds_only_fixed_stage_and_source(self):
+        for host, source in (('docker.io', 'docker'), ('ghcr.io', 'ghcr'),
+                             ('127.0.0.1:5000', 'loopback')):
+            with self.subTest(source=source):
+                error = S.RegistryRedirectRejected('https://cdn.example/private?token=private-token')
+                replies = [error] if source == 'loopback' else [b'{"token":"private-token"}', error]
+                with patch.object(S, 'fetch', side_effect=replies), self.assertRaises(
+                        S.RegistryRedirectRejected) as caught:
+                    S.current_configuration(host + '/team/private-image@' + DIGEST, {'digest': DIGEST})
+                self.assertIs(caught.exception, error)
+                self.assertEqual(error.diagnostics['blob_stage'], 'current-image-config')
+                self.assertEqual(error.diagnostics['blob_source'], source)
+                for private in ('private-token', 'private-image', 'cdn.example', host):
+                    self.assertNotIn(private, json.dumps(error.diagnostics))
+
     def test_failure_retains_only_hostname_fingerprint_and_fixed_categories(self):
         import urllib.request
         target = ('https://private-user:private-password@objects.githubusercontent.com/'
@@ -544,6 +584,27 @@ class ReleaseProviderTests(unittest.TestCase):
             self.assertEqual(receipt['architecture'], 'amd64')
             self.assertEqual(receipt['release']['applicationCommit'], '1' * 40)
             self.assertEqual('sha256:' + S.sha(archive.read_bytes()), receipt['sbom_layer_digest'])
+
+    def test_released_sbom_rejection_adds_fixed_context_without_writing_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); api, fetch, run, policies, _, events = self.fixture(root)
+            error = S.RegistryRedirectRejected('https://cdn.example/private?token=private-token')
+
+            def reject_blob(url, *args, **kwargs):
+                if '/blobs/' in url:
+                    raise error
+                return fetch(url, *args, **kwargs)
+
+            with patch.object(S, 'api', side_effect=api), patch.object(S, 'fetch', side_effect=reject_blob), \
+                    patch.object(S, 'load_policy', side_effect=policies.__getitem__):
+                with self.assertRaises(S.RegistryRedirectRejected) as caught:
+                    S.acquire_release('amd64', root, run)
+            self.assertIs(caught.exception, error)
+            self.assertEqual(error.diagnostics['blob_stage'], 'released-sbom-layer')
+            self.assertEqual(error.diagnostics['blob_source'], 'ghcr')
+            self.assertEqual(events, ['crypto-verify'])
+            self.assertNotIn('private-token', json.dumps(error.diagnostics))
+            self.assertFalse((root / 'sboms.tar').exists())
 
     def test_missing_denied_wrong_source_namespace_hash_and_failed_crypto_refuse(self):
         for failure in ('denied', 'wrong-namespace', 'wrong-source', 'backfill', 'wrong-index',

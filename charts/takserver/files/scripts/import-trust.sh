@@ -78,12 +78,26 @@ fi
 
 issuer="${ISSUER_HOST:-}"
 if [[ -n "${issuer}" ]] && command -v openssl >/dev/null 2>&1; then
-  echo "importing certificate presented by ${issuer}:443"
-  echo | openssl s_client -connect "${issuer}:443" -servername "${issuer}" -showcerts \
-    > /tmp/issuer.txt 2>/dev/null || true
-  if [[ -s /tmp/issuer.txt ]]; then
-    split_and_import /tmp/issuer.txt "issuer"
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo "timeout is required to fetch the issuer certificate" >&2
+    exit 1
   fi
+  echo "importing certificate presented by ${issuer}:443"
+  issuer_output=$(mktemp /tmp/uds-issuer.XXXXXX)
+  trap 'rm -f -- "${issuer_output}"' EXIT
+  # Bound both an unresponsive TLS peer and its output. A failed or killed
+  # fetch must not turn a partial certificate transcript into a trust source.
+  if (
+    ulimit -c 0
+    ulimit -f 128
+    echo | timeout --signal=TERM --kill-after=5s 15s \
+      openssl s_client -connect "${issuer}:443" -servername "${issuer}" -showcerts
+  ) > "${issuer_output}" 2>/dev/null; then
+    if [[ -s "${issuer_output}" ]]; then
+      split_and_import "${issuer_output}" "issuer"
+    fi
+  fi
+  rm -f -- "${issuer_output}"
 fi
 
 if [[ "${imported}" -ne 1 ]]; then
