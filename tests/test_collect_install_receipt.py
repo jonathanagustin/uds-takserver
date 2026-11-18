@@ -104,6 +104,43 @@ class CollectorTests(unittest.TestCase):
         self.assertIn('INSTALL_RECEIPT_METADATA=true', Path(self.env['GITHUB_ENV']).read_text())
         self.assertIn('ready=true', Path(self.env['GITHUB_OUTPUT']).read_text())
 
+    def test_archive_changes_during_inspection_omit_receipt_and_prospective_snapshot(self):
+        self.inputs()
+        collector.capture(self.root, self.env, self.directory)
+        with patch.object(collector, 'command', side_effect=['amd64-' + 'c' * 16, 'v0.41.0']):
+            collector.pinned(self.root, self.env, self.directory)
+        selected = json.loads((self.directory / 'install-checkpoint-selection.json').read_text())
+        paths = [Path(selected['archive']),
+                 self.root / 'uds-bundle-takserver-dev-amd64-dev.tar.zst',
+                 self.root / 'zarf-package-takserver-amd64-dev.tar.zst',
+                 self.root / 'zarf-package-takserver-amd64-dev-upstream.tar.zst']
+        metadata = collector.artifacts.metadata
+        for operation in (collector.collect, collector.prospective):
+            for target in paths:
+                original = target.read_bytes()
+
+                def mutate_after_metadata(path):
+                    value = metadata(path)
+                    target.write_bytes(original + b'changed after inspection')
+                    return value
+
+                with self.subTest(operation=operation.__name__, archive=target.name):
+                    try:
+                        with patch.object(collector, 'command', side_effect=[
+                                'amd64-' + 'c' * 16, 'v0.41.0', self.fixture.expected_app]), \
+                                patch.object(collector.artifacts, 'metadata', side_effect=mutate_after_metadata):
+                            with self.assertRaises(ValueError):
+                                operation(self.root, self.env, self.directory)
+                        self.assertFalse((self.directory / 'install-prospective.json').exists())
+                        self.assertFalse(list(self.directory.glob('install-receipt-*.json')))
+                        self.assertFalse(Path(self.env['GITHUB_OUTPUT']).exists())
+                    finally:
+                        target.write_bytes(original)
+                        for output in [self.directory / 'install-prospective.json',
+                                       *self.directory.glob('install-receipt-*.json'),
+                                       Path(self.env['GITHUB_OUTPUT'])]:
+                            output.unlink(missing_ok=True)
+
     def test_changed_source_fails_before_execution_and_expensive_resolution(self):
         collector.capture(self.root, self.env, self.directory)
         subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Fixture', '-c',
