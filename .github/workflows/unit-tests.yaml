@@ -231,7 +231,7 @@ jobs:
           python3 -B -m unittest discover -s takx/sqlite-jdbc -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/native-sqlcipher -p 'test_build.py' -v
           python3 -B -m unittest discover -s takx/native-geos -p 'test_build.py' -v
-          python3 -B -m unittest discover -s takx/geos-cache -p 'test_*.py' -v
+          uv run --no-project --with "pyyaml==${PYYAML_VERSION}" python -B -m unittest discover -s takx/geos-cache -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/native-proj -p 'test_build.py' -v
           python3 -B -m unittest discover -s takx/worldwind-java -p 'test_build.py' -v
           python3 -B -m unittest discover -s takx/worldwind-consumers -p 'test_stage.py' -v

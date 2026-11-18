@@ -123,3 +123,25 @@ protected publisher/source trust, authenticated and anonymous readback,
 immutable-key promotion, native AMD64/hosted gates, SDK/renderer/TAKX acceptance
 and security suitability remain unqualified. The schema keeps registry,
 publisher, SDK and security acceptance explicitly false. Issue #482 stays open.
+
+## Read-only hosted trial
+
+`GEOS local qualification` runs the same fresh producer and two-prefix consumer
+commands on a native Ubuntu 24 AMD64 runner for changes to this profile or its
+historical GEOS helpers. The compiler image is pulled by its existing immutable
+reference and its configuration is verified by the launcher. The original
+network, filesystem, CPU, memory, source and timeout constraints remain active.
+Checkout credentials are not persisted; the job has only `contents: read` and
+adds no registry writer, signing or publisher authentication.
+
+A successful job retains the exact capsule and OCI layout, fresh producer and
+two-prefix consumer records, plus checkout/tree/run/attempt bindings and record
+hashes. On failure, only selected complete command logs with matching recorded
+sizes and hashes pass through the existing whole-stream redactor. Incomplete,
+changed, oversized or invalid logs are omitted; failed output never becomes a
+success receipt. Original failed/emulated trials remain historical evidence.
+
+This workflow supplies a way to collect the missing native local evidence.
+Its addition alone does not qualify the build, cache publication, security
+suitability, the SDK or TAKX. Assess the exact successful run's bytes separately;
+registry, publisher, SDK and security acceptance remain false.

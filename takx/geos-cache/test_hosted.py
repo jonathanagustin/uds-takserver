@@ -1,0 +1,119 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+"""Exercise real failed-command capture and read-only hosted trial boundaries."""
+
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import yaml
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import producer
+
+SPEC = importlib.util.spec_from_file_location('geos_capture', HERE / 'capture_failure.py')
+CAPTURE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(CAPTURE)
+
+
+class HostedDiagnostics(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / 'producer'
+        self.root.mkdir()
+        self.output = Path(self.temp.name) / 'sanitized'
+
+    def failed(self, code='print("password=PRIVATE_GEOS_PASSWORD"); raise SystemExit(7)'):
+        with self.assertRaises(ValueError):
+            producer.Runner(self.root)([sys.executable, '-u', '-c', code], 'configure',
+                                       timeout=2, env=dict(os.environ))
+
+    def test_actual_nonzero_complete_command_is_redacted_without_qualification(self):
+        self.failed()
+        CAPTURE.capture(self.root, self.output)
+        text = next(self.output.glob('*.log')).read_text()
+        self.assertNotIn('PRIVATE_GEOS_PASSWORD', text)
+        self.assertIn('[REDACTED]', text)
+        index = json.loads((self.output / 'index.json').read_text())
+        self.assertFalse(index['qualification'])
+        self.assertEqual(index['logs'][0]['returncode'], 7)
+
+    def test_actual_timeout_does_not_export_a_partial_stream(self):
+        with self.assertRaises(ValueError):
+            producer.Runner(self.root)([sys.executable, '-u', '-c',
+                                       'import time; print("PRIVATE_PREFIX"); time.sleep(3)'],
+                                      'configure', timeout=.05, env=dict(os.environ))
+        CAPTURE.capture(self.root, self.output)
+        self.assertEqual(list(self.output.iterdir()), [self.output / 'index.json'])
+
+    def test_same_size_tampering_is_omitted(self):
+        self.failed()
+        log = next(self.root.glob('*.log'))
+        log.write_bytes(b'x' * log.stat().st_size)
+        CAPTURE.capture(self.root, self.output)
+        self.assertEqual(list(self.output.iterdir()), [self.output / 'index.json'])
+
+    def test_invalid_utf8_and_budget_exhaustion_do_not_export(self):
+        self.failed('import os; os.write(1, b"\\xffPRIVATE_BYTES"); raise SystemExit(2)')
+        CAPTURE.capture(self.root, self.output)
+        self.assertEqual(list(self.output.iterdir()), [self.output / 'index.json'])
+        with patch.object(CAPTURE, 'MAX_TOTAL', 1):
+            CAPTURE.capture(self.root, Path(self.temp.name) / 'budget')
+        self.assertEqual(list((Path(self.temp.name) / 'budget').iterdir()),
+                         [Path(self.temp.name) / 'budget/index.json'])
+
+    def test_unrecorded_and_engine_metadata_logs_are_not_selected(self):
+        (self.root / '4-configure.log').write_text('UNRECORDED')
+        self.failed()
+        log = next(self.root.glob('*.status.json'))
+        log.rename(self.root / '1-engine-info.status.json')
+        CAPTURE.capture(self.root, self.output)
+        self.assertEqual(json.loads((self.output / 'index.json').read_text())['logs'], [])
+
+    def test_symlink_input_or_selected_log_is_rejected(self):
+        self.failed()
+        link = Path(self.temp.name) / 'alias'
+        link.symlink_to(self.root, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            CAPTURE.capture(link, self.output)
+        log = next(self.root.glob('*.log'))
+        log.unlink()
+        log.symlink_to('/etc/passwd')
+        with self.assertRaises(ValueError):
+            CAPTURE.capture(self.root, self.output)
+
+
+class HostedWorkflow(unittest.TestCase):
+    def test_read_only_workflow_keeps_isolated_producer_and_two_prefix_consumer(self):
+        workflow = yaml.safe_load((CAPTURE.ROOT / '.github/workflows/geos-local-qualification.yaml').read_text())
+        self.assertEqual(workflow['permissions'], {'contents': 'read'})
+        job = workflow['jobs']['qualify']
+        self.assertEqual(job['runs-on'], 'ubuntu-24.04')
+        steps = job['steps']
+        checkout = next(step for step in steps if step.get('uses', '').startswith('actions/checkout@'))
+        self.assertFalse(checkout['with']['persist-credentials'])
+        build = next(step for step in steps if step['name'].startswith('Build and qualify'))
+        self.assertIn('takx/geos-cache/producer.py --engine docker', build['run'])
+        consume = next(step for step in steps if step['name'].startswith('Restore and execute'))
+        self.assertIn("proof['local_oci_subject']", consume['run'])
+        self.assertIn("proof['identity']['execution']['mode'] == 'native'", consume['run'])
+        self.assertIn("len(restored['results']) == 2", consume['run'])
+        self.assertIn("'registry_roundtrip', 'publisher_authenticated', 'sdk_accepted', 'security_accepted'", consume['run'])
+        sanitize = next(step for step in steps if step.get('id') == 'diagnostics')
+        self.assertIn('!cancelled()', sanitize['if'])
+        failure = next(step for step in steps if step['name'] == 'Retain sanitized failure diagnostics')
+        self.assertIn("steps.diagnostics.outcome == 'success'", failure['if'])
+        self.assertNotIn('/geos-producer\n', failure['with']['path'])
+        self.assertNotIn('/geos-consumers\n', failure['with']['path'])
+
+
+if __name__ == '__main__':
+    unittest.main()
