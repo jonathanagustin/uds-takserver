@@ -76,6 +76,14 @@ The secret template is only `TAK_OIDC_CLIENT_SECRET: clientField(secret)`. The s
 
 `trustAllCerts` is false. The API and messaging init containers copy the Java virtual machine (JVM) trust store and import ConfigMap `uds-trust-bundle` when that file has certificates. Slim core does not set the certificate authority (CA) bundle variables, and the operator deletes the ConfigMap when the bundle would be empty. In that case the init container imports the certificate chain presented by the tenant gateway for the discovery host. Public Domain Name System (DNS) for `sso.uds.dev` is `127.0.0.1`, which inside a pod is the pod itself. The package's in-cluster DNS rewrite answers `sso.<domain>` with the tenant gateway ClusterIP instead (see [Networking](networking.md#in-cluster-dns)).
 
+The gateway certificate fetch has a 15-second deadline and a further 5-second
+forced-stop grace. Its transcript is limited to 128 KiB. Failed, interrupted or
+oversized fetches are discarded rather than imported as partial trust sources.
+An already imported valid UDS bundle remains usable if the gateway fetch fails;
+when neither source imports a certificate, initialization fails. The deadline
+command is required whenever a gateway fetch is attempted.
+
+
 ## Render at admission
 
 A TAK node that holds the unrendered `${TAK_OIDC_CLIENT_SECRET}` placeholder breaks logins for every node. This section explains why, and how the package prevents it.

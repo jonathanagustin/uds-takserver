@@ -370,6 +370,31 @@ class CurrentPlatformTests(unittest.TestCase):
 
 
 class RedirectDiagnosticTests(unittest.TestCase):
+    def test_docker_storage_redirect_is_exact_scoped_and_strips_authorization(self):
+        host = 'docker-images-prod.s3.dualstack.us-east-1.amazonaws.com'
+        self.assertEqual(S.sha(host.encode()),
+                         '045e09cab0f0c6072ce2eb29bf5da5e431de3e34c53c8d2a62fffc414455b1f6')
+        request = S.urllib.request.Request('https://registry-1.docker.io/v2/team/image/blobs/' + DIGEST,
+                                          headers={'Authorization': 'Bearer private-token'})
+        for mode in ('docker', True, False):
+            with self.subTest(mode=mode), patch.object(S.urllib.request, 'build_opener') as opener:
+                opener.return_value.open.return_value.__enter__.return_value.read.return_value = CONFIG
+                self.assertEqual(S.fetch(request.full_url, 1024, redirect=mode), CONFIG)
+                handler = opener.call_args.args[0]
+                target = 'https://' + host + '/private-path?token=private-token'
+                if mode == 'docker':
+                    redirected = handler.redirect_request(request, None, 307, '', {}, target)
+                    self.assertFalse(redirected.has_header('Authorization'))
+                    for bad in ('http://' + host + '/x', 'https://' + host + ':8443/x',
+                                'https://user:password@' + host + '/x',
+                                'https://' + host + '.evil.example/x',
+                                'https://other-bucket.s3.dualstack.us-east-1.amazonaws.com/x'):
+                        with self.subTest(target=bad), self.assertRaises(S.RegistryRedirectRejected):
+                            handler.redirect_request(request, None, 307, '', {}, bad)
+                else:
+                    with self.assertRaises(S.Rejected):
+                        handler.redirect_request(request, None, 307, '', {}, target)
+
     def test_current_config_rejection_adds_only_fixed_stage_and_source(self):
         for host, source in (('docker.io', 'docker'), ('ghcr.io', 'ghcr'),
                              ('127.0.0.1:5000', 'loopback')):
