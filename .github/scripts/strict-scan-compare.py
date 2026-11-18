@@ -499,16 +499,51 @@ def compare_inventory(images, mappings, baseline, directory, db_directory, archi
     return '\n\n'.join(sections), {'database_files': frozen, 'comparisons': receipts}
 
 
+class RegistryRedirectRejected(Rejected):
+    """Fixed failure reason with bounded, non-payload redirect diagnostics."""
+
+    def __init__(self, target):
+        super().__init__('unexpected_registry_redirect')
+        self.diagnostics = {'redirect_provider': 'invalid', 'redirect_transport': 'other'}
+        try:
+            parsed = urllib.parse.urlsplit(target)
+            host = parsed.hostname or ''
+        except ValueError:
+            return
+        if parsed.scheme in ('https', 'http'):
+            self.diagnostics['redirect_transport'] = parsed.scheme
+        # Never retain the target URL, userinfo, path, query or fragment. Invalid
+        # and oversized hostnames contribute no input bytes to the diagnostics.
+        if not (0 < len(host) <= 253 and all(
+                re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label)
+                for label in host.split('.'))):
+            return
+        provider = 'other'
+        for family, suffixes in (
+                ('github', ('.githubusercontent.com',)),
+                ('cloudfront', ('.cloudfront.net', '.cloudfront.docker.com')),
+                ('cloudflare', ('.cloudflarestorage.com', '.cloudflare.docker.com')),
+                ('azure', ('.blob.core.windows.net',))):
+            if any(host.endswith(suffix) for suffix in suffixes):
+                provider = family
+                break
+        self.diagnostics.update(redirect_provider=provider, redirect_host_sha256=sha(host.encode('ascii')))
+
+
 class SafeRedirect(urllib.request.HTTPRedirectHandler):
     def __init__(self, hosts):
         super().__init__()
         self.hosts = hosts
 
     def redirect_request(self, request, response, code, message, headers, target):
-        parsed = urllib.parse.urlsplit(target)
-        require(parsed.scheme == 'https' and parsed.hostname in self.hosts
-                and parsed.port in (None, 443) and not parsed.username and not parsed.password,
-                'unexpected_registry_redirect')
+        try:
+            parsed = urllib.parse.urlsplit(target)
+            allowed = (parsed.scheme == 'https' and parsed.hostname in self.hosts
+                       and parsed.port in (None, 443) and not parsed.username and not parsed.password)
+        except ValueError:
+            allowed = False
+        if not allowed:
+            raise RegistryRedirectRejected(target) from None
         redirected = super().redirect_request(request, response, code, message, headers, target)
         redirected.remove_header('Authorization')
         return redirected
@@ -769,6 +804,9 @@ def main():
                 report.write(markdown)
         print('Strict image comparison: all selected images have authenticated release pairs')
         return 0
+    except RegistryRedirectRejected as error:
+        print('Strict image comparison rejected: ' + str(error), file=sys.stderr)
+        print(json.dumps(error.diagnostics, sort_keys=True), file=sys.stderr)
     except Rejected as error:
         print('Strict image comparison rejected: ' + str(error), file=sys.stderr)
     except (ValueError, TypeError, KeyError, IndexError, AttributeError, OSError, RuntimeError,
