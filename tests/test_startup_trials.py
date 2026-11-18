@@ -427,6 +427,7 @@ else:
                 tool.write_text(helper)
                 tool.chmod(0o700)
             env = {**os.environ, 'PATH': str(root/'bin'), 'EVIDENCE': str(root/'evidence'),
+                   'GITHUB_STEP_SUMMARY': str(root/'summary.md'),
                    'GITHUB_SHA': 'a'*40, 'TEST_HEAD': 'a'*40, 'STARTUP_ARCH': arch,
                    'TEST_PACKAGE_KEY': arch+'-0123456789abcdef',
                    'TEST_MANIFEST_OUTPUT': 'sha256:'+('b' if arch=='amd64' else 'c')*64+'\n',
@@ -464,6 +465,9 @@ _commands.check_output = _binding_check_output
                     ['git', 'rev-parse', 'HEAD'], ['bash', '.github/scripts/dev-package.sh', 'key'],
                     ['uds', 'zarf', 'package', 'inspect', 'digest', archive.name]])
                 self.assertEqual({path.name for path in (root/'evidence').iterdir()}, {'bindings.json'})
+                summary = (root/'summary.md').read_text()
+                self.assertIn('(not a startup result)', summary)
+                self.assertEqual(json.loads(summary.split('```json\n')[1].split('\n```')[0]), value)
                 bindings.append(value)
         self.assertNotEqual(bindings[0]['package_archive'], bindings[1]['package_archive'])
         self.assertEqual(bindings[0]['package'], bindings[1]['package'])
@@ -604,7 +608,10 @@ _commands.check_output = _binding_check_output
         self.assertEqual(len(uploads), 1)
         self.assertIn('${{ matrix.arch }}', uploads[0]['with']['name'])
         self.assertIn('${{ matrix.arch }}', self.job['env']['COHORT'])
-        self.assertEqual(uploads[0]['if'], "always() && steps.checkout.outcome == 'success'")
+        self.assertEqual(uploads[0]['if'], "always() && steps.checkout.outcome == 'success' && "
+                         "(steps.cold.outcome == 'success' || steps.cold.outcome == 'failure')")
+        self.assertEqual(next(step['name'] for step in self.steps if step.get('id') == 'cold'),
+                         'Begin the cold application boundary')
         paths = uploads[0]['with']['path'].splitlines()
         self.assertEqual({Path(path).name for path in paths}, {'bindings.json', 'cold-begin.json', 'cold.json', 'warm-begin.json', 'warm.json', 'pair.json'})
         self.assertTrue(all(path.startswith('${{ runner.temp }}/startup-pair/') and '*' not in path for path in paths))
