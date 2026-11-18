@@ -78,7 +78,7 @@ if [[ "${phase}" == prepare ]]; then
   previous_package="$(python3 .github/scripts/published_package_ref.py "${previous}")"
   uds zarf package pull "${previous_package}" \
     --architecture "${arch}" --certificate-identity-regexp "${RELEASE_WORKFLOW}" \
-    --certificate-oidc-issuer "${RELEASE_ISSUER}" --features values=true -o "${work}" --no-progress
+    --certificate-oidc-issuer "${RELEASE_ISSUER}" --features values=true -o "${work}"
   uds create "${work}/bundle" --architecture "${arch}" --confirm --no-progress
   # A new cluster for the previous release. The demo cluster is no longer
   # needed: every other chapter is recorded by now.

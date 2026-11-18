@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import resource
 import sys
+import tempfile
 
 REPO = 'jonathanagustin/uds-takserver'
 REPOSITORY = 'https://github.com/' + REPO
@@ -157,6 +158,29 @@ def read(path):
     return raw
 
 
+def encode_public(value):
+    """Serialize only a schema-checked public record, within the read limit."""
+    raw = json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
+    require(len(raw) <= LIMIT)
+    return raw
+
+
+def stage(path, raw):
+    """Keep runner-local inputs owner-only, including when replacing a file."""
+    require(len(raw) <= LIMIT)
+    target = Path(path)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=target.name + '.', delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(raw)
+        # The temporary has mode 0600; replacement never follows a target link.
+        temporary.replace(target)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def trusted_metadata(digest, environment=None, api=None, head=None):
     """Revalidate application identity via API; workflow identity is a separate input."""
     env = os.environ if environment is None else environment
@@ -220,7 +244,6 @@ def verify_live(metadata, raw, runner=subprocess.run):
                '--cert-oidc-issuer', 'https://token.actions.githubusercontent.com',
                '--predicate-type', PREDICATE, '--bundle-from-oci', '--format=json']
     # Files bound capture memory; reject oversized output rather than publish it.
-    import tempfile
     def limit_capture():
         resource.setrlimit(resource.RLIMIT_FSIZE, (LIMIT, LIMIT))
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
@@ -247,9 +270,13 @@ def main():
             metadata = trusted_metadata(args.digest)
             raw = registry_index(args.digest)
             generated = predicate(metadata, raw)
-            Path(args.metadata).write_text(json.dumps(metadata, sort_keys=True))
-            Path(args.index).write_bytes(raw)
-            print(json.dumps(generated, sort_keys=True, separators=(',', ':')))
+            # Tokens remain in the API transports. Only exact public identity
+            # fields validated by predicate() may reach these files or stdout.
+            encoded_metadata = encode_public(metadata)
+            encoded_predicate = encode_public(generated)
+            stage(args.metadata, encoded_metadata)
+            stage(args.index, raw)
+            print(encoded_predicate.decode())
             return 0
         metadata, raw = decode(read(args.metadata)), read(args.index)
         if args.mode == 'verify-live':
@@ -261,7 +288,7 @@ def main():
             print('Release binding: cryptographic and checked identity verification passed')
         elif args.mode == 'generate':
             require(args.verified_output is None)
-            print(json.dumps(predicate(metadata, raw), sort_keys=True, separators=(',', ':')))
+            print(encode_public(predicate(metadata, raw)).decode())
         else:
             require(bool(args.verified_output))
             verify_verified_output(decode(read(args.verified_output)), metadata, raw)

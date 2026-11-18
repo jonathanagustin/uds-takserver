@@ -31,6 +31,11 @@ on:
           - arm64
         default: amd64
 
+      diagnostic_recipient:
+        description: Optional age X25519 PUBLIC recipient for encrypted owner failure evidence (never a private key)
+        type: string
+        default: ""
+
 permissions:
   contents: read
 
@@ -258,5 +263,25 @@ jobs:
           path: out/staged-public-${{ inputs.architecture }}/
           if-no-files-found: error
           retention-days: 14
+      - name: Encrypt optional first failure diagnostic
+        id: encrypt-first-failure
+        if: always() && steps.staged-trial.outcome == 'failure' && inputs.diagnostic_recipient != ''
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          STAGED_AGE_RECIPIENT: ${{ inputs.diagnostic_recipient }}
+          STAGED_TRIAL_OUTCOME: ${{ steps.staged-trial.outcome }}
+        run: uv run --no-project --with pyyaml==6.0.3 python3 .github/test-infra/staged-encrypted-diagnostic.py
+      - name: Upload only encrypted first failure diagnostic
+        if: always() && steps.encrypt-first-failure.outcome == 'success' && steps.encrypt-first-failure.outputs.ready == 'true'
+        continue-on-error: true
+        # Artifact transport can ignore step timeout; the existing job limit is the fallback.
+        timeout-minutes: 2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: core-owner-encrypted-first-failure-${{ inputs.architecture }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/staged-encrypted-diagnostic/first-failure.age
+          if-no-files-found: error
+          retention-days: 7
       - name: Require accepted exact-source owner receipts
         run: uv run --no-project --with pyyaml==6.0.3 python3 .github/scripts/staged-migrations.py verify --directory "out/staged-public-${ARCHITECTURE}/receipts"

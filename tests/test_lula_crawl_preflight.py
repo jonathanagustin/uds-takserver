@@ -4,11 +4,13 @@
 import base64
 import importlib.util
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -45,7 +47,7 @@ class CrawlPreflight(unittest.TestCase):
         self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
         self.assertFalse(checkout["with"]["persist-credentials"])
         command = job["steps"][-1]["run"]
-        self.assertIn("index.safe.mjs\" crawl --post-mode=comment", command)
+        self.assertIn("crawl.mjs\" --post-mode=comment", command)
         self.assertNotIn("npx", command)
         self.assertEqual(manual["permissions"], {"contents": "read"})
         self.assertEqual(job["permissions"], {"contents": "read", "pull-requests": "write"})
@@ -56,14 +58,54 @@ class CrawlPreflight(unittest.TestCase):
             self.assertNotIn("continue-on-error", step)
         prepare = next(s for s in job["steps"] if "without credentials" in s["name"])
         self.assertNotIn("GITHUB_TOKEN", prepare.get("env", {}))
-        self.assertIn("--ignore-scripts", prepare["run"])
-        self.assertIn("module.verify_archive", prepare["run"])
-        self.assertLess(prepare["run"].index("module.verify_archive"), prepare["run"].index("npm install"))
+        self.assertEqual(prepare["run"], "bash .github/lula/prepare-runtime.sh")
+        preparation = (ROOT / ".github/lula/prepare-runtime.sh").read_text()
+        self.assertIn("--ignore-scripts", preparation)
+        self.assertIn("module.verify_archive", preparation)
+        self.assertLess(preparation.index("module.verify_archive"), preparation.index("npm ci"))
+        self.assertNotIn("npm install", preparation)
+        self.assertIn("--no-bin-links", preparation)
+        self.assertIn("cp .github/lula/package.json .github/lula/package-lock.json", preparation)
+        self.assertIn("--extract-crawl", preparation)
         preflight = next(s for s in job["steps"] if "existing mapped baseline" in s["name"])
         self.assertIn(".github/scripts/lula-crawl-preflight.py", preflight["run"])
         self.assertIn("--automatic", preflight["run"])
         for step in job["steps"][job["steps"].index(preflight)+1:]:
             self.assertEqual(step["if"], "steps.preflight.outputs.ready == 'true'")
+
+    def test_runtime_lock_binds_only_the_crawl_externals_and_every_dependency(self):
+        source = json.loads((ROOT / ".github/lula/source.lock.json").read_text())
+        manifest = json.loads((ROOT / ".github/lula/package.json").read_text())
+        lock = json.loads((ROOT / ".github/lula/package-lock.json").read_text())
+        self.assertTrue(manifest["private"])
+        self.assertEqual(lock["lockfileVersion"], 3)
+        self.assertEqual(lock["packages"][""]["dependencies"], manifest["dependencies"])
+        self.assertEqual(manifest["dependencies"], source["crawlRuntimeDependencies"])
+        self.assertEqual(set(manifest["dependencies"]), {"@octokit/rest", "commander"})
+        self.assertNotIn("node_modules/lula2", lock["packages"])
+        self.assertNotIn("node_modules/express-rate-limit", lock["packages"])
+        for path, package in lock["packages"].items():
+            if not path:
+                continue
+            with self.subTest(package=path):
+                self.assertFalse(package.get("link", False))
+                self.assertRegex(package["version"], r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
+                self.assertTrue(package["integrity"].startswith("sha512-"))
+                self.assertEqual(len(base64.b64decode(package["integrity"][7:], validate=True)), 64)
+                resolved = urlsplit(package["resolved"])
+                self.assertEqual((resolved.scheme, resolved.netloc), ("https", "registry.npmjs.org"))
+                self.assertIsNone(resolved.username)
+                self.assertFalse(resolved.query or resolved.fragment)
+                self.assertIsNotNone(re.fullmatch(r"/@?[A-Za-z0-9_./-]+\.tgz", resolved.path))
+
+    def test_actual_runtime_controls_run_without_comment_credentials_in_read_only_ci(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/lula.yaml").read_text())
+        self.assertEqual(workflow["permissions"], {"contents": "read"})
+        step = next(s for s in workflow["jobs"]["mappings"]["steps"] if "locked crawler" in s["name"])
+        self.assertNotIn("if", step)
+        self.assertNotIn("GITHUB_TOKEN", step.get("env", {}))
+        self.assertIn("bash .github/lula/prepare-runtime.sh", step["run"])
+        self.assertIn("node --test tests/lula-installed-crawl.test.mjs", step["run"])
 
     def test_supported_boundary_passes(self):
         PREFLIGHT.validate(self.pr, self.baseline, "owner/repo")

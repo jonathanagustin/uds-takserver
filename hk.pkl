@@ -16,10 +16,10 @@ steps {
   // when a script exits.
   ["shellcheck"] {
     check = "shellcheck --enable=all --severity=style --exclude=SC2310,SC2312 {{files}}"
-    glob = List("**/*.sh")
+    glob = List("**/*.sh", "dev/run", "dev/check", "dev/install-tools", "dev/smoke")
   }
   ["hadolint"] {
-    check = "hadolint --config .hadolint.yaml .github/container-and-chart/docker/Dockerfile .github/container-and-chart/cloudtak/Dockerfile .github/container-and-chart/postgis/Dockerfile"
+    check = "hadolint --config .hadolint.yaml .github/container-and-chart/docker/Dockerfile .github/container-and-chart/cloudtak/Dockerfile .github/container-and-chart/postgis/Dockerfile dev/Dockerfile"
     glob = List("**/Dockerfile", ".hadolint.yaml")
   }
   ["shell"] {

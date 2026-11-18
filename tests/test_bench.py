@@ -384,6 +384,10 @@ class ScriptPathTests(unittest.TestCase):
 
 
 class ImageRefTests(unittest.TestCase):
+    TAK_API_IMAGE = re.compile(
+        r"ghcr[.]io/jonathanagustin/uds-takserver/takserver-api:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}"
+    )
+
     def test_only_image_references_are_kept(self):
         text = "\n".join([
             "    images:",
@@ -396,7 +400,21 @@ class ImageRefTests(unittest.TestCase):
     def test_the_package_lists_tak_images(self):
         text = (Path(__file__).resolve().parents[1] / "zarf.yaml").read_text(encoding="utf-8")
         refs = runner.image_refs(text)
-        self.assertTrue(any(ref.startswith("ghcr.io/") and "takserver-api" in ref for ref in refs))
+        self.assertTrue(any(self.TAK_API_IMAGE.fullmatch(ref) for ref in refs))
+
+    def test_package_image_assertion_requires_the_exact_registry_and_repository(self):
+        self.assertIsNotNone(self.TAK_API_IMAGE.fullmatch(
+            "ghcr.io/jonathanagustin/uds-takserver/takserver-api:5.7-RELEASE-14"))
+        for ref in (
+            "untrusted-ghcr.io/jonathanagustin/uds-takserver/takserver-api:1",
+            "ghcr.io.example/jonathanagustin/uds-takserver/takserver-api:1",
+            "ghcr.io/other/uds-takserver/takserver-api:1",
+            "ghcr.io/jonathanagustin/uds-takserver/takserver-api-extra:1",
+            "ghcr.io/jonathanagustin/uds-takserver/not-takserver-api:1",
+            "ghcr.io/jonathanagustin/uds-takserver/takserver-api:1/extra",
+        ):
+            with self.subTest(ref=ref):
+                self.assertIsNone(self.TAK_API_IMAGE.fullmatch(ref))
 
 
 def tester_fixture():
@@ -599,19 +617,27 @@ class TesterExitTests(unittest.TestCase):
         self.assertIn("terminated 1", completed.stdout)
         self.assertIn("socket-closed", completed.stdout)
 
+    def test_reap_preserves_timeout_output(self):
+        for text in (True, False):
+            proc = subprocess.Popen([sys.executable, "-c",
+                "print('row', flush=True); import time; time.sleep(30)"],
+                stdout=subprocess.PIPE, text=text, start_new_session=True)
+            result = tester_exit.reap(proc, .2)
+            self.assertEqual(result, "row\n" if text else b"row\n")
     def test_reap_kills_a_process_that_ignores_sigterm(self):
         proc = subprocess.Popen(
             [
                 sys.executable,
                 "-c",
-                "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)",
+                "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print(\"row\",flush=True); time.sleep(30)",
             ],
             start_new_session=True,
             stdout=subprocess.PIPE,
             text=True,
         )
         started = time.monotonic()
-        tester_exit.reap(proc, 0.3)
+        result = tester_exit.reap(proc, 0.3)
+        self.assertEqual(result, "row\n")
         self.assertIsNotNone(proc.poll())
         self.assertLess(time.monotonic() - started, 8)
         self.assertNotEqual(proc.returncode, 0)
