@@ -264,7 +264,12 @@ def launch(engine, output, inputs, mode):
     cache.require(details['Id'].removeprefix('sha256:') == LOCK['base_image']['config'][7:]
                   and details['Architecture'] == 'amd64' and details['Os'] == 'linux', 'pinned image config differs')
     name = 'uds-geos-' + uuid.uuid4().hex
-    command = [engine, 'run', '--rm', '--pull=never', '--name', name, '--platform', 'linux/amd64', '--network', 'none',
+    # With all capabilities dropped, Docker's default root cannot traverse a
+    # runner-owned 0700 bind mount. Use the invoker's identity, retaining the
+    # private directory and every isolation flag. Rootless Podman already maps
+    # its container root to the invoker; keep that existing mapping unchanged.
+    user = ['--user', f'{os.getuid()}:{os.getgid()}'] if 'host' not in info else []
+    command = [engine, 'run', *user, '--rm', '--pull=never', '--name', name, '--platform', 'linux/amd64', '--network', 'none',
         '--read-only', '--cpus', '1', '--memory', '3g', '--pids-limit', '256', '--cap-drop', 'ALL',
         '--security-opt', 'no-new-privileges', '--tmpfs', '/tmp:rw,size=128m',
         '-v', str(ROOT) + ':/repo:ro', '-v', str(output) + ':/build:rw',

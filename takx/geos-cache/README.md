@@ -131,6 +131,9 @@ commands on a native Ubuntu 24 AMD64 runner for changes to this profile or its
 historical GEOS helpers. The compiler image is pulled by its existing immutable
 reference and its configuration is verified by the launcher. The original
 network, filesystem, CPU, memory, source and timeout constraints remain active.
+Docker runs as the invoking numeric UID/GID so the container can use private
+runner-owned bind mounts with all capabilities dropped. Rootless Podman retains
+its existing mapping. No directory permissions or capabilities are relaxed.
 Checkout credentials are not persisted; the job has only `contents: read` and
 adds no registry writer, signing or publisher authentication.
 

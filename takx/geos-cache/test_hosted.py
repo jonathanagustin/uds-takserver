@@ -92,6 +92,30 @@ class HostedDiagnostics(unittest.TestCase):
 
 
 class HostedWorkflow(unittest.TestCase):
+    def test_docker_invoker_owns_private_mount_without_capability_relaxation(self):
+        image = [{'Id': producer.LOCK['base_image']['config'], 'Architecture': 'amd64', 'Os': 'linux'}]
+        for info, user in (({'Architecture': 'x86_64'}, ['--user', '1001:1002']),
+                           ({'host': {'arch': 'amd64'}}, [])):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                output, inputs = root / 'output', root / 'inputs'
+                output.mkdir(mode=0o700)
+                inputs.mkdir(mode=0o700)
+                replies = [json.dumps(info).encode(), json.dumps(image).encode(), b'']
+                with patch.object(producer.Runner, '__call__', side_effect=replies) as run, \
+                        patch.object(producer, 'cleanup_owned'), \
+                        patch.object(producer.os, 'getuid', return_value=1001), \
+                        patch.object(producer.os, 'getgid', return_value=1002):
+                    producer.launch('engine', output, inputs, 'build')
+                command = run.call_args_list[-1].args[0]
+                self.assertEqual(command[2:2 + len(user)], user)
+                self.assertEqual('--user' in command, bool(user))
+                for flag, value in (('--cap-drop', 'ALL'), ('--security-opt', 'no-new-privileges'),
+                                    ('--network', 'none'), ('--cpus', '1'), ('--memory', '3g')):
+                    self.assertEqual(command[command.index(flag) + 1], value)
+                self.assertIn('--read-only', command)
+                self.assertEqual(output.stat().st_mode & 0o777, 0o700)
+
     def test_read_only_workflow_keeps_isolated_producer_and_two_prefix_consumer(self):
         workflow = yaml.safe_load((CAPTURE.ROOT / '.github/workflows/geos-local-qualification.yaml').read_text())
         self.assertEqual(workflow['permissions'], {'contents': 'read'})
