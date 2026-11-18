@@ -18,11 +18,22 @@ architecture default, or a 200-client load.
 
 It runs on amd64 and arm64 runners. The weekly run uses client count 10. To run more, set the workflow input `clients` to a comma-separated list such as `10,50,200`, or to `all` for every count a config lists.
 
+Manual runs accept `architecture=both` (the default), `amd64`, or `arm64`,
+and `runner_profile=temporary` (the default), `ubuntu-24.04`, or `ubuntu-26.04`.
+The temporary profile retains the AMD64 `TEST_RUNNER` override or Ubuntu 22,
+and Ubuntu 22 ARM64. An explicit runner profile selects that Ubuntu version
+for the requested native architectures, including its `-arm` label.
+Scheduled and labeled runs retain both architectures and the temporary profile;
+manual inputs cannot change those runs. A single-architecture run supplies no
+measurement for the omitted architecture. This enables controlled runner
+qualification for issue #103; it does not establish acceptance of newer runners
+or change the default runner labels.
+
 Manual runs also accept `profile`: `all` (the default) keeps the full sweep;
 `baseline` measures only the unchanged install, without tuning rollouts.
 With `clients=10,50`, baseline produces two points per architecture instead of
 fourteen across the seven enabled profiles. Installation and its tests still
-run on both architectures. Scheduled and labeled runs keep the full sweep.
+run on each selected architecture. Scheduled and labeled runs keep the full sweep.
 This option does not establish 50-client headroom or relax the gate on 200 clients.
 The 60-second window includes clients starting one second apart. Requested
 clients and observed connection events do not establish sustained concurrency.
@@ -72,7 +83,7 @@ A setting is copied into the package only after a report puts it on the front. T
 
 The manual Benchmark choice `study=synthetic-postgis` runs the existing
 `baseline`, `postgis-buffers` and `postgis-wal` configurations on one native
-runner per architecture. It fixes the client count at 50 and ignores the
+runner per selected architecture. It fixes the client count at 50 and ignores the
 short-sweep `profile` and `clients` selections. The scheduled run, default
 short sweep and `synthetic-baseline` retain their existing behavior. This
 option prepares the controlled measurements for issues #49 and #51; no
@@ -85,7 +96,7 @@ After reviewing and merging the protocol, a maintainer can dispatch
 {"ref":"main","inputs":{"study":"synthetic-postgis","jvm_start_metadata":false}}
 ```
 
-Both native jobs use the same source and tester. Each retains its own run,
+When both architectures are selected, their native jobs use the same source and tester. Each retains its own run,
 attempt, context, cluster, node-container and marker identity. The disposable
 cluster guard refuses an existing `uds` cluster before installation and checks
 the same proof before every session. Each session's file and metadata identify
