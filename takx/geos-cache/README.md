@@ -181,7 +181,10 @@ and whole-archive PIC controls at two new unrelated prefixes in the isolated
 compiler container. Only successful readback, a second attestation check and
 these consumers permit input-key promotion and an accepted registry receipt.
 
-Command output has independent time/size bounds and stays private; only compact
+Both output pipes are drained with byte accounting before capture files are
+written; overflow kills and reaps the process group. Closing the pipes does not
+remove the command deadline. The GitHub client is bound to `github.com` and the
+fixed repository. Command output stays private; only compact
 typed qualification, readback, consumer and accepted receipts are uploaded.
 Failure emits no accepted receipt. The original producer/local relocation
 records keep all four wider acceptance flags false. A successful registry

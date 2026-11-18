@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Synthetic trust/transport controls; no registry or native acceptance claim."""
 import copy
+import json
 import os
 from pathlib import Path
 import shutil
@@ -213,6 +214,40 @@ class RegistryContracts(unittest.TestCase):
 
 
 class BoundedCommands(unittest.TestCase):
+    def test_stream_overflow_stops_the_child_before_its_later_action(self):
+        for stream in ('stdout', 'stderr'):
+            with self.subTest(stream=stream), tempfile.TemporaryDirectory() as temporary, \
+                    patch.object(C, 'MAX_JSON', 1024):
+                root = Path(temporary)
+                marker = root / 'later-action'
+                script = ('import os,sys;from pathlib import Path;'
+                          'os.write(sys.' + stream + '.fileno(),b"x"*(2*1024*1024));'
+                          'Path(sys.argv[1]).write_text("must not execute")')
+                with self.assertRaises(ValueError):
+                    T.command([sys.executable, '-c', script, str(marker)], root, 'overflow', limit=1024)
+                self.assertFalse(marker.exists())
+                self.assertLessEqual((root / 'overflow.stdout').stat().st_size, 1024)
+                self.assertLessEqual((root / 'overflow.stderr').stat().st_size, 1024)
+
+    def test_closed_streams_do_not_remove_the_process_deadline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); marker = root / 'closed-streams'
+            script = ('import os,time,sys;from pathlib import Path;os.close(1);os.close(2);'
+                      'Path(sys.argv[1]).write_text("closed");time.sleep(30)')
+            with self.assertRaises(ValueError):
+                T.command([sys.executable, '-c', script, str(marker)], root, 'closed', timeout=0.2)
+            self.assertEqual(marker.read_text(), 'closed')
+
+    def test_github_client_is_bound_to_the_public_repository(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); tool = root / 'gh'
+            tool.write_text('#!' + sys.executable + '\nimport os,json\n'
+                            'print(json.dumps([os.environ["GH_HOST"],os.environ["GH_REPO"]]))\n')
+            tool.chmod(0o700)
+            raw = T.command([str(tool)], root, 'public-host',
+                            env={**os.environ, 'GH_HOST': 'other.invalid', 'GH_REPO': 'other/repository'})
+            self.assertEqual(json.loads(raw), ['github.com', T.REPOSITORY])
+
     def test_only_definitive_registry_missing_codes_are_cache_misses(self):
         for error in ('MANIFEST_UNKNOWN', 'NAME_UNKNOWN', '404 Not Found', 'connection failed',
                       '401 MANIFEST_UNKNOWN', 'DENIED NAME_UNKNOWN'):

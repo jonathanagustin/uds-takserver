@@ -6,6 +6,7 @@ import argparse
 import os
 from pathlib import Path
 import re
+import selectors
 import signal
 import subprocess
 import tempfile
@@ -36,23 +37,40 @@ def context(env):
             ('run_id', 'GITHUB_RUN_ID'), ('run_attempt', 'GITHUB_RUN_ATTEMPT'))}
 
 
-def command(args, output, name, env=None, limit=cache.MAX_JSON, missing=False):
+def command(args, output, name, env=None, limit=cache.MAX_JSON, missing=False, timeout=120):
     """Private bounded command output; registry errors are never public artifacts."""
+    cache.require(type(limit) is int and 0 < limit <= cache.MAX_CAPSULE, 'invalid command output bound')
+    cache.require(type(timeout) in (int, float) and 0 < timeout <= 120, 'invalid command time bound')
+    if Path(args[0]).name == 'gh':
+        env = dict(os.environ if env is None else env, GH_HOST='github.com', GH_REPO=REPOSITORY)
     stdout, stderr = output / (name + '.stdout'), output / (name + '.stderr')
-    process = None
+    deadline = time.monotonic() + timeout
+    counts, limits = {'stdout': 0, 'stderr': 0}, {'stdout': limit, 'stderr': cache.MAX_JSON}
     with stdout.open('xb') as out, stderr.open('xb') as err:
-        try:
-            process = subprocess.Popen(args, stdout=out, stderr=err, stdin=subprocess.DEVNULL,
-                                       env=env, start_new_session=True)
-            deadline = time.monotonic() + 120
-            while True:
-                cache.require(stdout.stat().st_size <= limit and stderr.stat().st_size <= cache.MAX_JSON
-                              and time.monotonic() < deadline, 'registry command time/output bound')
-                if process.poll() is not None:
-                    break
-                time.sleep(0.1)
-        finally:
-            if process is not None:
+        with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                              env=env, start_new_session=True) as process:
+            try:
+                with selectors.DefaultSelector() as selector:
+                    for stream, label in ((process.stdout, 'stdout'), (process.stderr, 'stderr')):
+                        os.set_blocking(stream.fileno(), False)
+                        selector.register(stream, selectors.EVENT_READ, label)
+                    while selector.get_map():
+                        remaining = deadline - time.monotonic()
+                        cache.require(remaining > 0, 'registry command time bound')
+                        for key, _ in selector.select(min(remaining, 1)):
+                            label = key.data
+                            block = os.read(key.fd, min(65536, limits[label] - counts[label] + 1))
+                            if not block:
+                                selector.unregister(key.fileobj)
+                                continue
+                            counts[label] += len(block)
+                            cache.require(counts[label] <= limits[label], 'registry command output bound')
+                            (out if label == 'stdout' else err).write(block)
+                try:
+                    process.wait(timeout=max(0.001, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    raise ValueError('registry command time bound') from None
+            finally:
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
