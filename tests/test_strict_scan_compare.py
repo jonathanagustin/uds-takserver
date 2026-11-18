@@ -370,6 +370,21 @@ class CurrentPlatformTests(unittest.TestCase):
 
 
 class RedirectDiagnosticTests(unittest.TestCase):
+    def test_current_config_rejection_adds_only_fixed_stage_and_source(self):
+        for host, source in (('docker.io', 'docker'), ('ghcr.io', 'ghcr'),
+                             ('127.0.0.1:5000', 'loopback')):
+            with self.subTest(source=source):
+                error = S.RegistryRedirectRejected('https://cdn.example/private?token=private-token')
+                replies = [error] if source == 'loopback' else [b'{"token":"private-token"}', error]
+                with patch.object(S, 'fetch', side_effect=replies), self.assertRaises(
+                        S.RegistryRedirectRejected) as caught:
+                    S.current_configuration(host + '/team/private-image@' + DIGEST, {'digest': DIGEST})
+                self.assertIs(caught.exception, error)
+                self.assertEqual(error.diagnostics['blob_stage'], 'current-image-config')
+                self.assertEqual(error.diagnostics['blob_source'], source)
+                for private in ('private-token', 'private-image', 'cdn.example', host):
+                    self.assertNotIn(private, json.dumps(error.diagnostics))
+
     def test_failure_retains_only_hostname_fingerprint_and_fixed_categories(self):
         import urllib.request
         target = ('https://private-user:private-password@objects.githubusercontent.com/'
@@ -544,6 +559,27 @@ class ReleaseProviderTests(unittest.TestCase):
             self.assertEqual(receipt['architecture'], 'amd64')
             self.assertEqual(receipt['release']['applicationCommit'], '1' * 40)
             self.assertEqual('sha256:' + S.sha(archive.read_bytes()), receipt['sbom_layer_digest'])
+
+    def test_released_sbom_rejection_adds_fixed_context_without_writing_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); api, fetch, run, policies, _, events = self.fixture(root)
+            error = S.RegistryRedirectRejected('https://cdn.example/private?token=private-token')
+
+            def reject_blob(url, *args, **kwargs):
+                if '/blobs/' in url:
+                    raise error
+                return fetch(url, *args, **kwargs)
+
+            with patch.object(S, 'api', side_effect=api), patch.object(S, 'fetch', side_effect=reject_blob), \
+                    patch.object(S, 'load_policy', side_effect=policies.__getitem__):
+                with self.assertRaises(S.RegistryRedirectRejected) as caught:
+                    S.acquire_release('amd64', root, run)
+            self.assertIs(caught.exception, error)
+            self.assertEqual(error.diagnostics['blob_stage'], 'released-sbom-layer')
+            self.assertEqual(error.diagnostics['blob_source'], 'ghcr')
+            self.assertEqual(events, ['crypto-verify'])
+            self.assertNotIn('private-token', json.dumps(error.diagnostics))
+            self.assertFalse((root / 'sboms.tar').exists())
 
     def test_missing_denied_wrong_source_namespace_hash_and_failed_crypto_refuse(self):
         for failure in ('denied', 'wrong-namespace', 'wrong-source', 'backfill', 'wrong-index',
