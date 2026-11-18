@@ -93,6 +93,7 @@ class FakeApi:
 
         self.server = HTTPServer(("127.0.0.1", 0), Handler)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(tls_dir / "server.pem", tls_dir / "server.key")
         self.server.socket = context.wrap_socket(self.server.socket, server_side=True)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
