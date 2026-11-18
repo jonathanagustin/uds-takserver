@@ -81,6 +81,7 @@ class TrustBundleTLS(unittest.TestCase):
                         "-subj", f"/CN={name}", "-addext", "subjectAltName=DNS:localhost",
                     ], check=True, capture_output=True)
                     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                    context.minimum_version = ssl.TLSVersion.TLSv1_2
                     context.load_cert_chain(cert, key)
                     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), QuietHandler)
                     server.socket = context.wrap_socket(server.socket, server_side=True)
