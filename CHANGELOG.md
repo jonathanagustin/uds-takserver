@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.1](https://github.com/jonathanagustin/uds-takserver/compare/v0.18.0...v0.18.1) (2026-11-18)
+
+
+### Bug Fixes
+
+* **ci:** finish benchmark setup failures before artifact uploads ([#729](https://github.com/jonathanagustin/uds-takserver/issues/729)) ([3f2c42e](https://github.com/jonathanagustin/uds-takserver/commit/3f2c42e7252e28df9e2aeed890d10e5101b71c51))
+
 ## [0.18.0](https://github.com/jonathanagustin/uds-takserver/compare/v0.17.0...v0.18.0) (2026-11-18)
 
 
