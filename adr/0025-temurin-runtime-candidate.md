@@ -59,3 +59,22 @@ reconciliation callback: missing certificate, key or passphrase, or unreadable
 material. No input values or crypto exceptions are logged. Loading, signing,
 revocation and pod startup gates retain their existing behavior. Qualification
 must identify and correct the fresh-install failure before acceptance.
+
+## Private-key interoperability correction
+
+The exact published candidate supplies OpenSSL 3.0.2. Its req command emits
+PBES2 private keys using 3DES. The published Pepr 2.0.7 AMD controller runtime
+is Node 26.12.1 with OpenSSL 4.0.3, which rejects that key cipher with
+ERR_OSSL_EVP_UNSUPPORTED. A synthetic CA generated with the candidate's actual
+binary, libraries and scripts reproduces that failure in the controller's
+actual Node runtime and libraries. The host's Node 24 accepted the same key,
+so host-only certificate tests had not exposed the mismatch.
+
+Normalize generated encrypted PEM keys to PKCS#8 PBES2/AES-256-CBC with
+PBKDF2-HMAC-SHA256 and 100,000 iterations before publishing them. Root keys keep
+CAPASS; application keys keep PASS. Files are replaced only after successful
+conversion and stay mode 0600. This preserves public-key identity and existing
+PKCS#12 format selection. It enables no legacy provider in the consumer.
+The same real-runtime control passes after normalization. Complete hosted
+fresh-install and upgrade qualification is still required; this local witness
+does not establish that every native acceptance failure has been corrected.
