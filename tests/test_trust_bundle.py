@@ -125,5 +125,135 @@ https.get({host: '127.0.0.1', servername: 'localhost', port: +process.argv[1]},
                     server.server_close()
 
 
+
+@unittest.skipUnless(all(shutil.which(tool) for tool in ('openssl','keytool','timeout','bash')), 'TLS/JVM deadline tools required')
+class TrustImportDeadline(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture=tempfile.TemporaryDirectory();cls.root=Path(cls.fixture.name)
+        cls.cert=cls.root/'ca.pem';cls.key=cls.root/'ca.key'
+        subprocess.run(['openssl','req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256',
+                        '-nodes','-keyout',str(cls.key),'-out',str(cls.cert),'-days','1','-subj','/CN=localhost'],
+                       capture_output=True,check=True,timeout=10)
+        cls.key.chmod(0o600)
+        cls.java_home=Path(shutil.which('keytool')).resolve().parents[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.fixture.cleanup()
+
+    def run_import(self,mode,source=None,deadline=30):
+        import contextlib
+        import signal
+        import socket
+        import time
+        @contextlib.contextmanager
+        def peer(tls):
+            server=socket.socket();server.bind(('127.0.0.1',0));server.listen(1);server.settimeout(0.1)
+            stop=threading.Event()
+            context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version=ssl.TLSVersion.TLSv1_2
+            context.load_cert_chain(self.cert,self.key)
+            def serve():
+                while not stop.is_set():
+                    try:conn,_=server.accept()
+                    except socket.timeout:continue
+                    except OSError:break
+                    with conn:
+                        conn.settimeout(2 if tls else 0.1)
+                        if tls:
+                            try:
+                                wrapped=context.wrap_socket(conn,server_side=True)
+                                with wrapped:
+                                    try:wrapped.unwrap()
+                                    except (ssl.SSLError,OSError):pass
+                            except (ssl.SSLError,OSError):pass
+                        else:
+                            while not stop.is_set():
+                                try:
+                                    if not conn.recv(4096):break
+                                except socket.timeout:continue
+                                except OSError:break
+            thread=threading.Thread(target=serve,daemon=True);thread.start()
+            try:yield server.getsockname()[1]
+            finally:stop.set();server.close();thread.join(timeout=3)
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);(root/'trust').mkdir();(root/'bundle').mkdir();(root/'bin').mkdir()
+            # A present non-PEM file avoids the unchanged optional-bundle polling.
+            # No certificate is imported until the real TLS fetch succeeds.
+            (root/'bundle/ca-bundle.pem').write_text('no certificate in this owned fixture\n')
+            if mode=='partial-bundle':(root/'bundle/ca-bundle.pem').write_bytes(self.cert.read_bytes())
+            # Keep the resolved JDK available after narrowing the child PATH.
+            (root/'bin/keytool').symlink_to(Path(shutil.which('keytool')).resolve())
+            if mode=='missing-timeout':
+                for tool in ('bash','cp','chmod','rm','seq','awk','basename','openssl'):
+                    (root/'bin'/tool).symlink_to(Path(shutil.which(tool)).resolve())
+            if mode in ('partial','partial-bundle','oversize'):
+                body='#!/bin/sh\ncat '+str(self.cert)+'\n'
+                body+=('head -c 262144 /dev/zero\n' if mode=='oversize' else 'exit 1\n')
+                wrapper=root/'bin/openssl';wrapper.write_text(body);wrapper.chmod(0o700)
+            network=peer(mode=='tls') if mode in ('tls','stall') else contextlib.nullcontext(1)
+            with network as port:
+                original=(ROOT/'charts/takserver/files/scripts/import-trust.sh').read_text() if source is None else source
+                # Project only fixed filesystem/network locations into the owned
+                # fixture. The import/deadline/error control flow is unchanged.
+                script=original.replace('/trust/cacerts',str(root/'trust/cacerts')) \
+                    .replace('/bundle/ca-bundle.pem',str(root/'bundle/ca-bundle.pem')) \
+                    .replace('/tmp/uds-ca-',str(root/'uds-ca-')) \
+                    .replace('/tmp/issuer.txt',str(root/'issuer.txt')) \
+                    .replace('/tmp/uds-issuer.',str(root/'uds-issuer.')) \
+                    .replace(':443',':'+str(port))
+                path=root/'import.sh';path.write_text(script)
+                env={'PATH':str(root/'bin')+('' if mode=='missing-timeout' else ':'+os.defpath),'JAVA_HOME':str(self.java_home),
+                     'ISSUER_HOST':'127.0.0.1','LC_ALL':'C'}
+                started=time.monotonic();child=subprocess.Popen(['bash',str(path)],env=env,
+                    stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+                expired=False
+                try:out,err=child.communicate(timeout=deadline)
+                except subprocess.TimeoutExpired:
+                    expired=True;os.killpg(child.pid,signal.SIGKILL);out,err=child.communicate()
+                finally:
+                    try:os.killpg(child.pid,signal.SIGKILL)
+                    except ProcessLookupError:pass
+                elapsed=time.monotonic()-started
+            query=subprocess.run(['keytool','-list','-alias','issuer-uds-ca-1','-keystore',str(root/'trust/cacerts'),
+                                  '-storepass','changeit'],capture_output=True,timeout=10)
+            return {'exit':child.returncode,'outer_timeout':expired,'seconds':elapsed,
+                    'issuer_imported':query.returncode==0,'temporary_fetches':len(list(root.glob('uds-issuer.*'))),
+                    'stdout':out,'stderr':err}
+
+    def test_real_tls_certificate_import_still_succeeds(self):
+        result=self.run_import('tls')
+        self.assertFalse(result['outer_timeout']);self.assertEqual(result['exit'],0,result['stderr'])
+        self.assertTrue(result['issuer_imported']);self.assertEqual(result['temporary_fetches'],0)
+
+    def test_tcp_peer_that_never_speaks_tls_is_bounded_and_fails_closed(self):
+        result=self.run_import('stall')
+        self.assertFalse(result['outer_timeout']);self.assertNotEqual(result['exit'],0)
+        self.assertLess(result['seconds'],30);self.assertFalse(result['issuer_imported'])
+        self.assertEqual(result['temporary_fetches'],0)
+
+    def test_failed_fetch_cannot_import_a_valid_partial_transcript(self):
+        result=self.run_import('partial')
+        self.assertFalse(result['outer_timeout']);self.assertNotEqual(result['exit'],0)
+        self.assertFalse(result['issuer_imported']);self.assertEqual(result['temporary_fetches'],0)
+
+    def test_oversized_fetch_is_discarded_and_cleaned(self):
+        result=self.run_import('oversize')
+        self.assertFalse(result['outer_timeout']);self.assertNotEqual(result['exit'],0)
+        self.assertFalse(result['issuer_imported']);self.assertEqual(result['temporary_fetches'],0)
+
+    def test_valid_bundle_remains_usable_when_issuer_fetch_fails(self):
+        result=self.run_import('partial-bundle')
+        self.assertFalse(result['outer_timeout']);self.assertEqual(result['exit'],0,result['stderr'])
+        self.assertFalse(result['issuer_imported']);self.assertEqual(result['temporary_fetches'],0)
+
+    def test_missing_deadline_tool_refuses_unbounded_fetch(self):
+        result=self.run_import('missing-timeout')
+        self.assertFalse(result['outer_timeout']);self.assertNotEqual(result['exit'],0)
+        self.assertIn(b'timeout is required',result['stderr'])
+        self.assertFalse(result['issuer_imported']);self.assertEqual(result['temporary_fetches'],0)
+
+
 if __name__ == "__main__":
     unittest.main()
