@@ -4,7 +4,8 @@ Date: 2026-11-18
 
 ## Status
 
-Proposed. Keep this change in draft until native qualification passes.
+Accepted on November 18, 2026, in [#726](https://github.com/jonathanagustin/uds-takserver/pull/726),
+merged at `ea145739a46d786df3277bd9196b6170e7512bde`.
 
 ## Context
 
@@ -36,7 +37,7 @@ Dockerfile lint or an image index lookup is not that evidence.
 
 Before accepting this proposal, require both native Container builds with
 Copa enabled and its strict package-version validation intact, all six TAK
-image smoke tests, authenticated image comparisons, signature verification,
+images through native deployment acceptance, authenticated image comparisons, signature verification,
 and the native install and upgrade matrix, including the airgap path.
 Investigate failures rather than suppressing findings or weakening gates.
 
@@ -75,9 +76,9 @@ PBKDF2-HMAC-SHA256 and 100,000 iterations before publishing them. Root keys keep
 CAPASS; application keys keep PASS. Files are replaced only after successful
 conversion and stay mode 0600. This preserves public-key identity and existing
 PKCS#12 format selection. It enables no legacy provider in the consumer.
-The same real-runtime control passes after normalization. Complete hosted
-fresh-install and upgrade qualification is still required; this local witness
-does not establish that every native acceptance failure has been corrected.
+The same real-runtime control passes after normalization. The local witness established this interoperability correction. The later
+hosted qualification below accepts the combined change; historical failures
+retain their original outcomes.
 
 ## Generated backup aliases
 
@@ -90,3 +91,20 @@ unchanged. Controls execute the real serialization block and migration entry
 point against synthetic files and a local API fixture; both fail before the
 filter correction and pass after it. Hosted qualification applies to this
 combined producer and migration change.
+
+## Accepted qualification
+
+Exact head `82e4e56a2fac75ae4a0e7ac05290fe4557af7c1f` and the merged main
+commit have identical full trees (`249efc18b32876483a648bb807f0e6678842e444`).
+
+| Required evidence | Accepted run |
+| --- | --- |
+| Both native builds with Copa, attestations, scans, SBOMs and manifest publication | [44338245110](https://github.com/jonathanagustin/uds-takserver/actions/runs/44338245110) |
+| Authenticated complete-inventory image comparisons | [44338245020](https://github.com/jonathanagustin/uds-takserver/actions/runs/44338245020) |
+| AMD and ARM fresh installs, AMD airgap, and both regular upgrades | [44338245380](https://github.com/jonathanagustin/uds-takserver/actions/runs/44338245380) |
+
+Native deployment acceptance exercised all six TAK images. The PostgreSQL 15
+row was intentionally skipped in the PR; its separate main-push policy remains.
+All other applicable PR checks passed. The correction resolves build blocker
+#625 and backup-alias issue #727. Earlier failed heads and UBI observations
+remain recorded. Fork candidate qualification in #652/#696 remains separate.
