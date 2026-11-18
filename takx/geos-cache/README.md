@@ -120,8 +120,8 @@ python3 -B -m unittest discover -s takx/geos-cache -p 'test_*.py' -v
 These synthetic fixtures never establish native compilation. Fresh build and
 two-prefix execution receipts must be assessed separately. Registry push/pull,
 protected publisher/source trust, authenticated and anonymous readback,
-immutable-key promotion, native AMD64/hosted gates, SDK/renderer/TAKX acceptance
-and security suitability remain unqualified. The schema keeps registry,
+immutable-key promotion, SDK/renderer/TAKX acceptance and security suitability
+remain unqualified. Native local hosted evidence is recorded below. The schema keeps registry,
 publisher, SDK and security acceptance explicitly false. Issue #482 stays open.
 
 ## Read-only hosted trial
@@ -148,3 +148,13 @@ This workflow supplies a way to collect the missing native local evidence.
 Its addition alone does not qualify the build, cache publication, security
 suitability, the SDK or TAKX. Assess the exact successful run's bytes separately;
 registry, publisher, SDK and security acceptance remain false.
+
+### Accepted native local evidence
+
+The fresh native AMD64 trial [44357847600](https://github.com/jonathanagustin/uds-takserver/actions/runs/44357847600)
+passed on source `df1eb30b32aa6311e3523726c2e75b30a3075f33`. Both restored
+prefixes passed genuine geometry/error and whole-archive PIC controls, with
+matching tools, providers, headers and payload. The exact records and independent
+integrity review are retained in [the qualification checkpoint](qualification/2026-11-18/README.md).
+This closes the missing native local build/relocation evidence only; the
+remaining registry, publisher, SDK and security gates above stay open.
