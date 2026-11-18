@@ -66,7 +66,7 @@ Pull requests scan the loaded images with Grype and Trivy. A push of these files
 
 ## Docker Hub rate limits
 
-The Zarf package pulls two images from `docker.io`: NATS (`library/nats:2.15.1-alpine`) and the NATS config reloader (`natsio/nats-server-config-reloader:0.25.0`). Postgres is the PostGIS image built in this repository. Docker Hub limits anonymous pulls per Internet Protocol (IP) address, so a shared runner or sandbox can fail package creation with `429 toomanyrequests`. Pull them through a mirror:
+The Zarf package pulls two images from `docker.io`: NATS (`library/nats:2.15.3-alpine`) and the NATS config reloader (`natsio/nats-server-config-reloader:0.25.0`). Postgres is the PostGIS image built in this repository. Docker Hub limits anonymous pulls per Internet Protocol (IP) address, so a shared runner or sandbox can fail package creation with `429 toomanyrequests`. Pull them through a mirror:
 
 ```bash
 uds run create-dev-package --set CREATE_OPTIONS="--registry-override docker.io=mirror.gcr.io"

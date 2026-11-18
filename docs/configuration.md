@@ -78,7 +78,7 @@ overlays; it rejects overlays that override the identity phase.
 
 Postgres is `ghcr.io/jonathanagustin/uds-takserver/postgis:18-3.6`, built in this repository from the official `postgres` image with PostGIS 3.6.4 for amd64 and arm64. The entrypoint upgrades a PostgreSQL 15 data directory. See [architecture decision record (ADR) 18](../adr/0018-upgrade-postgres-in-place.md).
 
-NATS is still upstream chart 1.0.1. The overlay sets the server to `nats:2.15.1-alpine` and the config reloader to `natsio/nats-server-config-reloader:0.25.0`, and `zarf.yaml` packages those tags. The rendered config is one replica, clustering off, JetStream off, client port 4222, and monitor port 8222. NATS 2.15.1 accepts that file. There is no JetStream store, so an upgrade replaces the pod and TAK's client reconnects to `nats://takserver-nats:4222`. Rolling back is the previous tags, `2.9.21-alpine` and `0.11.0`. This repository does not build those images.
+NATS is still upstream chart 1.0.1. The overlay sets the server to `nats:2.15.3-alpine` and the config reloader to `natsio/nats-server-config-reloader:0.25.0`, and `zarf.yaml` packages those tags. The rendered config is one replica, clustering off, JetStream off, client port 4222, and monitor port 8222. NATS 2.15.3 accepts that file. There is no JetStream store, so an upgrade replaces the pod and TAK's client reconnects to `nats://takserver-nats:4222`. The previous server pin was `2.15.2-alpine`; the reloader stays at `0.25.0`. This repository does not build those images.
 
 The overlay turns the chart's nginx ingress off. Instead, the UDS Package in `charts/takserver/templates/uds-package.yaml` exposes the browser user interface (UI) on the tenant gateway and the same ports through the passthrough gateway:
 
