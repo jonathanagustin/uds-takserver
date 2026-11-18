@@ -264,6 +264,8 @@ jobs:
       - name: Native upgrade admission gate contracts
         run: python3 -B -m unittest tests.test_agent_gate -v
 
+      - name: Maintenance metadata contract
+        run: python3 -B -m unittest tests.test_scan_maintenance
       - name: Strict image inventory and release comparison contracts
         run: uv run --no-project --with pyyaml==6.0.3 python -B -m unittest tests.test_strict_scan_compare -v
 
