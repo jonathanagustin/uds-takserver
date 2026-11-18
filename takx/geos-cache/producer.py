@@ -43,6 +43,24 @@ def historical_helpers():
     return module
 
 
+def output_bytes(root):
+    def traversal_error(error):
+        if not isinstance(error, FileNotFoundError):
+            raise error
+
+    size = 0
+    for directory, _, names in os.walk(root, followlinks=False, onerror=traversal_error):
+        for name in names:
+            path = Path(directory) / name
+            try:
+                if path.is_file() and not path.is_symlink():
+                    size += path.stat().st_size
+            except FileNotFoundError:
+                # Configure and make legitimately remove transient files.
+                continue
+    return size
+
+
 class Runner:
     def __init__(self, root, seconds=1800):
         self.root, self.deadline, self.counter = root, time.monotonic() + seconds, 0
@@ -57,14 +75,7 @@ class Runner:
                 process = subprocess.Popen(command, cwd=cwd, env=ENV if env is None else env,
                     stdout=stream, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
                 while True:
-                    size = 0
-                    for path in self.root.rglob('*'):
-                        try:
-                            if path.is_file() and not path.is_symlink():
-                                size += path.stat().st_size
-                        except FileNotFoundError:
-                            # Configure and make legitimately remove transient files.
-                            continue
+                    size = output_bytes(self.root)
                     cache.require(size <= LOCK['budgets']['output_bytes'] and log.stat().st_size <= 8 * 1024**2
                                   and time.monotonic() < deadline, 'owned command time/output bound')
                     if process.poll() is not None:
