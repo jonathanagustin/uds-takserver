@@ -54,6 +54,37 @@ class HostedDiagnostics(unittest.TestCase):
         CAPTURE.capture(self.root, self.output)
         self.assertEqual(list(self.output.iterdir()), [self.output / 'index.json'])
 
+    def test_monitor_tolerates_directory_removed_before_descent(self):
+        transient = self.root / 'liboperation.lax'
+        transient.mkdir()
+        (self.root / 'retained').write_bytes(b'12345')
+        scandir = os.scandir
+
+        def remove_before_descent(path):
+            if Path(path) == transient:
+                transient.rmdir()
+            return scandir(path)
+
+        with patch.object(producer.os, 'scandir', side_effect=remove_before_descent):
+            self.assertEqual(producer.output_bytes(self.root), 5)
+        self.assertFalse(transient.exists())
+
+    def test_monitor_propagates_directory_access_errors(self):
+        with patch.object(producer.os, 'scandir', side_effect=PermissionError('denied')):
+            with self.assertRaises(PermissionError):
+                producer.output_bytes(self.root)
+
+    def test_monitor_keeps_total_output_limit_and_ignores_symlinks(self):
+        (self.root / 'retained').write_bytes(b'12345')
+        (self.root / 'alias').symlink_to(self.root / 'retained')
+        self.assertEqual(producer.output_bytes(self.root), 5)
+        with patch.dict(producer.LOCK['budgets'], output_bytes=4):
+            with self.assertRaisesRegex(ValueError, 'time/output bound'):
+                producer.Runner(self.root)([sys.executable, '-c', 'pass'], 'configure',
+                                           timeout=2, env=dict(os.environ))
+        status = json.loads(next(self.root.glob('*.status.json')).read_text())
+        self.assertFalse(status['complete'])
+
     def test_same_size_tampering_is_omitted(self):
         self.failed()
         log = next(self.root.glob('*.log'))

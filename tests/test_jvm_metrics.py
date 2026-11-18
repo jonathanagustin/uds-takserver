@@ -368,7 +368,7 @@ class WorkflowWiringTests(unittest.TestCase):
 
     def test_sweep_receives_metadata_only_through_existing_environment(self):
         job = self.workflow['jobs']['benchmark']
-        self.assertEqual(len(job['strategy']['matrix']['include']), 2)
+        self.assertEqual(job['strategy']['matrix'], '${{ fromJSON(needs.plan.outputs.matrix) }}')
         sweep = next(step for step in job['steps'] if step.get('name') == 'Run the sweep')
         self.assertNotIn('BENCH_JVM_START_METADATA', sweep.get('env', {}))
         self.assertNotIn('BENCH_JVM_CONTEXT', sweep.get('env', {}))

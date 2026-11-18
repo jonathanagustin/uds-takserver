@@ -9,6 +9,16 @@ name: Benchmark
 on:
   workflow_dispatch:
     inputs:
+      architecture:
+        description: Native architectures to measure in this manual run
+        type: choice
+        default: both
+        options: [both, amd64, arm64]
+      runner_profile:
+        description: Manual runner comparison; temporary preserves current defaults
+        type: choice
+        default: temporary
+        options: [temporary, ubuntu-24.04, ubuntu-26.04]
       study:
         description: "Short sweep, sustained baseline, or opt-in counterbalanced PostgreSQL comparison"
         default: short
@@ -56,20 +66,34 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
-  benchmark:
-    name: benchmark (${{ matrix.arch }})
+  plan:
+    name: benchmark-plan
     if: >-
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark') && (github.event.action != 'labeled' || github.event.label.name == 'benchmark'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select native runners
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ARCHITECTURE: ${{ inputs.architecture }}
+          RUNNER_PROFILE: ${{ inputs.runner_profile }}
+          TEST_RUNNER: ${{ vars.TEST_RUNNER }}
+        run: python3 .github/scripts/benchmark-matrix.py
+
+  benchmark:
+    name: benchmark (${{ matrix.arch }})
+    needs: [plan]
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ${{ vars.TEST_RUNNER || 'ubuntu-22.04' }}
-          - arch: arm64
-            runner: ubuntu-22.04-arm
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && inputs.study == 'synthetic-postgis' && 360 || 180 }}
     permissions:
@@ -126,7 +150,7 @@ jobs:
           version: v0.41.0
 
       - name: Trim the runner
-        if: vars.TEST_RUNNER == '' || vars.TEST_RUNNER == 'ubuntu-22.04' || vars.TEST_RUNNER == 'ubuntu-24.04' || runner.arch == 'ARM64'
+        if: vars.TEST_RUNNER == '' || vars.TEST_RUNNER == 'ubuntu-22.04' || vars.TEST_RUNNER == 'ubuntu-24.04' || runner.arch == 'ARM64' || (github.event_name == 'workflow_dispatch' && (inputs.runner_profile == 'ubuntu-24.04' || inputs.runner_profile == 'ubuntu-26.04'))
         run: ./.github/scripts/trim-runner.sh
         env:
           TRIM_SKIP_ABOVE_GB: "60"
