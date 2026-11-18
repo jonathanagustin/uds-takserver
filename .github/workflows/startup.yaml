@@ -169,7 +169,12 @@ jobs:
                    'package_archive': package_archive.hexdigest(),
                    'package_manifest': manifest.removeprefix('sha256:'),
                    'workflow': hashlib.sha256(pathlib.Path('.github/workflows/startup.yaml').read_bytes()).hexdigest()}
-          (pathlib.Path(os.environ['EVIDENCE'])/'bindings.json').write_text(json.dumps(value)+'\n')
+          encoded = json.dumps(value, sort_keys=True)
+          (pathlib.Path(os.environ['EVIDENCE'])/'bindings.json').write_text(encoded+'\n')
+          # Keep input identity available even when Core setup fails before
+          # any startup observation exists. These five values are hashes only.
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('### Startup input bindings (not a startup result)\n\n```json\n'+encoded+'\n```\n')
           PY
       - name: Restore the slim Core baseline without the application
         timeout-minutes: 12
@@ -181,6 +186,7 @@ jobs:
           python3 tests/ephemeral-cluster.py mark --context k3d-uds
           uds run fit-runner --no-progress
       - name: Begin the cold application boundary
+        id: cold
         timeout-minutes: 2
         run: |
           python3 -m bench.startup_trials begin --context k3d-uds --cohort "$COHORT" \
@@ -229,7 +235,11 @@ jobs:
           python3 -m bench.startup_trials pair --cold "$EVIDENCE/cold.json" \
             --warm "$EVIDENCE/warm.json" --output "$EVIDENCE/pair.json"
       - name: Retain only typed startup evidence, including partial failures
-        if: always() && steps.checkout.outcome == 'success'
+        # The uploader can outlive its step timeout on an unhealthy runner.
+        # Before the cold boundary is attempted, no startup data exists;
+        # preserve the setup failure and summary without starting an upload.
+        # Once attempted, keep the original partial-failure retention behavior.
+        if: always() && steps.checkout.outcome == 'success' && (steps.cold.outcome == 'success' || steps.cold.outcome == 'failure')
         timeout-minutes: 2
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

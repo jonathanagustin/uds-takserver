@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.18.2](https://github.com/jonathanagustin/uds-takserver/compare/v0.18.1...v0.18.2) (2026-11-18)
+
+
+### Bug Fixes
+
+* bound gateway certificate fetch during trust initialization ([#603](https://github.com/jonathanagustin/uds-takserver/issues/603)) ([d044a34](https://github.com/jonathanagustin/uds-takserver/commit/d044a34b3278f388014e599f88253d0097c83633))
+* **ci:** accept the verified Docker S3 distribution host ([#741](https://github.com/jonathanagustin/uds-takserver/issues/741)) ([bbf3ec7](https://github.com/jonathanagustin/uds-takserver/commit/bbf3ec74cfa80d78b2dadfe520b7935b8fc43c54))
+* **ci:** reject changed archives during install receipt collection ([#742](https://github.com/jonathanagustin/uds-takserver/issues/742)) ([19ee469](https://github.com/jonathanagustin/uds-takserver/commit/19ee469d9feed28416b48a9bed890a1e8b913703))
+* tolerate disappearing GEOS build directories during monitoring ([#737](https://github.com/jonathanagustin/uds-takserver/issues/737)) ([2431356](https://github.com/jonathanagustin/uds-takserver/commit/24313568dd700d23963fcb52264a2eb49f582d1c))
+
 ## [0.18.1](https://github.com/jonathanagustin/uds-takserver/compare/v0.18.0...v0.18.1) (2026-11-18)
 
 
