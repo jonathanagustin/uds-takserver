@@ -10,6 +10,11 @@ on:
       - "takx/native-geos/**"
       - ".github/workflows/geos-local-qualification.yaml"
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish, authenticate and qualify the fresh GEOS component in GHCR
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -22,6 +27,8 @@ jobs:
   qualify:
     runs-on: ubuntu-24.04
     timeout-minutes: 70
+    outputs:
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
     steps:
       - name: Checkout the candidate source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -75,6 +82,7 @@ jobs:
           PY
 
       - name: Retain local qualification evidence
+        id: artifact
         timeout-minutes: 3
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -109,3 +117,111 @@ jobs:
           path: |
             ${{ runner.temp }}/geos-producer-diagnostics
             ${{ runner.temp }}/geos-consumer-diagnostics
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish
+    needs: qualify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout the exact protected publisher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read only the candidate artifact from this run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.qualify.outputs.artifact_id }}
+          path: ${{ runner.temp }}/geos-candidate
+          merge-multiple: true
+
+      - name: Install pinned registry clients
+        uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
+        with:
+          mise_toml: |
+            [tools]
+            crane = "0.22.1"
+            gh = "2.104.0"
+          cache: true
+
+      - name: Log in to GHCR for the opt-in publication
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stage only a fresh native exact-run candidate
+        timeout-minutes: 4
+        run: |
+          python3 -B takx/geos-cache/transport.py stage \
+            --input "${RUNNER_TEMP}/geos-candidate" --output "${RUNNER_TEMP}/geos-publication"
+
+      - name: Attest publisher provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: ${{ runner.temp }}/geos-publication/subjects.txt
+
+      - name: Attest exact native compilation and relocation evidence
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: ${{ runner.temp }}/geos-publication/subjects.txt
+          predicate-type: https://github.com/jonathanagustin/uds-takserver/attestations/geos-capi/v1
+          predicate-path: ${{ runner.temp }}/geos-publication/qualification.json
+
+      - name: Authenticate and fetch the immutable subject without registry credentials
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -B takx/geos-cache/transport.py readback \
+            --publication "${RUNNER_TEMP}/geos-publication/qualification.json" \
+            --trusted-source-sha "${GITHUB_SHA}" --output "${RUNNER_TEMP}/geos-readback"
+
+      - name: Pull the exact compiler for remote-capsule consumers
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          python3 -c 'import platform; assert platform.machine() == "x86_64", "native AMD64 required"'
+          image="$(python3 -c 'import json; print(json.load(open("takx/geos-cache/inputs.lock.json"))["base_image"]["reference"])')"
+          docker pull --platform linux/amd64 "${image}"
+
+      - name: Execute fetched bytes at two unrelated clean prefixes
+        timeout-minutes: 12
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          q = json.loads((root / 'geos-publication/qualification.json').read_text())
+          subprocess.run([sys.executable, '-B', 'takx/geos-cache/qualify.py', '--engine', 'docker',
+                          '--layout', str(root / 'geos-readback/oci'), '--subject', q['subject'],
+                          '--input-key', q['input_key'], '--output', str(root / 'geos-readback/consumer')], check=True)
+          PY
+
+      - name: Promote only authenticated and requalified bytes
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -B takx/geos-cache/transport.py promote \
+            --publication "${RUNNER_TEMP}/geos-publication/qualification.json" \
+            --readback "${RUNNER_TEMP}/geos-readback" --output "${RUNNER_TEMP}/geos-promotion"
+
+      - name: Retain compact authenticated evidence only
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: geos-authenticated-registry-receipt
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            ${{ runner.temp }}/geos-publication/qualification.json
+            ${{ runner.temp }}/geos-readback/readback.json
+            ${{ runner.temp }}/geos-readback/consumer/restored.json
+            ${{ runner.temp }}/geos-promotion/accepted.json
