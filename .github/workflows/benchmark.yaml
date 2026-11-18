@@ -176,6 +176,7 @@ jobs:
             -r bench/load-test-requirements.txt
 
       - name: Run the sweep
+        id: sweep
         env:
           TAK_LOAD_TESTER: ${{ runner.temp }}/tak-load/src/testing/load_test/tak_tester.py
         run: |
@@ -221,8 +222,18 @@ jobs:
           echo "ok=true" >> "${GITHUB_OUTPUT}"
           echo "dir=${dest}" >> "${GITHUB_OUTPUT}"
 
-      - name: Upload the debug logs
+      - name: Print sanitized logs
         if: failure() && !cancelled() && steps.sanitize.outputs.ok == 'true'
+        timeout-minutes: 3
+        shell: bash
+        run: ./.github/scripts/print-logs.sh "${{ steps.sanitize.outputs.dir }}/payload"
+
+      # Failed setup can leave the runner unable to upload, and the artifact
+      # action can exceed its step timeout. Finish pre-sweep failures after
+      # printing sanitized diagnostics. A started sweep still retains its
+      # debug artifact and any partial records through the existing path.
+      - name: Upload the debug logs
+        if: failure() && !cancelled() && steps.sanitize.outputs.ok == 'true' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure')
         timeout-minutes: 5
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -233,7 +244,7 @@ jobs:
           retention-days: 14
 
       - name: Upload the records
-        if: always()
+        if: always() && !cancelled() && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure')
         timeout-minutes: 2
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
