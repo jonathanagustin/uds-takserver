@@ -10,6 +10,11 @@ on:
         description: Install private gateway PKI and verify live CA rotation and SSO
         type: boolean
         default: false
+      runner_profile:
+        description: Manual runner comparison; temporary preserves the current defaults
+        type: choice
+        default: temporary
+        options: [temporary, ubuntu-24.04, ubuntu-26.04]
       diagnostic_case:
         description: Select focused runtime evidence (not full acceptance)
         type: choice
@@ -445,6 +450,7 @@ jobs:
           TRUST_BUNDLE: ${{ inputs.trust_bundle && 'true' || 'false' }}
           DIAGNOSTIC_CASE: ${{ inputs.diagnostic_case || 'none' }}
           # Temporary older-kernel comparison for #300; keep the override.
+          RUNNER_PROFILE: ${{ inputs.runner_profile }}
           TEST_RUNNER: ${{ vars.TEST_RUNNER || 'ubuntu-22.04' }}
         run: python3 .github/scripts/test-validation-mode.py plan
 

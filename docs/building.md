@@ -92,3 +92,17 @@ docker buildx imagetools inspect ghcr.io/jonathanagustin/uds-takserver/takserver
 ```
 
 A local `build.sh` run builds the host architecture. `PLATFORMS=linux/amd64,linux/arm64` builds both with Buildx, which emulates the other architecture under QEMU and takes much longer. See [ADR 10](../adr/0010-amd64-and-arm64.md).
+
+## Controlled runner comparison
+
+The manual Test workflow accepts `runner_profile`: `temporary` (the default)
+keeps the repository AMD override and Ubuntu 22.04 ARM runner; `ubuntu-24.04`
+or `ubuntu-26.04` selects the matching native AMD and ARM labels. Pull requests
+ignore this input. It does not change the normal runner defaults.
+
+Use an exact reviewed main commit and the existing diagnostic selector for a
+bounded comparison, then retain the run, attempt, recorded runner image, kernel
+and selected-case results. A diagnostic success is not full acceptance. Newer
+labels are candidates, not proof that the runner reliability issue is fixed.
+Complete both-architecture Test, Full Core and Benchmark qualification before
+changing defaults; this selector covers Test only.
