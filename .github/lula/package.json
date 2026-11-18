@@ -1,0 +1,10 @@
+{
+  "name": "uds-lula-comment-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "dependencies": {
+    "@octokit/rest": "22.0.1",
+    "commander": "14.0.3"
+  }
+}

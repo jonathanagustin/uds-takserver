@@ -7,7 +7,8 @@ from pathlib import Path
 import tempfile
 import unittest
 import subprocess
-from unittest.mock import patch
+import sys
+from unittest.mock import Mock, patch
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +21,125 @@ ENV = {'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_REF': 'refs/heads/main'
 
 
 class StagedMigrationTests(unittest.TestCase):
+    def owner_command_fixture(self, root):
+        spec = importlib.util.spec_from_file_location('command_metadata_driver',
+                                                      ROOT / 'tests/velero-ownership/drive.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        # The cluster boundary is outside these process/journal/publication controls.
+        driver = module.Driver.__new__(module.Driver)
+        driver.directory = root / 'owner'
+        driver.directory.mkdir()
+        driver.state = {'schema': 1, 'accepted': False,
+                        'driverSHA256': S.sha(ROOT / 'tests/velero-ownership/drive.py'),
+                        'cluster': {key: ENV[name] for key, name in
+                                    [('sourceSHA', 'GITHUB_SHA'), ('runID', 'GITHUB_RUN_ID'),
+                                     ('runAttempt', 'GITHUB_RUN_ATTEMPT')]}, 'steps': []}
+        driver.guarded = Mock()
+        driver.transfer = Mock()
+        driver.transfer.read.side_effect = ValueError('private secondary observation')
+        return module, driver, driver.directory / 'PRIVATE-command-failure.txt'
+
+    def test_real_child_exit_seven_survives_secondary_failure_and_publication(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, ENV, clear=True):
+            root = Path(temporary).resolve()
+            module, driver, private = self.owner_command_fixture(root)
+            first = 'unknown flag: --fixture-token https://private.example/?sig=fixture-token\n'
+            def child(payload, code):
+                return module.runner([sys.executable, '-c',
+                    'import sys;sys.stderr.write(' + repr(payload) + ');sys.exit(' + str(code) + ')'],
+                    timeout=5, diagnostics=private)
+            driver.transfer.read.side_effect = lambda *_: child('connection refused secondary-token', 19)
+            with self.assertRaises(ValueError) as caught:
+                driver.step('deploy-local-agent', lambda: child(first, 7))
+            expected = {'exitStatus': 7, 'terminationReason': 'nonzero-exit'}
+            self.assertEqual(private.read_bytes(), first.encode())
+            self.assertEqual(private.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(getattr(caught.exception, 'metadata', lambda: None)(), expected)
+            self.assertEqual(driver.state['steps'][0].get('commandFailure'), expected)
+            age_spec = importlib.util.spec_from_file_location('metadata_age_reader',
+                ROOT / '.github/test-infra/staged-encrypted-diagnostic.py')
+            age = importlib.util.module_from_spec(age_spec)
+            age_spec.loader.exec_module(age)
+            age.owner_identity(driver.directory / 'journal.json')
+            public = root / 'public'
+            self.assertFalse(S.publish(root, public, 'amd64')['accepted'])
+            diagnostic = json.loads((public / 'proofs/amd64/failure-categories.json').read_text())
+            self.assertEqual(diagnostic['commandFailure'], expected)
+            self.assertEqual(diagnostic['failedStep'], 'deploy-local-agent')
+            self.assertEqual(diagnostic['scope'], 'retained-tail-signatures-only')
+            self.assertEqual(diagnostic['categories'], [{'patternID': 'cli-arguments', 'count': 1}])
+            published = ''.join(path.read_text() for path in public.rglob('*.json'))
+            for forbidden in ('fixture-token', 'secondary-token', 'private.example', str(private),
+                              'unknown flag', 'connection refused', 'sys.stderr', sys.executable):
+                self.assertNotIn(forbidden, published)
+
+    def test_real_signal_timeout_and_incomplete_stdout_have_distinct_metadata(self):
+        cases = [('signal', 'import os,signal;os.kill(os.getpid(),signal.SIGTERM)', 5, -15),
+                 ('timeout', 'import time;print("private-token",flush=True);time.sleep(30)', .1, -9),
+                 ('stdout-limit', 'import sys;sys.stdout.buffer.write(b"x"*(12*1024*1024))', 5, None)]
+        for reason, code, timeout, expected_exit in cases:
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as temporary, \
+                    patch.dict(os.environ, ENV, clear=True):
+                root = Path(temporary).resolve()
+                module, driver, private = self.owner_command_fixture(root)
+                with self.assertRaises(ValueError) as caught:
+                    driver.step('deploy-local-agent', lambda: module.runner(
+                        [sys.executable, '-c', code], timeout=timeout, diagnostics=private))
+                value = caught.exception.metadata()
+                self.assertEqual(value['terminationReason'], reason)
+                self.assertIs(type(value['exitStatus']), int)
+                if expected_exit is not None:
+                    self.assertEqual(value['exitStatus'], expected_exit)
+                self.assertLessEqual(private.stat().st_size, module.TAIL_LIMIT)
+                public = root / 'public'
+                self.assertFalse(S.publish(root, public, 'amd64')['accepted'])
+                diagnostic = json.loads((public / 'proofs/amd64/failure-categories.json').read_text())
+                self.assertEqual(diagnostic['commandFailure'], value)
+                self.assertNotIn('private-token', json.dumps(diagnostic))
+
+    def test_command_metadata_whitelist_rejects_invalid_or_unbound_fields(self):
+        for change in ('bool', 'range', 'exit-text', 'reason', 'reason-type', 'extra', 'missing-key',
+                       'signal-code', 'exit-code', 'source', 'driver', 'accepted', 'duplicate-stage', 'legacy'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as temporary, \
+                    patch.dict(os.environ, ENV, clear=True):
+                root = Path(temporary).resolve()
+                _, driver, _ = self.owner_command_fixture(root)
+                value = {'exitStatus': 7, 'terminationReason': 'nonzero-exit'}
+                entry = {'name': 'deploy-local-agent', 'status': 'failed', 'commandFailure': value}
+                driver.state['steps'] = [entry]
+                if change == 'bool': value['exitStatus'] = True
+                elif change == 'range': value['exitStatus'] = 256
+                elif change == 'exit-text': value['exitStatus'] = 'private-token'
+                elif change == 'reason': value['terminationReason'] = 'private-token'
+                elif change == 'reason-type': value['terminationReason'] = ['private-token']
+                elif change == 'extra': value['argv'] = 'private-token'
+                elif change == 'missing-key': value.pop('exitStatus')
+                elif change == 'signal-code': value['terminationReason'] = 'signal'
+                elif change == 'exit-code': value['exitStatus'] = 0
+                elif change == 'source': driver.state['cluster']['sourceSHA'] = 'b' * 40
+                elif change == 'driver': driver.state['driverSHA256'] = 'b' * 64
+                elif change == 'accepted': driver.state['accepted'] = True
+                elif change == 'duplicate-stage': driver.state['steps'].append(dict(entry))
+                elif change == 'legacy': entry.pop('commandFailure')
+                driver.journal()
+                result = S.failure_categories(root, {'ownerSteps': [entry]})
+                self.assertNotIn('commandFailure', result)
+                self.assertNotIn('private-token', json.dumps(result))
+
+    def test_successful_real_child_has_no_failure_metadata_or_private_capture(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, ENV, clear=True):
+            root = Path(temporary).resolve()
+            module, driver, private = self.owner_command_fixture(root)
+            output = []
+            driver.step('deploy-local-agent', lambda: output.append(module.runner(
+                [sys.executable, '-c', 'print("ok")'], timeout=5, diagnostics=private)))
+            self.assertEqual(output, ['ok\n'])
+            self.assertEqual(driver.state['steps'][0]['status'], 'passed')
+            self.assertNotIn('commandFailure', driver.state['steps'][0])
+            self.assertFalse(private.exists())
+            self.assertNotIn('commandFailure', S.failure_categories(root, {'ownerSteps': []}))
+
     def test_receipt_failure_publishes_only_source_frames_and_fixed_predicates(self):
         env = {**ENV, 'SCENARIO': 'identities', 'IDENTITY_METHOD': 'package', 'FRESH_STRICT': 'true'}
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, env, clear=True):

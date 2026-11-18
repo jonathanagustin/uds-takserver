@@ -1,0 +1,15 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+apiVersion: zarf.dev/v1beta1
+kind: ZarfPackageConfig
+metadata:
+  name: values-contract
+  version: 0.1.0
+values:
+  files:
+    - values.yaml
+components:
+  - name: contract
+    import:
+      local:
+        - path: common/zarf.yaml

@@ -11,10 +11,9 @@
 //    from the Secret. TAK keeps file users in a file inside the API pod, so a
 //    restarted API pod has lost the user. The admin certificate creates it
 //    again through /user-management/api on 8443.
-// 2. If CloudTAK is unconfigured, sends PATCH /api/server with the TAK URLs,
-//    the admin certificate, and that user. CloudTAK answers this call without
-//    a login only while it is unconfigured, and makes the user its system
-//    administrator. Doing it at startup closes that window.
+// 2. Reconciles the TAK URLs and mounted admin credentials through the
+//    authenticated /api/server route. First setup also creates its system
+//    administrator. Existing display names and connection toggles are kept.
 //
 // 3. Keeps the default basemap record in step with the chart (basemap.mjs):
 //    creates or updates the server basemap it owns and makes it the default
@@ -39,6 +38,7 @@ import http from 'node:http';
 import https from 'node:https';
 
 import { reconcile as reconcileBasemap, TILE_PATH } from './basemap.mjs';
+import { serverReconciler } from './bootstrap-server.mjs';
 
 const env = (name, fallback) => {
     const value = process.env[name] ?? fallback;
@@ -56,14 +56,20 @@ const password = env('CLOUDTAK_PASSWORD');
 const groups = env('TAK_USER_GROUPS', 'Operators').split(',').map((g) => g.trim()).filter(Boolean);
 const interval = Number(env('BOOTSTRAP_INTERVAL_SECONDS', '300')) * 1000;
 
-const ca = fs.readFileSync(`${certDir}/ca.pem`, 'utf8');
-const adminCert = fs.readFileSync(`${certDir}/admin.pem`, 'utf8');
 // makeCert.sh encrypts client keys with the keystore password. CloudTAK
 // stores a key it can load without one, so hand it an unencrypted PKCS#8 copy.
-const adminKey = crypto.createPrivateKey({
-    key: fs.readFileSync(`${certDir}/admin.key`, 'utf8'),
-    passphrase: env('TAK_ADMIN_KEY_PASSPHRASE'),
-}).export({ type: 'pkcs8', format: 'pem' });
+function readAdmin() {
+    const ca = fs.readFileSync(`${certDir}/ca.pem`, 'utf8');
+    const cert = fs.readFileSync(`${certDir}/admin.pem`, 'utf8');
+    const privateKey = crypto.createPrivateKey({
+        key: fs.readFileSync(`${certDir}/admin.key`, 'utf8'),
+        passphrase: env('TAK_ADMIN_KEY_PASSPHRASE'),
+    });
+    const certificate = new crypto.X509Certificate(cert);
+    if (!certificate.checkPrivateKey(privateKey)) throw new Error('TAK admin certificate and private key do not match');
+    return { ca, cert, key: privateKey.export({ type: 'pkcs8', format: 'pem' }) };
+}
+let admin = readAdmin();
 
 function request(url, { method = 'GET', headers = {}, body, tls = {} } = {}) {
     const payload = body === undefined ? undefined : (typeof body === 'string' ? body : JSON.stringify(body));
@@ -95,10 +101,9 @@ function request(url, { method = 'GET', headers = {}, body, tls = {} } = {}) {
 // 8443 presents TAK's generated server certificate, which is signed by the
 // same CA but names no in-cluster host. The chain is still checked against
 // that CA. Only the host name check is off for 8443.
-const webTls = { ca };
-const adminTls = { ca, cert: adminCert, key: adminKey, checkServerIdentity: () => undefined };
-
-const takAdmin = (path, opts = {}) => request(new URL(path, takApi), { ...opts, tls: adminTls });
+const takAdmin = (path, opts = {}) => request(new URL(path, takApi), {
+    ...opts, tls: { ...admin, checkServerIdentity: () => undefined },
+});
 const local = (path, opts = {}) => request(new URL(path, cloudtak), opts);
 
 async function passwordWorks() {
@@ -108,7 +113,7 @@ async function passwordWorks() {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: form,
-        tls: webTls,
+        tls: { ca: admin.ca },
     });
     return res.status === 200;
 }
@@ -127,27 +132,9 @@ async function ensureUser() {
     return 'created';
 }
 
-async function configure() {
-    const res = await local('/api/server');
-    if (res.status === 401 || res.status === 403) return 'configured';
-    if (res.status !== 200) throw new Error(`GET /api/server returned ${res.status}`);
-    if (JSON.parse(res.text).status !== 'unconfigured') return 'configured';
-
-    const patch = await local('/api/server', {
-        method: 'PATCH',
-        body: {
-            name: 'TAK Server',
-            url: takStream,
-            api: takApi.origin,
-            webtak: takWeb.origin,
-            auth: { cert: adminCert, key: adminKey },
-            username,
-            password,
-        },
-    });
-    if (patch.status !== 200) throw new Error(`PATCH /api/server returned ${patch.status}: ${patch.text.slice(0, 300)}`);
-    return `configured now, connection ${JSON.parse(patch.text).connection_status}`;
-}
+const configure = serverReconciler({
+    local, token: adminToken, urls: { url: takStream, api: takApi.origin, webtak: takWeb.origin }, username, password,
+});
 
 // CloudTAK accepts a token without a session claim as server minted.
 function adminToken() {
@@ -212,8 +199,11 @@ if (process.argv[2] === 'status') {
 await waitForCloudTAK();
 for (;;) {
     try {
+        // Projected Secret files can rotate without restarting this container.
+        // Read and validate one complete snapshot before using the credentials.
+        admin = readAdmin();
         const user = await ensureUser();
-        const server = await configure();
+        const server = await configure(admin);
         // A bad basemap setting is reported but does not hold up the TAK
         // user and connection.
         const basemap = await reconcileBasemap(api).catch((err) => `not ok - ${err.message}`);

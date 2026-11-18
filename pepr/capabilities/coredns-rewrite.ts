@@ -75,31 +75,40 @@ async function gatewaySet(cluster: Cluster): Promise<Set<string>> {
 }
 
 export async function reconcileCoreDns(cluster: Cluster, env: CoreDnsEnv): Promise<void> {
-  if (env.inClusterDns !== "true") {
-    return;
-  }
   const configMap = await cluster.getConfigMap(COREDNS_NAMESPACE, COREDNS_CONFIGMAP);
   if (!configMap) {
     return;
   }
-  if (!env.domain) {
-    throw new Error("DOMAIN is not set");
+  const disabling = env.inClusterDns !== "true";
+  if (disabling) {
+    // Keep an empty owned key until rollout succeeds. If restart fails, the
+    // next reconciliation can still discover and finish the pending cleanup.
+    if (!Object.prototype.hasOwnProperty.call(configMap.data ?? {}, OVERRIDE_KEY)) {
+      return;
+    }
+    if (configMap.data![OVERRIDE_KEY] !== "") {
+      await cluster.patchConfigMapKey(COREDNS_NAMESPACE, COREDNS_CONFIGMAP, OVERRIDE_KEY, "", true);
+    }
+  } else {
+    if (!env.domain) {
+      throw new Error("DOMAIN is not set");
+    }
+    if (!configMap.data) {
+      throw new Error("kube-system/coredns-custom has no data");
+    }
+    const rules = coreDnsRules(env.domain, env.passthroughHosts, await gatewaySet(cluster));
+    const current = configMap.data[OVERRIDE_KEY] ?? "";
+    if (sameOverride(current, rules)) {
+      return;
+    }
+    await cluster.patchConfigMapKey(
+      COREDNS_NAMESPACE,
+      COREDNS_CONFIGMAP,
+      OVERRIDE_KEY,
+      rules,
+      Object.prototype.hasOwnProperty.call(configMap.data, OVERRIDE_KEY),
+    );
   }
-  if (!configMap.data) {
-    throw new Error("kube-system/coredns-custom has no data");
-  }
-  const rules = coreDnsRules(env.domain, env.passthroughHosts, await gatewaySet(cluster));
-  const current = configMap.data[OVERRIDE_KEY] ?? "";
-  if (sameOverride(current, rules)) {
-    return;
-  }
-  await cluster.patchConfigMapKey(
-    COREDNS_NAMESPACE,
-    COREDNS_CONFIGMAP,
-    OVERRIDE_KEY,
-    rules,
-    Object.prototype.hasOwnProperty.call(configMap.data, OVERRIDE_KEY),
-  );
   const deployment = await cluster.getDeployment(COREDNS_NAMESPACE, COREDNS_DEPLOYMENT);
   if (!deployment) {
     throw new Error("kube-system/coredns Deployment is missing");
@@ -107,6 +116,9 @@ export async function reconcileCoreDns(cluster: Cluster, env: CoreDnsEnv): Promi
   const hasAnnotations = deployment.spec?.template?.metadata?.annotations !== undefined;
   await cluster.restartDeployment(COREDNS_NAMESPACE, COREDNS_DEPLOYMENT, hasAnnotations);
   await waitRollout(cluster, COREDNS_NAMESPACE, COREDNS_DEPLOYMENT);
+  if (disabling) {
+    await cluster.removeConfigMapKey(COREDNS_NAMESPACE, COREDNS_CONFIGMAP, OVERRIDE_KEY);
+  }
 }
 
 export function rolloutDone(deploy: DeploymentDoc | undefined): boolean {

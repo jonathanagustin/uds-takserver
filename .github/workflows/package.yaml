@@ -14,6 +14,7 @@ on:
       - "docs/**"
       - "adr/**"
       - "docs-site/**"
+      - "dev/**"
       - "assets/**"
       - "atak/**"
       - "bench/**"

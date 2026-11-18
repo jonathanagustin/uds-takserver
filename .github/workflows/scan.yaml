@@ -17,6 +17,9 @@ on:
       - ".github/scripts/pin-image-tags.sh"
       - ".github/scripts/strict-scan-compare.py"
       - ".github/scripts/candidate-scan-mappings.py"
+      - ".github/test-infra/release-binding.py"
+      - ".github/test-infra/release-readiness.py"
+      - "tests/test_strict_scan_compare.py"
       - ".gitmodules"
       - "upstream/**"
 
@@ -201,9 +204,14 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: scan-comparison
-          path: |
-            comment.md
-            ${{ runner.temp }}/strict-scan-comparison/receipt.json
+          path: comment.md
+          if-no-files-found: error
+
+      - name: Upload exact comparison receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scan-comparison-receipt
+          path: ${{ runner.temp }}/strict-scan-comparison/receipt.json
           if-no-files-found: error
 
       - name: Link comparison in job summary

@@ -4,6 +4,12 @@ Continuous integration (CI) checks for Team Awareness Kit (TAK) services run as 
 
 Docs, device, benchmark, demo, unit-test-only, and repository metadata changes skip the install and upgrade matrices. Test and Package ignore the paths in [`.github/scripts/runtime-paths.sh`](../.github/scripts/runtime-paths.sh). A chart, Pepr module, network policy, value, bundle, task, image build, dependency pin, or script those jobs run still starts them. A chart SVG is one of those files. So is [`mise.toml`](../mise.toml): it pins Node, k3d, Helm, the Unified Defense Stack (UDS) command-line interface (CLI), and pnpm in the same file as the linters, and a change to any of those pins starts Test and Package. The Docs workflow builds and deploys documentation independently of package releases. Ordinary `docs:` commits do not open a package release or appear in package release notes; `feat:`, `fix:` and the configured `chore:` entries still do. Full Core decides in its own `changes` job.
 
+## Zarf CLI compatibility
+
+The pinned UDS CLI 0.41.0 embeds Zarf 0.89.0. Direct Zarf package commands avoid `--no-progress`, which Zarf 1.x removed. Package publication also omits the removed `--confirm` flag; these archive-publication calls do not supply inline signing-key credentials. Release signing remains a separate prior step. Deployment variables use `--set-variables`. Create-time `--set` still selects package templates, while `uds run --set` and `uds run --no-progress` are separate UDS task options.
+
+Package-schema migration remains separate. [Zarf 1.0 deprecates `v1alpha1`](https://github.com/zarf-dev/zarf/releases/tag/v1.0.0), which the authored packages currently use implicitly. Moving to `zarf.dev/v1beta1` requires replacing legacy package variables and validating bundle overrides and rendered resources; changing only `apiVersion` is insufficient. UDS 0.41.0 already supports beta schemas, so that migration can be qualified while retaining the production CLI pin. CLI argument checks and small local package creation do not establish deployment compatibility.
+
 ## Pull request checks
 
 | Workflow | File | Runs on | What it does |
@@ -24,10 +30,10 @@ A pull request whose files are all on that ignore list skips Test and Package. O
 
 ### Scan results from fork pull requests
 
-A successful Scan comparison always uploads the complete `comment.md` and strict
-comparison `receipt.json` as the
+A successful Scan comparison always uploads the complete `comment.md` as the
 `scan-comparison` artifact and links it from the job summary. This applies to
-small and large comparisons, before any optional conversation update. A failed
+small and large comparisons, before any optional conversation update. The exact
+`receipt.json` is retained separately as `scan-comparison-receipt`. A failed
 scan or comparison still fails the job.
 
 Same-repository pull requests also receive the normal result comment, with an
@@ -427,6 +433,24 @@ tail bytes, establish a causal explanation or authorize another trial.
 
 
 ### Release readiness
+
+The supplementary release-binding metadata and predicate contain public
+provenance: repository name; release tag, numeric ID and application commit;
+workflow commit, run ID, attempt and ref; and package index and architecture
+digests. The predicate also carries its schema version. These values are
+intended for the published attestation. `GH_TOKEN` and the anonymous registry
+token are transport credentials, never provenance fields. Other environment
+variables and extra release API fields are excluded; unknown metadata fields
+fail validation before any preparation output is written.
+
+Each serialized JSON payload is limited to one MiB. The metadata and original
+index are staged as owner-only files (mode `0600`) in the runner's temporary
+directory, replacing existing files without following their links. The
+predicate is emitted on standard output for the workflow's attestation step;
+verification diagnostics remain fixed verdicts rather than API response or
+credential dumps. Sentinel regression tests cover the environment/API field
+boundary and rejected extra fields. This describes the serialization policy;
+it does not establish the disposition of an unread code-scanning alert.
 
 Release Please creates a draft and its Git tag together. Charts publish first;
 then the existing native publisher signs and verifies both architecture packages

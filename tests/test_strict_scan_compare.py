@@ -369,6 +369,70 @@ class CurrentPlatformTests(unittest.TestCase):
                 handler.redirect_request(request, None, 302, '', {}, target)
 
 
+class RedirectDiagnosticTests(unittest.TestCase):
+    def test_failure_retains_only_hostname_fingerprint_and_fixed_categories(self):
+        import urllib.request
+        target = ('https://private-user:private-password@objects.githubusercontent.com/'
+                  'private-path?token=private-token#private-fragment')
+        request = urllib.request.Request('https://ghcr.io/v2/public/image/blobs/' + DIGEST)
+        with self.assertRaises(S.RegistryRedirectRejected) as caught:
+            S.SafeRedirect({'pkg-containers.githubusercontent.com'}).redirect_request(
+                request, None, 307, '', {}, target)
+        error = caught.exception
+        self.assertEqual(str(error), 'unexpected_registry_redirect')
+        self.assertEqual(error.diagnostics, {
+            'redirect_provider': 'github', 'redirect_transport': 'https',
+            'redirect_host_sha256': S.sha(b'objects.githubusercontent.com')})
+        public = json.dumps(error.diagnostics) + repr(error)
+        for secret in ('private-user', 'private-password', 'private-path', 'private-token',
+                       'private-fragment', 'objects.githubusercontent.com'):
+            self.assertNotIn(secret, public)
+
+    def test_fingerprint_does_not_depend_on_signed_url_payload(self):
+        first = S.RegistryRedirectRejected('https://cdn.example/first?sig=one')
+        second = S.RegistryRedirectRejected('https://cdn.example/second?sig=two')
+        self.assertEqual(first.diagnostics, second.diagnostics)
+        self.assertEqual(first.diagnostics['redirect_provider'], 'other')
+
+    def test_invalid_and_oversized_hosts_have_no_fingerprint(self):
+        for target in ('https://[broken', 'https://' + 'a' * 254 + '/private',
+                       'https://' + 'a' * 64 + '.example/private',
+                       'https://-invalid.example/private', 'https://\u2603.example/private'):
+            with self.subTest(target=target):
+                error = S.RegistryRedirectRejected(target)
+                self.assertNotIn('redirect_host_sha256', error.diagnostics)
+                self.assertEqual(error.diagnostics['redirect_provider'], 'invalid')
+                self.assertLess(len(json.dumps(error.diagnostics)), 256)
+
+    def test_invalid_port_is_rejected_without_echoing_input(self):
+        import urllib.request
+        request = urllib.request.Request('https://ghcr.io/v2/public/image/blobs/' + DIGEST)
+        with self.assertRaises(S.RegistryRedirectRejected) as caught:
+            S.SafeRedirect({'pkg-containers.githubusercontent.com'}).redirect_request(
+                request, None, 307, '', {},
+                'https://pkg-containers.githubusercontent.com:private-port/private')
+        self.assertNotIn('private-port', str(caught.exception))
+
+    def test_main_reports_fingerprint_but_still_fails_without_success_receipt(self):
+        error = S.RegistryRedirectRejected('https://cdn.example/private?token=private-token')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            argv = ['scan', '--source-root', str(root), '--zarf-yaml-path', str(root / 'zarf.yaml'),
+                    '--architecture', 'amd64', '--output-directory', str(root / 'result'),
+                    '--markdown', str(root / 'comment.md')]
+            output = io.StringIO()
+            with patch.object(sys, 'argv', argv), patch.object(S, 'inventory', side_effect=error), \
+                    patch.object(S, 'tool_identities') as later, contextlib.redirect_stderr(output):
+                self.assertEqual(S.main(), 1)
+            later.assert_not_called()
+            lines = output.getvalue().splitlines()
+            self.assertEqual(lines[0], 'Strict image comparison rejected: unexpected_registry_redirect')
+            self.assertEqual(json.loads(lines[1]), error.diagnostics)
+            self.assertNotIn('private-token', output.getvalue())
+            self.assertFalse((root / 'result/receipt.json').exists())
+            self.assertFalse((root / 'comment.md').exists())
+
+
 class ReleaseProviderTests(unittest.TestCase):
     """Network/crypto process doubles test ordering; real crypto is qualified separately."""
 

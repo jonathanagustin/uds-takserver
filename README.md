@@ -140,6 +140,11 @@ Homebrew installs the current release, which can be newer than the pins above. P
 
 To work on the repository itself, [mise](https://mise.jdx.dev/) installs every pinned tool except Docker, including the linters and test tools in [`mise.toml`](mise.toml): run `mise install`.
 
+For Linux shell and Python checks, `./dev/run` supplies Bash, GNU tools and
+Python dependencies in a development container through Docker or Podman.
+The host needs a POSIX shell and a running container engine; see
+[development container](docs/development-container.md) for commands and scope.
+
 ### Deploy a release
 
 From 0.11 on, releases use `oci://ghcr.io/jonathanagustin/uds-takserver/takserver:<version>-upstream`, with one entry per architecture. Releases through 0.10 keep their original registry coordinates; follow the documentation for that release. Add it to a UDS bundle next to UDS Core with the [`keylessVerification`](#verify-a-release) block below, or deploy it directly onto a cluster that already runs UDS Core with the passthrough gateway:

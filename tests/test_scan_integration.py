@@ -250,10 +250,10 @@ class WorkflowPolicyTests(unittest.TestCase):
             self.assertIn(path, document[True]['pull_request']['paths'])
 
     def test_missing_receipt_retention_and_comparison_bypass_are_rejected(self):
-        for target, key, value in (('upload-comparison-results', 'path', 'comment.md'),
+        for target, key, value in (('Upload exact comparison receipt', 'path', 'comment.md'),
                                    ('compare-scans', 'continue-on-error', True)):
             changed = workflow()
-            step = next(step for step in changed['jobs']['scan-and-compare']['steps'] if step.get('id') == target)
+            step = next(step for step in changed['jobs']['scan-and-compare']['steps'] if step.get('id') == target or step.get('name') == target)
             (step['with'] if key == 'path' else step)[key] = value
             with self.subTest(target=target), self.assertRaises(ValueError):
                 require_fork_scan_reporting(changed)
