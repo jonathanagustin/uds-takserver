@@ -78,3 +78,15 @@ PKCS#12 format selection. It enables no legacy provider in the consumer.
 The same real-runtime control passes after normalization. Complete hosted
 fresh-install and upgrade qualification is still required; this local witness
 does not establish that every native acceptance failure has been corrected.
+
+## Generated backup aliases
+
+The same certificate-producer review found an upstream backup name for the
+CA PEM key that the application-bundle filters did not recognize (#727).
+Fresh publication and migration now omit both canonical and backup names.
+Application keys, required signing keystores, public backup certificates and
+custom filenames remain, and the migration leaves the dedicated CA Secret
+unchanged. Controls execute the real serialization block and migration entry
+point against synthetic files and a local API fixture; both fail before the
+filter correction and pass after it. Hosted qualification applies to this
+combined producer and migration change.
