@@ -6,7 +6,8 @@
 # Copy cert-migration into Secret takserver-certs and drop private keys from
 # the ConfigMap. The upstream chart can only mount a ConfigMap. The admission
 # module points that volume at the Secret, so the pods never see the ConfigMap.
-# ca-do-not-share.key stays in Secret takserver-ca-key. move-ca-key.sh runs
+# ca-do-not-share.key stays in Secret takserver-ca-key. Its upstream backup
+# alias is also excluded from the application bundle. move-ca-key.sh runs
 # first and removes it from the ConfigMap.
 #
 # Set SPLIT_KEY_SOURCE_ONLY=1 to load the functions without calling the API.
@@ -253,7 +254,7 @@ load_fields() {
   fi
   while IFS=$'\t' read -r name value; do
     [[ -n "${name}" ]] || continue
-    if [[ "${name}" == "ca-do-not-share.key" ]]; then
+    if [[ "${name}" == "ca-do-not-share.key" || "${name}" == "root-ca-do-not-share.key" ]]; then
       continue
     fi
     merged["${name}"]="${value}"
