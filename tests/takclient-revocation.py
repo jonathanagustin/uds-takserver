@@ -108,6 +108,7 @@ def main():
 
     def context(cert, key, key_pass=None):
         ctx = ssl.create_default_context(cafile=str(root / "ca.pem"))
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         ctx.check_hostname = False  # TAK's streaming cert has no Service SAN.
         ctx.load_cert_chain(str(cert), str(key), password=key_pass)
         return ctx
