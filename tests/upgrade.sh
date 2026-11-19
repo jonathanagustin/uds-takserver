@@ -88,9 +88,9 @@ uds zarf tools yq -i '
 pull_status=0
 uds zarf package pull "${package}" --architecture="${arch}" --features values=true -o "${work}" || pull_status=$?
 if ((pull_status != 0)); then
-  echo "::error title=Released package pull failed::The ${arch} baseline pull exited ${pull_status}. Availability, caller access and transport remain unclassified; investigate #664 before retrying. Preserve the existing release tag, source, package and signer."
+  echo "::error title=Released package pull failed::The ${arch} baseline pull exited ${pull_status}. Availability, caller access and transport remain unclassified; Check the pull logs for this baseline before retrying. Preserve the existing release tag, source, package and signer."
   if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-    printf 'Baseline pull failed: architecture=%s exit=%s observed_utc=%s. This is not evidence that the release needs republishing. See #664.\n' \
+    printf 'Baseline pull failed: architecture=%s exit=%s observed_utc=%s. This is not evidence that the release needs republishing. Check the pull logs for this attempt for the cause.\n' \
       "${arch}" "${pull_status}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_STEP_SUMMARY}"
   fi
   exit "${pull_status}"
