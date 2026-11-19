@@ -85,6 +85,22 @@ The images are published for `linux/amd64` and `linux/arm64`. The container work
 - `5.7-RELEASE-14` and `5.7-RELEASE-14-<arch>`, the tags in the committed files and in released packages, are written only from `main`, from the keyed images.
 - `wait-for-tak-images.sh` waits for the keyed index, and `.github/scripts/pin-image-tags.sh` points `zarf.yaml`, `tasks.yaml` and `bundle/uds-config.yaml` at it before CI creates a package. A keyed tag only ever holds one set of inputs, so a pull request deploys its own TAK images even when another branch builds different ones at the same time.
 
+The TAK, CloudTAK and PostGIS tag helpers prefer `sha256sum` and use `shasum -a 256` when it is unavailable. Both hash the same input bytes and retain the first 12 hex digits. A failed Git lookup or hash stops the helper before it prints a tag or invokes a build or registry command. The helpers are themselves recipe inputs, so committing a change to one correctly produces a new key.
+
+Each helper also exposes `--inputs`, which prints its exact image input label without fetching a submodule, building, or contacting a registry. Recipe edits produce the existing `-dirty` label; candidate export rejects these labels and rejects initialized source checkouts that differ from the clean pinned source.
+
+### Read-only fork candidates
+
+Fork pull requests cannot publish into the upstream GHCR namespace. The dedicated CloudTAK and PostGIS workflows, and the Container workflow for the six TAK images, retain native builds, Copa patching and their existing security or upgrade checks. They export the resulting native image bytes as Actions artifacts after those checks. A receipt binds each archive to the repository, PR head, checked-out merge commit, producer workflow/run/attempt, native architecture, input label, config digests and layer contents. The receipt is an integrity record, not an attestation.
+
+Consumers select the canonical producer for the same head and checkout. A scheduled producer's pending or failed build cannot be replaced by a published cache hit. Container's intentional immutable cache reuse records the exact native manifest and config digests in a separate decision artifact. A group outside the verified PR path filter may reuse its published immutable key after checking the requested native platform and inputs.
+
+Each readiness poll shares one fresh metadata snapshot across the required platforms and uses authenticated conditional requests on later polls. Pending checks wait 15, 30, 60, then at most 120 seconds between polls; every required platform is examined before waiting. A producer that was never scheduled still fails after 90 seconds. Cached metadata requires GitHub's `304` confirmation of a previously validated ETag. HTTP failures remain terminal, including when older metadata exists. Error diagnostics contain fixed reason labels and bounded rate/request identifiers, excluding free-form server messages, credentials and signed URLs. See [GitHub's REST API polling guidance](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api).
+
+Package, native install/upgrade/airgap, Full Core, Benchmark, ATAK and Scan validate the selected artifacts before loading any image. Transport files are removed after verified loading. Each consuming job mirrors all eight application images into a uniquely named registry bound to `127.0.0.1`; its state binds both manifest and config digests. Package creation obtains a validated `--registry-override` through task variables, preserving canonical image names in the Zarf package and workload charts. Additional GHCR overrides, including overlapping source prefixes, are refused. Other overrides, such as a Docker Hub mirror, remain available.
+
+Scan uses a separate current-side manifest with the verified loopback images pinned by manifest digest; it preserves the released-baseline lookup and maps digest image names explicitly for comparison. The canonical package definition is unchanged. Every consuming workflow removes only its own named registry on success, failure or cancellation. Main and release builds retain GHCR publishing, immutable indexes and their existing attestation policy.
+
 To check a published tag:
 
 ```bash

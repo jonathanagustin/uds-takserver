@@ -19,7 +19,7 @@ Package-schema migration remains separate. [Zarf 1.0 deprecates `v1alpha1`](http
 | Test | `test.yaml` | pull requests and pushes to `main` that change a relevant path ([`runtime-paths.sh`](../.github/scripts/runtime-paths.sh)) | Builds the CloudTAK and PostGIS images when their inputs changed, waits for the six TAK images, then runs the install test and the upgrade test from the last release, each on amd64 and arm64. On pushes to `main`, and on pull requests with the `upgrade-pg15` label, it also runs the upgrade from release 0.6.0 (PostgreSQL 15) on both architectures. `verify-test` reports the result. A superseded run skips `verify-test` instead of failing it |
 | Unit tests | `unit-tests.yaml` | every pull request, and pushes to `main` | Pepr module tests and the Python upgrade helper tests, with coverage in the job summary. Also the Loki query helper, CoreConfig cache listener, profile, benchmark harness, and Full Core summary tests, and the package values render. See [Coverage](../CONTRIBUTING.md#coverage) |
 | Package | `package.yaml` | the same relevant paths as Test, pushes of those paths to `main`, and by hand | Waits for the images, then creates the dev package on amd64 and arm64, checks its architecture, and publishes it as `ghcr.io/jonathanagustin/uds-takserver/ci-packages/takserver:<arch>-<key>`. See [Package reuse](#package-reuse) |
-| Scan | `scan.yaml` | pull requests that change the package, charts, values, bundle, image builds, or submodules | Compares image scans with `uds-pk scan compare`, retains the complete comparison as an artifact, and comments on same-repository pull requests |
+| Scan | `scan.yaml` | pull requests that change the package, charts, values, bundle, image builds, or submodules | Compares every selected image against authenticated released SBOMs through the strict adapter, retains the report and receipt, and comments on same-repository pull requests |
 | CodeQL | `codeql.yaml` | every pull request, pushes to `main`, and Mondays at 06:00 | CodeQL code scanning |
 | Dependency Review | `dependency-review.yaml` | every pull request | GitHub dependency review of the changed dependencies |
 | Docs | `docs.yaml` | changes to `docs-site/`, `docs/`, `adr/`, `README.md`, `SECURITY.md`, `CONTRIBUTING.md`, or `CHANGELOG.md` | Builds the docs site and runs its browser tests. A broken internal link fails the build. On `main` it also deploys the site to GitHub Pages |
@@ -32,7 +32,8 @@ A pull request whose files are all on that ignore list skips Test and Package. O
 
 A successful Scan comparison always uploads the complete `comment.md` as the
 `scan-comparison` artifact and links it from the job summary. This applies to
-small and large comparisons, before any optional conversation update. A failed
+small and large comparisons, before any optional conversation update. The exact
+`receipt.json` is retained separately as `scan-comparison-receipt`. A failed
 scan or comparison still fails the job.
 
 Same-repository pull requests also receive the normal result comment, with an
@@ -40,6 +41,17 @@ artifact link for a large comparison. Fork pull requests use the artifact and
 job summary because their read-only token cannot write to the upstream PR
 conversation. They keep the ordinary `pull_request` trigger and do not need an
 upstream write token for reporting.
+
+The [strict comparison adapter](../.github/test-infra/strict-scan-compare.md)
+uses the union of upstream and common package images, exact native image digests
+and authenticated released software bills of materials (SBOMs). Fork inputs use
+the validated temporary candidate manifest with all eight full canonical image
+references mapped to their exact loopback manifest digests. The caller captures
+the consumer state hash after validation; the adapter checks those same bytes and
+replays the consumer policy. Direct inputs use the canonical pinned `zarf.yaml`.
+Acquisition, mapping, baseline and scanning errors fail the job without falling
+back to the older discovery command. The pinned vulnerability comparison and
+Markdown renderer remain `uds-pk compare-scans` 0.2.0; this adds no CVE threshold.
 
 Docker config blobs may redirect to an exact approved distribution host,
 including `docker-images-prod.s3.dualstack.us-east-1.amazonaws.com`. Its hostname

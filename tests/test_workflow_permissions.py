@@ -58,6 +58,13 @@ def require_fork_scan_reporting(document):
             raise ValueError('comparison and retention must use normal success semantics')
     if upload['with'].get('path') != 'comment.md' or upload['with'].get('if-no-files-found') != 'error':
         raise ValueError('a complete comparison artifact is required')
+    receipt = next(step for step in steps if step.get('name') == 'Upload exact comparison receipt')
+    if (receipt.get('if') is not None or receipt.get('continue-on-error', False)
+            or receipt['with'].get('name') != 'scan-comparison-receipt'
+            or receipt['with'].get('path') != '${{ runner.temp }}/strict-scan-comparison/receipt.json'
+            or receipt['with'].get('if-no-files-found') != 'error'
+            or not steps.index(compare) < steps.index(receipt) < steps.index(summary)):
+        raise ValueError('retain the exact comparison receipt before reporting')
     if not steps.index(compare) < steps.index(upload) < steps.index(summary):
         raise ValueError('retain the complete comparison before reporting')
     comments = [step for step in steps if 'gh pr comment' in step.get('run', '')]
@@ -93,6 +100,8 @@ class WorkflowPermissionTests(unittest.TestCase):
         for target, key, value in (
             ('job', 'if', 'false'), ('job', 'continue-on-error', True),
             ('compare-scans', 'continue-on-error', True),
+            ('Upload exact comparison receipt', 'if', 'false'),
+            ('Upload exact comparison receipt', 'continue-on-error', True),
             ('upload-comparison-results', 'if', "steps.compare-scans.outputs.artifact == 'true'"),
             ('Post markdown as comment', 'if', "steps.compare-scans.outputs.artifact == 'false'"),
             ('Post comment about artifact', 'if', "steps.compare-scans.outputs.artifact == 'true'"),
@@ -149,6 +158,7 @@ class WorkflowPermissionTests(unittest.TestCase):
             environment = {**os.environ, 'PATH': str(directory) + os.pathsep + os.defpath,
                            'GH_TOKEN': 'fixture-token', 'IMAGE_TAG': 'immutable-fixture',
                            'GITHUB_WORKFLOW': 'Container', 'BUILD_IF_MISSING': 'true',
+                           'CANDIDATE_PRODUCER': 'true',
                            'CHECK_ONCE': 'true', 'PERMISSION_TEST_CALLS': str(calls)}
             result = subprocess.run(['bash', str(ROOT / '.github/scripts/wait-for-tak-images.sh')],
                                     env=environment, cwd=ROOT, capture_output=True, text=True, timeout=15)

@@ -21,6 +21,7 @@
 #                                this commit's inputs (WAIT_SECONDS, default
 #                                5400)
 #   build.sh --tag               print <version>-<key> for this commit
+#   build.sh --inputs            print the exact input label without building
 #
 # The inputs label is the git tree of this directory, so a change to the
 # Dockerfile or the init script makes a new image. <key> is the first 12 hex
@@ -51,12 +52,28 @@ version_image="${registry}/postgis:${version}"
 
 read -r -a arches <<< "${ARCHES:-amd64 arm64}"
 
+input_key() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$1" | sha256sum | cut -c1-12
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$1" | shasum -a 256 | cut -c1-12
+  else
+    echo "SHA-256 requires sha256sum or shasum." >&2
+    return 1
+  fi
+}
+
 # Committed tree of this directory. Uncommitted edits make a local-only key.
 inputs="$(git -C "${root}" rev-parse HEAD:.github/container-and-chart/postgis)"
-if [[ -n "$(git -C "${root}" status --porcelain -- .github/container-and-chart/postgis)" ]]; then
+recipe_status="$(git -C "${root}" status --porcelain -- .github/container-and-chart/postgis)"
+if [[ -n "${recipe_status}" ]]; then
   inputs="${inputs}-dirty"
 fi
-key="$(printf '%s' "${inputs}" | sha256sum | cut -c1-12)"
+if [[ "${1:-}" = "--inputs" ]]; then
+  printf '%s\n' "${inputs}"
+  exit 0
+fi
+key="$(input_key "${inputs}")"
 image="${registry}/postgis:${version}-${key}"
 
 # PUSHED_REFS names a file that gets one line per tag this run pushed or
@@ -74,6 +91,13 @@ write_version_tag() {
 if [[ "${1:-}" = "--tag" ]]; then
   echo "${version}-${key}"
   exit 0
+fi
+
+if [[ "${1:-}" = "--wait" && "${GITHUB_EVENT_NAME:-}" = "pull_request" ]]; then
+  fork="$(python3 "${root}/.github/scripts/candidate-consumer.py" is-fork)"
+  if [[ "${fork}" = "true" ]]; then
+    exec python3 "${root}/.github/scripts/candidate-consumer.py" ready --group postgis
+  fi
 fi
 
 # Print "<os>/<arch> <inputs label>" for each platform of an image or index.

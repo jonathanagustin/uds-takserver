@@ -19,6 +19,7 @@ on:
       - .github/container-and-chart/cloudtak/**
       - .github/workflows/cloudtak-image.yaml
       - .github/actions/attest-images/**
+      - .github/scripts/candidate-*.py
   push:
     branches:
       - main
@@ -28,6 +29,7 @@ on:
       - .github/container-and-chart/cloudtak/**
       - .github/workflows/cloudtak-image.yaml
       - .github/actions/attest-images/**
+      - .github/scripts/candidate-*.py
 
 permissions:
   contents: read
@@ -83,6 +85,8 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+    env:
+      PUSH_IMAGES: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       # build.sh fetches only upstream/cloudtak, shallow.
       - name: Checkout
@@ -92,6 +96,7 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
+        if: env.PUSH_IMAGES == 'true'
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
@@ -101,7 +106,6 @@ jobs:
       - name: Build and push
         env:
           PUSHED_REFS: ${{ runner.temp }}/pushed-refs.txt
-          PUSH_IMAGES: "true"
           ARCH: ${{ matrix.arch }}
           FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force }}
         run: |
@@ -111,7 +115,24 @@ jobs:
             ./.github/container-and-chart/cloudtak/build.sh --if-changed
           fi
 
+      - name: Preserve the verified fork candidate
+        if: env.PUSH_IMAGES != 'true'
+        run: |
+          version="$(git config -f .gitmodules submodule.upstream/cloudtak.branch)"
+          python3 .github/scripts/candidate-artifacts.py export --group cloudtak --architecture "${{ matrix.arch }}" --source-tag "${version}" --directory "${{ runner.temp }}/candidate"
+
+      - name: Upload the native fork candidate
+        if: env.PUSH_IMAGES != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-cloudtak-${{ matrix.arch }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 1
+
       - name: Attest the pushed images
+        if: env.PUSH_IMAGES == 'true'
         uses: ./.github/actions/attest-images
         with:
           refs-file: ${{ runner.temp }}/pushed-refs.txt
@@ -127,10 +148,12 @@ jobs:
     needs: [image-keys, build]
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       packages: write
       id-token: write
       attestations: write
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -139,6 +162,7 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
@@ -146,12 +170,20 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Write the multi-arch index
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           PUSHED_REFS: ${{ runner.temp }}/pushed-refs.txt
         run: ./.github/container-and-chart/cloudtak/build.sh --merge
 
       - name: Attest the pushed images
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: ./.github/actions/attest-images
         with:
           refs-file: ${{ runner.temp }}/pushed-refs.txt
           include-platforms: "false"
+
+      - name: Require both native fork candidates
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/candidate-consumer.py ready --group cloudtak

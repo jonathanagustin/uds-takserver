@@ -16,6 +16,7 @@ on:
       - ".github/workflows/scan.yaml"
       - ".github/scripts/pin-image-tags.sh"
       - ".github/scripts/strict-scan-compare.py"
+      - ".github/scripts/candidate-scan-mappings.py"
       - ".github/test-infra/release-binding.py"
       - ".github/test-infra/release-readiness.py"
       - "tests/test_strict_scan_compare.py"
@@ -37,12 +38,15 @@ jobs:
       actions: read
       contents: read
       packages: read
+      pull-requests: read
     timeout-minutes: 180
     # A newer push replaces the one before it. This job waits for images, and
     # the old run would otherwise wait on images the newer push has overwritten.
     concurrency:
       group: scan-images-${{ github.ref }}
       cancel-in-progress: true
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -166,8 +170,24 @@ jobs:
           tar -xzf "${archive}" -C "${RUNNER_TEMP}" grype
           sudo install -m 0755 "${RUNNER_TEMP}/grype" /usr/local/bin/grype
           grype version
-          python3 .github/scripts/strict-scan-compare.py \
-            --zarf-yaml-path zarf.yaml --source-root . --flavor upstream --architecture amd64 \
+          scan_options=(--zarf-yaml-path zarf.yaml)
+          if [[ -n "${CANDIDATE_IMAGE_STATE:-}" ]]; then
+            scan_yaml="${RUNNER_TEMP}/candidate-scan.yaml"
+            python3 .github/scripts/candidate-consumer.py scan-manifest --state "${CANDIDATE_IMAGE_STATE}" --output "${scan_yaml}"
+            candidate_state_sha256="$(sha256sum "${CANDIDATE_IMAGE_STATE}" | cut -d ' ' -f 1)"
+            mapping_file="${RUNNER_TEMP}/candidate-scan-mappings.txt"
+            # A checked command must finish before reading; process substitution
+            # would hide a mapping generator failure from this shell.
+            python3 .github/scripts/candidate-scan-mappings.py \
+              --state "${CANDIDATE_IMAGE_STATE}" --state-sha256 "${candidate_state_sha256}" > "${mapping_file}"
+            scan_options=(--zarf-yaml-path "${scan_yaml}" \
+              --candidate-state "${CANDIDATE_IMAGE_STATE}" --candidate-state-sha256 "${candidate_state_sha256}")
+            while IFS= read -r mapping; do
+              scan_options+=(--image-name-override "${mapping}")
+            done < "${mapping_file}"
+          fi
+          python3 .github/scripts/strict-scan-compare.py "${scan_options[@]}" \
+            --source-root . --flavor upstream --architecture amd64 \
             --output-directory "${RUNNER_TEMP}/strict-scan-comparison" --markdown comment.md
           chars="$(wc -m < comment.md)"
           echo "Characters in comparison: ${chars}"
@@ -250,3 +270,8 @@ jobs:
             --body-file summary-done.md \
             --edit-last \
             --create-if-none
+
+      - name: Remove this job's candidate source registry
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        timeout-minutes: 1
+        run: python3 .github/scripts/candidate-consumer.py cleanup --state "${RUNNER_TEMP}/uds-candidate/state.json"

@@ -178,6 +178,9 @@ jobs:
       actions: read
       contents: read
       packages: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       # wait-for-tak-images.sh builds from the upstream/takserver submodule
       # when no container run is publishing the tags.
@@ -244,7 +247,7 @@ jobs:
     # Shared by Test and the dedicated image workflow. Recheck the tag only
     # after this key's previous producer has finished. FIFO retains waiters.
     concurrency:
-      group: image-cloudtak-${{ needs.image-keys.outputs.cloudtak }}-${{ matrix.arch }}
+      group: image-cloudtak-${{ needs.image-keys.outputs.cloudtak }}-${{ matrix.arch }}${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && format('-consumer-{0}', github.run_id) || '' }}
       queue: max
       cancel-in-progress: false
     strategy:
@@ -259,10 +262,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     permissions:
+      actions: read
       contents: read
       packages: write
       id-token: write
       attestations: write
+      pull-requests: read
     steps:
       # build.sh fetches only upstream/cloudtak, shallow.
       - name: Checkout
@@ -279,13 +284,21 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build the CloudTAK image if its inputs changed
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           PUSHED_REFS: ${{ runner.temp }}/pushed-refs.txt
           PUSH_IMAGES: "true"
           ARCH: ${{ matrix.arch }}
         run: ./.github/container-and-chart/cloudtak/build.sh --if-changed
 
+      - name: Load the canonical native fork candidate
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/candidate-consumer.py load --group cloudtak --architecture "${{ matrix.arch }}"
+
       - name: Attest the pushed images
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: ./.github/actions/attest-images
         with:
           refs-file: ${{ runner.temp }}/pushed-refs.txt
@@ -303,10 +316,12 @@ jobs:
     needs: [image-keys, cloudtak-image]
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
       contents: read
       packages: write
       id-token: write
       attestations: write
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -322,15 +337,23 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Write the multi-arch CloudTAK index
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           PUSHED_REFS: ${{ runner.temp }}/pushed-refs.txt
         run: ./.github/container-and-chart/cloudtak/build.sh --merge
 
       - name: Attest the pushed images
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: ./.github/actions/attest-images
         with:
           refs-file: ${{ runner.temp }}/pushed-refs.txt
           include-platforms: "false"
+
+      - name: Require both native fork candidates
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/candidate-consumer.py ready --group cloudtak
 
   # Each job pushes 18-3.6-<key>-<arch>, keyed by the
   # .github/container-and-chart/postgis tree, only when no image with that
@@ -341,7 +364,7 @@ jobs:
     # Shared by Test and the dedicated image workflow. Recheck the tag only
     # after this key's previous producer has finished. FIFO retains waiters.
     concurrency:
-      group: image-postgis-${{ needs.image-keys.outputs.postgis }}-${{ matrix.arch }}
+      group: image-postgis-${{ needs.image-keys.outputs.postgis }}-${{ matrix.arch }}${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && format('-consumer-{0}', github.run_id) || '' }}
       queue: max
       cancel-in-progress: false
     strategy:
@@ -356,10 +379,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
+      actions: read
       contents: read
       packages: write
       id-token: write
       attestations: write
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -375,11 +400,18 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build the PostGIS image if its inputs changed
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           PUSHED_REFS: ${{ runner.temp }}/pushed-refs.txt
           PUSH_IMAGES: "true"
           ARCH: ${{ matrix.arch }}
         run: ./.github/container-and-chart/postgis/build.sh --if-changed
+
+      - name: Load the canonical native fork candidate
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/candidate-consumer.py load --group postgis --architecture "${{ matrix.arch }}"
 
       - name: Check a PostgreSQL 15 database upgrades
         env:
@@ -390,6 +422,7 @@ jobs:
             "ghcr.io/jonathanagustin/uds-takserver/postgis:${tag}-${ARCH}"
 
       - name: Attest the pushed images
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: ./.github/actions/attest-images
         with:
           refs-file: ${{ runner.temp }}/pushed-refs.txt
@@ -405,10 +438,12 @@ jobs:
     needs: [image-keys, postgis-image]
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
       contents: read
       packages: write
       id-token: write
       attestations: write
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -424,15 +459,23 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Write the multi-arch PostGIS index
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           PUSHED_REFS: ${{ runner.temp }}/pushed-refs.txt
         run: ./.github/container-and-chart/postgis/build.sh --merge
 
       - name: Attest the pushed images
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: ./.github/actions/attest-images
         with:
           refs-file: ${{ runner.temp }}/pushed-refs.txt
           include-platforms: "false"
+
+      - name: Require both native fork candidates
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/candidate-consumer.py ready --group postgis
 
   check-flavor:
     timeout-minutes: 10
@@ -836,6 +879,11 @@ jobs:
         env:
           PRIVATE_FIXTURE: ${{ steps.trust-fixture.outputs.directory }}
         run: python3 tests/prepare-trust-fixture.py cleanup --parent "${RUNNER_TEMP}" --directory "${PRIVATE_FIXTURE}"
+
+      - name: Remove this job's candidate source registry
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        timeout-minutes: 1
+        run: python3 .github/scripts/candidate-consumer.py cleanup --state "${RUNNER_TEMP}/uds-candidate/state.json"
 
   validate-upgrade:
     needs: [check-flavor, images, cloudtak-index, postgis-index]

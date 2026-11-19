@@ -22,6 +22,7 @@
 # out here if it is empty (a clone without --recurse-submodules).
 #
 #   build.sh --tag   build nothing. Print <version>-<key> for this commit.
+#   build.sh --inputs  print the exact input label without fetching or building.
 #
 # The images carry the label dev.uds-takserver.inputs: the pinned
 # upstream/takserver commit plus the git tree of this directory. <key> is the
@@ -36,12 +37,39 @@ root="$(cd "${here}/../../.." && pwd)"
 version="$(tr -d '[:space:]' < "${here}/version.txt")"
 
 input_key() {
-  printf '%s' "$1" | sha256sum | cut -c1-12
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$1" | sha256sum | cut -c1-12
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$1" | shasum -a 256 | cut -c1-12
+  else
+    echo "SHA-256 requires sha256sum or shasum." >&2
+    return 1
+  fi
 }
 
+if [[ "${1:-}" = "--inputs" ]]; then
+  sha="$(git -C "${root}" rev-parse HEAD:upstream/takserver)"
+  tree="$(git -C "${root}" rev-parse HEAD:.github/container-and-chart/docker)"
+  recipe_status="$(git -C "${root}" status --porcelain -- .github/container-and-chart/docker)"
+  if [[ -n "${recipe_status}" ]]; then tree="${tree}-dirty"; fi
+  if [[ -e "${root}/upstream/takserver/.git" ]]; then
+    actual="$(git -C "${root}/upstream/takserver" rev-parse HEAD)"
+    source_status="$(git -C "${root}/upstream/takserver" status --porcelain)"
+    if [[ "${actual}" != "${sha}" || -n "${source_status}" ]]; then
+      echo "upstream/takserver differs from its clean pinned source." >&2
+      exit 1
+    fi
+  fi
+  printf '%s\n' "${sha}-${tree}"
+  exit 0
+fi
+
 if [[ "${1:-}" = "--tag" ]]; then
-  inputs="$(git -C "${root}" rev-parse HEAD:upstream/takserver)-$(git -C "${root}" rev-parse HEAD:.github/container-and-chart/docker)"
-  echo "${version}-$(input_key "${inputs}")"
+  sha="$(git -C "${root}" rev-parse HEAD:upstream/takserver)"
+  tree="$(git -C "${root}" rev-parse HEAD:.github/container-and-chart/docker)"
+  inputs="${sha}-${tree}"
+  key="$(input_key "${inputs}")"
+  echo "${version}-${key}"
   exit 0
 fi
 
@@ -88,7 +116,8 @@ if [[ "${upstream_sha}" != "${pinned_sha}" ]]; then
   echo "Run: git submodule update --init --depth 1 upstream/takserver" >&2
   exit 1
 fi
-if [[ -n "$(git -C "${src}" status --porcelain)" ]]; then
+source_status="$(git -C "${src}" status --porcelain)"
+if [[ -n "${source_status}" ]]; then
   echo "upstream/takserver has local changes. The build uses the pinned commit only." >&2
   exit 1
 fi
@@ -96,11 +125,13 @@ echo "TAK source: upstream/takserver ${upstream_sha} (tree ${upstream_tree})"
 
 # Committed tree of this directory. Uncommitted edits make a local-only label.
 docker_tree="$(git -C "${root}" rev-parse HEAD:.github/container-and-chart/docker)"
-if [[ -n "$(git -C "${root}" status --porcelain -- .github/container-and-chart/docker)" ]]; then
+recipe_status="$(git -C "${root}" status --porcelain -- .github/container-and-chart/docker)"
+if [[ -n "${recipe_status}" ]]; then
   docker_tree="${docker_tree}-dirty"
 fi
 inputs="${upstream_sha}-${docker_tree}"
-echo "Image inputs: ${inputs} (key $(input_key "${inputs}"))"
+key="$(input_key "${inputs}")"
+echo "Image inputs: ${inputs} (key ${key})"
 
 targets="takserver-config takserver-messaging takserver-api takserver-plugins takserver-database-setup takserver-ignite"
 

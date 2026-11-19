@@ -101,6 +101,7 @@ jobs:
       contents: read
       packages: read
       id-token: write
+      pull-requests: read
     env:
       TEST_FLAVOR: upstream
       BENCH_STUDY: ${{ github.event.inputs.study || 'short' }}
@@ -275,6 +276,11 @@ jobs:
           path: bench/out
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Remove this job's candidate source registry
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        timeout-minutes: 1
+        run: python3 .github/scripts/candidate-consumer.py cleanup --state "${RUNNER_TEMP}/uds-candidate/state.json"
 
   summary:
     timeout-minutes: 10
