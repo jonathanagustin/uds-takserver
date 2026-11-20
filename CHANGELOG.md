@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/jonathanagustin/uds-takserver/compare/v1.1.0...v1.2.0) (2026-11-20)
+
+
+### Features
+
+* **demo:** apply tactical obsidian and fieldmark styling to video pipelines ([#768](https://github.com/jonathanagustin/uds-takserver/issues/768)) ([ac71991](https://github.com/jonathanagustin/uds-takserver/commit/ac71991faa72e91ab4a7de3d31fe842c437ea5d2))
+
 ## [1.1.0](https://github.com/jonathanagustin/uds-takserver/compare/v1.0.0...v1.1.0) (2026-11-20)
 
 

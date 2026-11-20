@@ -24,3 +24,21 @@ for arch in amd64 arm64; do
   cmp "$data/recheck.json" "$data/pair.json"
 done
 ```
+
+## Same-source repeat
+
+[Attempt 2](https://github.com/jonathanagustin/uds-takserver/actions/runs/44702615950/attempts/2)
+completed on both architectures at the same source commit. Each architecture
+has the same workflow, package input key, and package manifest digest as in
+attempt 1. Each archive retains the checksum of the package wrapper that its
+job actually acquired.
+
+| Architecture | Artifact ID | Cold Pod span (s) | Warm Pod span (s) |
+| --- | --- | --- | --- |
+| AMD64 | 14659014309 | 161 | 130 |
+| ARM64 | 14659925279 | 130 | 111 |
+
+The ZIPs match their published Actions digests. To replay these pairs, use the
+command above with `startup-$arch-attempt-2.zip` as the archive name. The two
+pairs per architecture show observed variation across independent jobs.
+Observer overhead, isolated class-loading duration, and tuning remain open.
