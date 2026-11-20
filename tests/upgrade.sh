@@ -356,7 +356,8 @@ YAML
   k get secret "${legacy_takclient}" -n takclients -o jsonpath='{.data.client\.key}' | base64 -d > "${work}/legacy-client/client.key"
   takclient_stream_check accept "${work}/legacy-client/client.pem" "${work}/legacy-client/client.key" "${legacy_takclient}"
   k delete "takclients.tak.jonathanagustin.github.io/${legacy_takclient}" -n takclients --timeout=180s
-  test -z "$(k get secret "${legacy_takclient}" -n takclients --ignore-not-found -o name)"
+  legacy_secret="$(k get secret "${legacy_takclient}" -n takclients --ignore-not-found -o name)"
+  test -z "${legacy_secret}"
   takclient_stream_check reject "${work}/legacy-client/client.pem" "${work}/legacy-client/client.key" "${legacy_takclient}"
   stream
 fi
@@ -467,7 +468,8 @@ if [[ -n "${legacy_takclient}" ]]; then
     echo "legacy CRD takclients.tak.jonathanagustin.github.io still exists after upgrade" >&2
     exit 1
   fi
-  test -z "$(k get secret "${legacy_takclient}" -n takclients --ignore-not-found -o name)"
+  legacy_secret="$(k get secret "${legacy_takclient}" -n takclients --ignore-not-found -o name)"
+  test -z "${legacy_secret}"
   takclient_stream_check reject "${work}/legacy-client/client.pem" "${work}/legacy-client/client.key" "${legacy_takclient}"
   stream
 
