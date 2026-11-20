@@ -6,7 +6,7 @@
 // Kind: TakClient
 // Group: tak
 // Version: v1alpha1
-// Domain: jonathanagustin.github.io
+// Domain: uds.dev
 
 export interface TakClientSpec {
   /**

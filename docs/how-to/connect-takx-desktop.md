@@ -66,7 +66,7 @@ against the server certificate, and keep certificate validation enabled.
 
    ```bash title="Provision the desktop test identity"
    uds zarf tools kubectl apply -f - <<'YAML'
-   apiVersion: tak.jonathanagustin.github.io/v1alpha1
+   apiVersion: tak.uds.dev/v1alpha1
    kind: TakClient
    metadata:
      name: takx-test

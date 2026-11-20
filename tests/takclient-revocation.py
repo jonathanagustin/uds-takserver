@@ -140,7 +140,7 @@ def main():
 
     try:
         kubectl("apply", "-f", "-", data=json.dumps({
-            "apiVersion": "tak.jonathanagustin.github.io/v1alpha1", "kind": "TakClient",
+            "apiVersion": "tak.uds.dev/v1alpha1", "kind": "TakClient",
             "metadata": {"name": control, "namespace": "takclients"},
             "spec": {"callsign": control, "groups": ["Operators"]},
         }))

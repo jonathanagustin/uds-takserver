@@ -129,7 +129,8 @@ def tak_tags(docs):
 
 
 def hostnames(text, domain):
-    return set(re.findall(r"[a-z0-9-]+\." + re.escape(domain) + r"\b", text))
+    # tak.uds.dev is the immutable TakClient CRD API group, not a cluster host.
+    return set(re.findall(r"[a-z0-9-]+\." + re.escape(domain) + r"\b", text)) - {"tak.uds.dev"}
 
 
 # CI installs uds. A local run without it skips instead of failing.
