@@ -30,6 +30,7 @@ import argparse
 import base64
 import concurrent.futures
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -46,6 +47,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+import zlib
 
 HERE = Path(__file__).resolve().parent
 TAKX = HERE.parent
@@ -61,6 +63,8 @@ OPTIONAL = {'compat', 'sqlite-jdbc', 'registry-cache', 'geos-cache', 'contour-el
             'contour-style', 'client58-public-api', 'mission-package', 'cot-conformance', 'elevation-download-compat'}
 # Tracked in the repository already; the Cesium recipe reads them from its own directory.
 SKIP_LOCKS = {'native-cesium/metadata.lock.json'}
+# Maven coordinates read from a downloaded POM become file names; accept plain names only.
+SAFE_COORDINATE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.+-]*')
 LOCK = threading.Lock()
 RECORDS = []
 
@@ -116,7 +120,7 @@ def download(url, target, limit=None, attempts=4):
                     stream.write(block)
             os.replace(name, target)
             return None
-        except (urllib.error.URLError, OSError, ValueError) as failure:
+        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as failure:
             error = f'{type(failure).__name__}: {failure}'
             if isinstance(failure, urllib.error.HTTPError) and failure.code in (401, 403, 404, 410):
                 break
@@ -457,17 +461,28 @@ def fetch_cesium(root):
                 # cesium-native has no archive digest in the lock; the recipe binds it to the
                 # pinned Git tree instead. Apply the same rule: every regular file is a pinned blob.
                 check = 'every archive file equals its pinned Git blob in takx/native-cesium/cesium-tree.json'
-                seen = {}
-                with tarfile.open(staging) as archive:
-                    for member in archive:
-                        if not member.isfile():
-                            continue
-                        data = archive.extractfile(member).read()
-                        seen[member.name.split('/', 1)[1]] = (hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest(), len(data))
+                # Anything that is not a directory or a pinned regular file (links, devices, a second
+                # member of the same name, a file outside the archive root) makes the archive unverified.
+                seen, unpinned = {}, 0
+                try:
+                    with tarfile.open(staging) as archive:
+                        for member in archive:
+                            if member.isdir():
+                                continue
+                            relative = member.name.split('/', 1)[1] if '/' in member.name else None
+                            if not member.isfile() or relative is None or relative in seen:
+                                unpinned += 1
+                                continue
+                            data = archive.extractfile(member).read()
+                            seen[relative] = (hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest(), len(data))
+                except (tarfile.TarError, zlib.error, EOFError, OSError) as failure:
+                    unpinned, note = unpinned + 1, f'archive is not readable: {type(failure).__name__}: {failure}'
                 wanted = {path: (item['sha'], item['size']) for path, item in tree.items()}
-                verified = seen == wanted
+                verified = seen == wanted and not unpinned
                 if not verified:
-                    note = f'archive has {len(seen)} files, tree has {len(wanted)} blobs, {sum(seen.get(k) != v for k, v in wanted.items())} differ or are missing'
+                    note = note or (f'archive has {len(seen)} files, tree has {len(wanted)} blobs, '
+                                    f'{sum(seen.get(k) != v for k, v in wanted.items())} differ or are missing, '
+                                    f'{unpinned} members are not pinned regular files')
             if verified and staging != target:
                 os.replace(staging, target)
             elif not verified and staging != target:
@@ -592,7 +607,7 @@ def pom_dependencies(repository, group, artifact, version, memo):
             try:
                 with urllib.request.urlopen(url, timeout=60) as response:
                     memo[key] = ET.fromstring(re.sub(rb'xmlns="[^"]+"', b'', response.read(), count=1))
-            except (urllib.error.URLError, ET.ParseError, OSError):
+            except (urllib.error.URLError, http.client.HTTPException, ET.ParseError, OSError):
                 memo[key] = None
         return memo[key]
 
@@ -607,6 +622,8 @@ def pom_dependencies(repository, group, artifact, version, memo):
     if not chain:
         return None
     properties = {'project.version': version, 'project.groupId': group, 'pom.version': version}
+    if len(chain) > 1:
+        properties['project.parent.version'] = chain[1][0][2]
     managed = {}
     for (g, a, v), pom in reversed(chain):
         for item in pom.findall('properties/*'):
@@ -682,7 +699,7 @@ def fetch_runtime_extras(root, takx, closure_names):
         try:
             with urllib.request.urlopen(url + '.sha1', timeout=60) as response:
                 published = response.read().decode().split()[0].lower()
-        except (urllib.error.URLError, OSError, IndexError) as failure:
+        except (urllib.error.URLError, http.client.HTTPException, OSError, IndexError) as failure:
             note = f'no published SHA-1: {failure}'
         if published and not (target.is_file() and digest(target, 'sha1') == published):
             error = download(url, target)
@@ -705,8 +722,14 @@ def fetch_runtime_extras(root, takx, closure_names):
                     record(kind='runtime-extra-jar', name=f'{g}:{a}:{v or "?"}', source=f'POM of {group}:{artifact}:{version}',
                            method='direct', verified=False, required=False, note='transitive version not resolvable from the POM chain')
                     continue
-                queue.append((repository if g.startswith('org.jogamp') else MAVEN, g, a, v, None,
-                              f'POM dependency of {group}:{artifact}:{version}'))
+                if not all(SAFE_COORDINATE.fullmatch(part) for part in (g, a, v)):
+                    record(kind='runtime-extra-jar', name=f'{g}:{a}:{v}', source=f'POM of {group}:{artifact}:{version}',
+                           method='direct', verified=False, required=False, note='transitive coordinate is not a plain Maven name; refused')
+                    continue
+                origin = repository if g.startswith('org.jogamp') else MAVEN
+                queue.append((origin, g, a, v, None, f'POM dependency of {group}:{artifact}:{version}'))
+                if g == 'org.bytedeco':  # JavaCPP presets load their natives from the classifier JAR
+                    queue.append((origin, g, a, v, 'linux-x86_64', f'linux natives of {g}:{a}:{v}'))
 
 
 # --------------------------------------------------------------------------- Debian tools

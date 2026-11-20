@@ -75,7 +75,7 @@ while (($#)); do
     --docker-arg) extra+=("$2"); shift 2;;
     --java-truststore) truststore_only=1; shift;;
     --) shift; break;;
-    -h|--help) sed -n '5,44p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help) sed -n '5,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "run-in-toolchain.sh: unknown option '$1' (use -- before the command)" >&2; exit 2;;
   esac
 done
@@ -149,6 +149,8 @@ args+=("$image")
 
 if [[ -n "$log" ]]; then
   case "$log" in "$root"/*) ;; *) echo "run-in-toolchain.sh: --log must be under $root" >&2; exit 2;; esac
+  # A '..' component would name a file outside the work root after all.
+  case "/${log#"$root"/}/" in */../*) echo "run-in-toolchain.sh: --log must be under $root" >&2; exit 2;; esac
   mkdir -p "$(dirname "$log")"
   # The command runs as given; only its output is redirected, and the exit
   # status of the container is the exit status of the command.
