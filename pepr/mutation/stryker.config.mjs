@@ -7,10 +7,13 @@ export default {
   jsonReporter: { fileName: "mutation/reports/mutation.json" },
   cleanTempDir: "always",
   tempDirName: "mutation/.stryker-tmp",
-  mutate: ["scripts/webhook-scope.ts"],
+  mutate: [
+    "scripts/webhook-scope.ts",
+    "capabilities/oidc-render.ts",
+  ],
   testRunner: "command",
   commandRunner: {
-    command: "PEPR_MODE=build node --test capabilities/webhook-scope.test.ts",
+    command: "PEPR_MODE=build node --test capabilities/webhook-scope.test.ts capabilities/oidc-render.test.ts",
   },
   coverageAnalysis: "off",
   concurrency: 2,
