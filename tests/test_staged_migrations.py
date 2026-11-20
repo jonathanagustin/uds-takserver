@@ -326,7 +326,7 @@ class StagedMigrationTests(unittest.TestCase):
     def test_real_pinning_restores_only_reviewed_tasks_after_binding(self):
         root, candidate, env = self.pinned_fixture()
         changed = subprocess.check_output(['git', 'diff', '--name-only'], cwd=root).decode().splitlines()
-        self.assertEqual(len(changed), 7)
+        self.assertEqual(len(changed), 8)
         before = {name: (root / name).read_bytes() for name in changed if name != 'tasks.yaml'}
         bound = {path.name: path.read_bytes() for path in candidate.iterdir()}
         spec = importlib.util.spec_from_file_location('actual_staged_driver', root / 'tests/velero-ownership/drive.py')
