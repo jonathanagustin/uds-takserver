@@ -1,0 +1,5 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+global:
+  domain: uds.dev

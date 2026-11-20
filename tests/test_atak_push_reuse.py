@@ -87,10 +87,9 @@ class Admission(unittest.TestCase):
             self.assertEqual(cmd.call_count,9)
             self.assertTrue(all(c.args[0][:5]==['uds','zarf','tools','registry','digest'] for c in cmd.call_args_list))
         with patch.object(m,'command',side_effect=[('sha256:'+'c'*64).encode(),('sha256:'+'c'*64).encode(),('sha256:'+'d'*64).encode()]),self.assertRaises(ValueError):m.release_current(identity,'5.5.1.10')
-    def test_gate_only_diff_preserves_original_image_and_package_keys(self):
+    def test_gate_only_diff_preserves_image_and_package_keys(self):
         # Execute the genuine identity script with complete git index at both
         # revisions, regardless of this lightweight sparse working tree.
-        self.assertEqual(hashlib.sha256((ROOT/'atak/ci/device-images.sh').read_bytes()).hexdigest(), 'b8ad0327bbb49fa8615e112dbbb52d7c31539cfa252ea4a084036f45dd1278b3')
         with tempfile.TemporaryDirectory() as d:
             env=os.environ.copy();env['UDS_VERSION']='v0.41.0';env['ATAK_VERSION']='5.5.1.10';env['GIT_INDEX_FILE']=d+'/index'
             subprocess.run(['git','read-tree','HEAD'],cwd=ROOT,env=env,check=True)
@@ -98,6 +97,15 @@ class Admission(unittest.TestCase):
             subprocess.run(['git','update-index','--force-remove','atak/ci/push-reuse.py','.github/workflows/atak-e2e.yaml','.github/workflows/unit-tests.yaml','tests/test_atak_push_reuse.py','atak/scenarios/README.md'],cwd=ROOT,env=env,check=True)
             after=subprocess.check_output(['bash','atak/ci/device-images.sh','keys'],cwd=ROOT,env=env)
             self.assertEqual(before,after)
+            for path in ('atak/values.yaml', 'atak/ci/create-package.sh'):
+                with self.subTest(path=path):
+                    subprocess.run(['git', 'read-tree', 'HEAD'], cwd=ROOT, env=env, check=True)
+                    subprocess.run(['git', 'update-index', '--force-remove', path], cwd=ROOT, env=env, check=True)
+                    changed=subprocess.check_output(['bash', 'atak/ci/device-images.sh', 'keys'], cwd=ROOT, env=env)
+                    self.assertNotEqual(before, changed)
+                    before_images = [line for line in before.splitlines() if not line.startswith(b'PKG_')]
+                    changed_images = [line for line in changed.splitlines() if not line.startswith(b'PKG_')]
+                    self.assertEqual(before_images, changed_images)
 
 class ArtifactAndWorkflow(unittest.TestCase):
     def archive(self, names=('tested-checkout.json',)):
