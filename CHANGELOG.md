@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/jonathanagustin/uds-takserver/compare/v0.19.0...v0.20.0) (2026-11-20)
+
+
+### Features
+
+* **takx:** reuse verified GEOS components in read-only PR builds ([#758](https://github.com/jonathanagustin/uds-takserver/issues/758)) ([1f2dc93](https://github.com/jonathanagustin/uds-takserver/commit/1f2dc939ca4d24681cdc1e52914122bde91964d1))
+
 ## [0.19.0](https://github.com/jonathanagustin/uds-takserver/compare/v0.18.2...v0.19.0) (2026-11-20)
 
 
