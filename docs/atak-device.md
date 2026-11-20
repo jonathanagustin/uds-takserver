@@ -8,7 +8,7 @@ The device runs a Team Awareness Kit (TAK) client. It is optional and separate f
 
 ## Requirements
 
-- amd64 nodes with `/dev/kvm`. The VM image is Android-x86 and the Android application package (APK) is built for `x86_64` only. There is no arm64 build (see [Supported architectures](../README.md#supported-architectures)).
+- amd64 nodes with `/dev/kvm`. The VM image is Android-x86 and the Android application package (APK) is built for `x86_64` only. There is no arm64 build (see [Supported architectures](reference.md#supported-architectures)).
 - A 2Gi guest and 2 vCPU for the VM, plus KubeVirt. 2Gi is the configured guest in `atak/deploy/device.yaml`. It is the size this trial asks the scheduler for, together with KubeVirt's launcher overhead. A successful boot at 2Gi would not make it a measured minimum.
 - The standard TAK streaming port 8089 on the passthrough gateway (`standardPorts` in `charts/takserver/values.yaml`, [ADR 12](../adr/0012-standard-tak-ports-on-the-passthrough-gateway.md)) and the in-cluster Domain Name System (DNS) rewrite, so the device can reach `takserver-stream.<domain>` the way a phone would.
 
