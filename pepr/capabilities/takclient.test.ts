@@ -346,6 +346,28 @@ test("the CRL is signed by the CA and lists the revoked serials", () => {
   assert.equal(crlNextUpdate("not a crl"), undefined);
 });
 
+test("CRL numbers and revoked serials with the high bit set encode as positive DER integers", () => {
+  const pem = buildCrl(
+    CA,
+    [
+      { serial: "8001", date: NOW.toISOString() },
+      { serial: "00007f", date: NOW.toISOString() },
+    ],
+    128,
+    NOW,
+    730,
+  );
+  const fields = crlParts(pem).tbs.value as forge.asn1.Asn1[];
+  const serials = (fields[5].value as forge.asn1.Asn1[]).map(entry =>
+    forge.util.bytesToHex((entry.value as forge.asn1.Asn1[])[0].value as string),
+  );
+  assert.deepEqual(serials, ["008001", "7f"]);
+  const exts = ((fields[6].value as forge.asn1.Asn1[])[0].value as forge.asn1.Asn1[]);
+  const crlNumOctets = (exts[0].value as forge.asn1.Asn1[])[1].value as string;
+  const crlNumInt = forge.asn1.fromDer(crlNumOctets);
+  assert.equal(forge.util.bytesToHex(crlNumInt.value as string), "0080");
+});
+
 function unzip(buf: Buffer): Record<string, string> {
   const out: Record<string, string> = {};
   let offset = 0;

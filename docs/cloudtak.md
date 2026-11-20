@@ -7,7 +7,7 @@
 | Object | Namespace | Purpose |
 | --- | --- | --- |
 | Deployment `cloudtak` | `cloudtak` | CloudTAK's nginx and application programming interface (API) process on port 5000, plus the `sso` and `bootstrap` containers |
-| StatefulSet `cloudtak-postgis` | `cloudtak` | CloudTAK's own PostGIS database, `ghcr.io/jonathanagustin/uds-takserver/postgis:18-3.6` (amd64 and arm64, see [architecture decision record (ADR) 18](../adr/0018-upgrade-postgres-in-place.md)), 2Gi volume |
+| StatefulSet `cloudtak-postgis` | `cloudtak` | CloudTAK's own PostGIS database, `ghcr.io/jonathanagustin/uds-takserver/postgis:18-3.6` (amd64 and arm64), 2Gi volume |
 | Secret `cloudtak` | `cloudtak` | Session signing secret, database password, and the password of the TAK account behind the admin connection. Generated on first install and kept on upgrade |
 | Secret `cloudtak-sso` | `cloudtak` | Keycloak client secret, key `OIDC_CLIENT_SECRET`. Written by the Unified Defense Stack (UDS) operator |
 | Secret `cloudtak-tak-admin` | `cloudtak` | `ca.pem`, `admin.pem`, `admin.key`, and `CAPASS`. The `takserver-oidc` watcher copies the certificates from ConfigMap `takserver/cert-migration`, the key from Secret `takserver-certs`, and `CAPASS` from Secret `takserver-keystore` |
@@ -247,7 +247,7 @@ The namespace has no waypoint of its own: it is ambient and Authservice is not e
 
 ## Basemap
 
-New users get OpenStreetMap as their default basemap. CloudTAK fetches the basemap's tiles through nginx in its own container, which proxies and caches them from the tile host. See [ADR 11](../adr/0011-cloudtak-default-basemap-through-a-tile-proxy.md) for why it is not CloudTAK's own tile route.
+New users get OpenStreetMap as their default basemap. CloudTAK fetches the basemap's tiles through nginx in its own container, which proxies and caches them from the tile host.
 
 - The browser asks for `https://map.<domain>/uds-basemap/tiles/{z}/{x}/{y}?token=<session>`. nginx checks the token with CloudTAK, so only signed-in users get tiles. Zoom levels outside `minzoom`..`maxzoom` get 404, and a session that asks for more than 20 tiles a second after a burst of 200 gets 429.
 - nginx sends the tile host only Host, Accept, the browser's Referer, and a User-Agent such as `CloudTAK/13.112.3 (uds-takserver; +https://github.com/jonathanagustin/uds-takserver; contact: <basemap.contact>)`. It verifies the host's TLS certificate.
@@ -308,4 +308,4 @@ CloudTAK is licensed under AGPL-3.0. This repository does not include its source
 
 ## Resources
 
-CloudTAK requests 100m of central processing unit (CPU) capacity and 256Mi memory, with a 500m and 768Mi limit. The `sso` container requests 50m and 128Mi, with a 500m and 512Mi limit. It loads CloudTAK's modules. On run 40174810574 the steady working set was 146Mi for CloudTAK and 67Mi for `sso`; an earlier note had `sso` near 270 MB, which is why the limit stays 512Mi. The bootstrap container requests 10m and 48Mi, with a 200m and 128Mi limit (steady 19Mi). PostGIS requests 50m and 128Mi, with a 500m and 512Mi limit (steady 96Mi). The API's Node heap is capped at 640 MB with `NODE_OPTIONS`. Upstream asks for 6 GB.
+CloudTAK requests 100m of central processing unit (CPU) capacity and 256Mi memory, with a 500m and 768Mi limit. The `sso` container requests 50m and 128Mi, with a 500m and 512Mi limit. It loads CloudTAK's modules. Typical steady working set is around 146Mi for CloudTAK and 67Mi for `sso` (with headroom up to 512Mi for startup spikes). The bootstrap container requests 10m and 48Mi, with a 200m and 128Mi limit (steady 19Mi). PostGIS requests 50m and 128Mi, with a 500m and 512Mi limit (steady 96Mi). The API's Node heap is capped at 640 MB with `NODE_OPTIONS`. Upstream asks for 6 GB.

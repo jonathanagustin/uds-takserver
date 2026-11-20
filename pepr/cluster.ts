@@ -75,8 +75,10 @@ export interface DeploymentDoc {
   };
   status?: {
     observedGeneration?: number;
+    replicas?: number;
     availableReplicas?: number;
     updatedReplicas?: number;
+    unavailableReplicas?: number;
   };
 }
 

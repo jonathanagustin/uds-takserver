@@ -299,6 +299,7 @@ export interface StartupContext {
   identityPhase?: "shared" | "transition" | "strict" | "rollback";
   image: string;
   issuerHost?: string;
+  ssoEnabled?: boolean;
   pluginsMemory?: PluginsMemory;
 }
 
@@ -348,7 +349,7 @@ export function pluginsMemory(env: NodeJS.ProcessEnv): PluginsMemory {
 
 function desiredInits(app: TakDeploy, ctx: StartupContext): ContainerDoc[] {
   const inits = [waitInit(ctx.image, waitMode(app))];
-  if (app === "takserver-api" || app === "takserver-messaging") {
+  if ((app === "takserver-api" || app === "takserver-messaging") && ctx.ssoEnabled !== false) {
     if (!ctx.issuerHost) {
       throw new Error("CoreConfig has no openId configurationUri");
     }
@@ -397,7 +398,7 @@ export function shapePodSpec(spec: WorkloadPodSpec, app: TakDeploy, ctx: Startup
   if (ensureVolume(volumes, scriptVolume())) {
     changed = true;
   }
-  const needsTrust = app === "takserver-api" || app === "takserver-messaging";
+  const needsTrust = (app === "takserver-api" || app === "takserver-messaging") && ctx.ssoEnabled !== false;
   if (needsTrust) {
     for (const volume of trustVolumes()) {
       if (ensureVolume(volumes, volume)) {
@@ -514,10 +515,11 @@ export async function prepareDeployment(
   if (!isTakDeploy(name)) {
     return;
   }
-  const issuer = name === "takserver-config" || name === "takserver-plugins" ? undefined : await readIssuer(cluster);
+  const sso = name === "takserver-config" || name === "takserver-plugins" ? { ssoEnabled: true } : await readSsoConfig(cluster);
   const { next } = shapeDeployment(deploy, {
     image: env.RENDER_IMAGE ?? "",
-    issuerHost: issuer,
+    issuerHost: sso.issuerHost,
+    ssoEnabled: sso.ssoEnabled,
     pluginsMemory: pluginsMemory(env),
     identityPhase: workloadIdentityPhase(env),
   });
@@ -772,14 +774,27 @@ function issuerMissing(err: unknown): boolean {
   return err instanceof Error && err.message.includes("configurationUri");
 }
 
+const SSO_ENABLED_ANNOTATION = "uds.dev/sso-enabled";
+
+interface SsoConfig {
+  ssoEnabled: boolean;
+  issuerHost?: string;
+}
+
 // A missing CoreConfig is a real rejection. A thrown read is retried so one
 // apiserver blip does not deny the pod; admission is not retried by itself.
-async function readIssuer(cluster: Cluster): Promise<string> {
+async function readSsoConfig(cluster: Cluster): Promise<SsoConfig> {
   let last: unknown;
   for (let attempt = 0; attempt < ISSUER_TRIES; attempt++) {
     try {
       const configMap = await cluster.getConfigMap("takserver", CORE_CONFIGMAP);
-      return issuerFrom(configMap?.data?.["CoreConfig.xml"]);
+      if (configMap?.metadata?.annotations?.[SSO_ENABLED_ANNOTATION] === "false") {
+        return { ssoEnabled: false };
+      }
+      return {
+        ssoEnabled: true,
+        issuerHost: issuerFrom(configMap?.data?.["CoreConfig.xml"]),
+      };
     } catch (err) {
       if (issuerMissing(err)) {
         throw err;
@@ -810,8 +825,14 @@ export async function reconcileDeployment(
     return;
   }
   const image = env.RENDER_IMAGE ?? "";
-  const issuer = name === "takserver-config" || name === "takserver-plugins" ? undefined : await readIssuer(cluster);
-  const { next, changed } = shapeDeployment(deploy, { image, issuerHost: issuer, pluginsMemory: pluginsMemory(env), identityPhase: workloadIdentityPhase(env) });
+  const sso = name === "takserver-config" || name === "takserver-plugins" ? { ssoEnabled: true } : await readSsoConfig(cluster);
+  const { next, changed } = shapeDeployment(deploy, {
+    image,
+    issuerHost: sso.issuerHost,
+    ssoEnabled: sso.ssoEnabled,
+    pluginsMemory: pluginsMemory(env),
+    identityPhase: workloadIdentityPhase(env),
+  });
   if (!changed) {
     return;
   }
@@ -829,10 +850,17 @@ export async function preparePod(pod: PodLike, env: NodeJS.ProcessEnv, cluster: 
     addRender(pod, image);
     return;
   }
-  const issuer = app === "takserver-config" || app === "takserver-plugins" ? undefined : await readIssuer(cluster);
+  const sso = app === "takserver-config" || app === "takserver-plugins" ? { ssoEnabled: true } : await readSsoConfig(cluster);
   const spec = (pod.spec ??= {}) as WorkloadPodSpec;
   // Pod labels are not proof of controller ownership; preserve standalone negative controls.
-  shapePodSpec(spec, app, { image, issuerHost: issuer, pluginsMemory: pluginsMemory(env), identityPhase: workloadIdentityPhase(env), manageIdentity: false });
+  shapePodSpec(spec, app, {
+    image,
+    issuerHost: sso.issuerHost,
+    ssoEnabled: sso.ssoEnabled,
+    pluginsMemory: pluginsMemory(env),
+    identityPhase: workloadIdentityPhase(env),
+    manageIdentity: false,
+  });
   addRender(pod, image);
 }
 

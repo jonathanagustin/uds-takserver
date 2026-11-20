@@ -128,12 +128,14 @@ export function rolloutDone(deploy: DeploymentDoc | undefined): boolean {
   const want = deploy.spec?.replicas ?? 1;
   const updated = deploy.status?.updatedReplicas ?? 0;
   const available = deploy.status?.availableReplicas ?? 0;
+  const replicas = deploy.status?.replicas ?? updated;
+  const unavailable = deploy.status?.unavailableReplicas ?? 0;
   const generation = deploy.metadata?.generation;
   const observed = deploy.status?.observedGeneration;
-  if (typeof generation === "number" && typeof observed === "number" && observed < generation) {
+  if (typeof generation === "number" && (observed ?? 0) < generation) {
     return false;
   }
-  return updated >= want && available >= want;
+  return updated >= want && available >= want && replicas <= updated && unavailable === 0;
 }
 
 export async function waitRollout(cluster: Cluster, namespace: string, name: string, timeoutMs = 180_000): Promise<void> {

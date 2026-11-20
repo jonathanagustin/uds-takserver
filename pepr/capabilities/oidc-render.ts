@@ -101,7 +101,9 @@ function renderVolumes(): Volume[] {
     { name: CONFIG_MOUNT, emptyDir: {} },
     { name: "oidc-script", configMap: { name: "takserver-oidc-render" } },
     { name: "oidc-template", configMap: { name: "core-config" } },
-    { name: "oidc-secret", secret: { secretName: "takserver-sso" } },
+    // Optional so sso.enabled=false pods can schedule; render-oidc.sh fails
+    // closed whenever CoreConfig.xml still references ${TAK_OIDC_CLIENT_SECRET}.
+    { name: "oidc-secret", secret: { secretName: "takserver-sso", optional: true } },
     { name: "keystore-secret", secret: { secretName: "takserver-keystore" } },
     { name: CRL_VOLUME, secret: { secretName: CRL_VOLUME, items: [{ key: "ca.crl", path: "ca.crl" }] } },
   ];

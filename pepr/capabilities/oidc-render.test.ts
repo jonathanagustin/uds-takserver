@@ -153,3 +153,11 @@ test("a cert volume is replaced when it still has a ConfigMap or another Secret"
   assert.equal(addRender(other, IMAGE), true);
   assert.deepEqual(other.spec?.volumes?.find(v => v.name === CERT_VOLUME)?.secret, { secretName: CERT_SECRET });
 });
+
+test("takserver-sso volume is optional so sso.enabled=false pods can schedule", () => {
+  const p = certVolume("takserver-api");
+  assert.equal(addRender(p, IMAGE), true);
+  const sso = p.spec?.volumes?.find(v => v.name === "oidc-secret");
+  assert.deepEqual(sso?.secret, { secretName: "takserver-sso", optional: true });
+});
+
