@@ -26,6 +26,35 @@ T = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(T)
 require = T.require
 
+def node_agent_field_owners(managed_fields):
+    """Project four reviewed paths without persisting field values or arbitrary names."""
+    fields = {
+        'args': ('f:args',),
+        'image': ('f:image',),
+        'nodeNameFieldRef': ('f:env', 'k:{"name":"NODE_NAME"}', 'f:valueFrom', 'f:fieldRef'),
+        'namespaceFieldRef': ('f:env', 'k:{"name":"VELERO_NAMESPACE"}', 'f:valueFrom', 'f:fieldRef'),
+    }
+    owners = {name: set() for name in fields}
+    for entry in managed_fields:
+        if entry.get('fieldsType') != 'FieldsV1' or entry.get('subresource'):
+            continue
+        container = entry.get('fieldsV1', {})
+        for key in ('f:spec', 'f:template', 'f:spec', 'f:containers', 'k:{"name":"node-agent"}'):
+            container = container.get(key, {})
+        manager = entry.get('manager')
+        if manager not in ('zarf', 'kubectl-create'):
+            manager = 'other'
+        for name, path in fields.items():
+            node = container
+            for part in path:
+                node = node.get(part)
+                if node is None:
+                    break
+            if node is not None:
+                owners[name].add(manager)
+    return {name: sorted(values) for name, values in owners.items()}
+
+
 REVIEWED_HELPERS = ('tests/ephemeral-cluster.py', 'tests/velero-ownership/drive.py',
                          'tests/velero-ownership/transfer.py', 'tests/velero-ownership/observe.py',
                          'tests/backup-restore.sh', 'tests/backup-names.sh', 'tests/api-smoke.sh',
@@ -146,8 +175,15 @@ class Driver:
                 meta = current.get('metadata', {})
                 record['agentAtFailure'] = {'uid': meta.get('uid'), 'resourceVersion': meta.get('resourceVersion'),
                                             'owner': list(T.ownership(current)), 'terminating': bool(meta.get('deletionTimestamp'))}
+                if (name in ('deploy-core-agent', 'deploy-local-agent') and meta.get('uid')
+                        and meta['uid'] == self.transfer.uid and meta.get('resourceVersion')):
+                    managed = self.read_command(['kubectl', '--context', self.context, 'get', 'daemonset',
+                                                 'node-agent', '-n', 'velero', '-o', 'json', '--show-managed-fields'])
+                    snapshot = json.loads(managed)['metadata']
+                    if (snapshot.get('uid'), snapshot.get('resourceVersion')) == (meta['uid'], meta['resourceVersion']):
+                        record['agentFieldOwners'] = node_agent_field_owners(snapshot['managedFields'])
             except Exception:
-                record['agentAtFailure'] = 'unavailable; no identity inferred'
+                record.setdefault('agentAtFailure', 'unavailable; no identity inferred')
             self.journal()
             raise
         self.journal()
