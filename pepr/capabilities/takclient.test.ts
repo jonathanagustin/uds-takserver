@@ -46,6 +46,7 @@ import {
   CLIENT_NAME,
   FINGERPRINT,
   ISSUER,
+  LEGACY_GROUP,
   clientLabelValue,
   condition,
   CRL_SECRET,
@@ -1190,6 +1191,70 @@ test("legacy certificates migrate through the CRL restart fallback before TAK en
   const withoutCallsign = fake();
   await reconcileCurrentEvent(client({ metadata: { name: "takclient-test", annotations: { [SERIAL]: "bb" } } }), "MODIFIED", withoutCallsign.d);
   assert.equal(withoutCallsign.calls.tak[0].method, "PUT");
+});
+
+test("reconcile and finalize revoke legacy-group credential Secrets before reissuing or deleting", async () => {
+  const { d, calls, store } = fake();
+  const oldFp = "aa:bb:cc:dd";
+  const oldNotAfter = new Date(NOW.getTime() + 10 * 86400_000).toISOString();
+  store.secrets["takclients/takclient-test"] = {
+    metadata: {
+      annotations: {
+        [`${LEGACY_GROUP}/serial`]: "01ab",
+        [`${LEGACY_GROUP}/not-after`]: oldNotAfter,
+        [`${LEGACY_GROUP}/fingerprint`]: oldFp,
+        [`${LEGACY_GROUP}/callsign`]: "legacy-callsign",
+        [`${LEGACY_GROUP}/issuer`]: "tak",
+        [`${LEGACY_GROUP}/takclient`]: "takclient-test",
+      },
+    },
+    data: { "client.pem": b64("old") },
+  };
+  assert.equal(await reconcileCurrentEvent(client(), "ADDED", d), false);
+  assert.ok(calls.tak.some(call => call.path === `/Marti/api/certadmin/cert/${encodeURIComponent(oldFp)}`));
+  assert.ok(calls.tak.some(call => call.path.startsWith("/Marti/api/certadmin/cert/revoke/")));
+  assert.ok(calls.tak.some(call => call.method === "DELETE" && call.path.endsWith("/legacy-callsign")));
+  const crl = store.secrets[`takserver/${CRL_SECRET}`] as SecretDoc & { labels: Record<string, string> };
+  assert.deepEqual(readCrlState(crl).entries.map(entry => entry.serial), ["01ab"]);
+  assert.equal(crl.labels["uds.dev/pod-reload"], "false");
+  const updated = store.secrets["takclients/takclient-test"].metadata!.annotations!;
+  assert.equal(updated[ISSUER], "tak");
+  assert.notEqual(updated[SERIAL], "01ab");
+  assert.equal(updated[`${LEGACY_GROUP}/serial`], undefined);
+
+  // Missing fingerprint on a legacy-group TAK-issued Secret must still block replacement.
+  const missingFp = fake();
+  missingFp.store.secrets["takclients/takclient-test"] = {
+    metadata: {
+      annotations: {
+        [`${LEGACY_GROUP}/serial`]: "01ac",
+        [`${LEGACY_GROUP}/issuer`]: "tak",
+      },
+    },
+    data: {},
+  };
+  assert.equal(await reconcileCurrentEvent(client(), "ADDED", missingFp.d), true);
+  assert.equal(missingFp.calls.status.at(-1)!.conditions[0].status, "False");
+
+  // Finalize before reissue also revokes a legacy-group TAK-issued Secret.
+  const deleting = fake();
+  deleting.store.secrets["takclients/takclient-test"] = {
+    metadata: {
+      annotations: {
+        [`${LEGACY_GROUP}/serial`]: "01ad",
+        [`${LEGACY_GROUP}/not-after`]: oldNotAfter,
+        [`${LEGACY_GROUP}/fingerprint`]: oldFp,
+        [`${LEGACY_GROUP}/callsign`]: "legacy-delete",
+        [`${LEGACY_GROUP}/issuer`]: "tak",
+      },
+    },
+    data: {},
+  };
+  assert.equal(await finalizeCurrentEvent(client(), deleting.d), true);
+  assert.ok(deleting.calls.tak.some(call => call.path === `/Marti/api/certadmin/cert/${encodeURIComponent(oldFp)}`));
+  assert.ok(deleting.calls.tak.some(call => call.method === "DELETE" && call.path.endsWith("/legacy-delete")));
+  assert.deepEqual(readCrlState(deleting.store.secrets[`takserver/${CRL_SECRET}`]).entries.map(entry => entry.serial), ["01ad"]);
+  assert.equal(deleting.store.secrets["takclients/takclient-test"], undefined);
 });
 
 test("TAK-issued certificate revocation failures retain the finalizer and Secret", async () => {

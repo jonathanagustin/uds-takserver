@@ -156,6 +156,41 @@ Delete the `TakClient` to remove the device. The watcher first revokes its certi
 
 On upgrade, existing locally signed certificates are reissued through TAK. The previous certificate still takes the CRL restart path once; connected clients can be interrupted during this migration. Its reload request is retained until both API and messaging pods were created after that CRL update, even if another client is revoked meanwhile. Import the updated data package into devices after migration. Existing `spec.validityDays` fields remain accepted but are deprecated and ignored; change the global TAK CA lifetime instead. The random file-user password used for enrollment and recovery stays in watcher-only Secret `takserver/takclient-enrollment`. Device Secrets and data packages never include it; access to the device material does not grant Basic enrollment capability.
 
+### Migrating from `tak.jonathanagustin.github.io`
+
+Releases before `tak.uds.dev/v1alpha1` served `TakClient` under `tak.jonathanagustin.github.io/v1alpha1`. Because the CustomResourceDefinition (CRD) is renamed, existing `TakClient` objects must be recreated under `tak.uds.dev/v1alpha1`:
+
+- **Generated Secret ownership**: Credential Secrets in `takclients/<name>` do not carry Kubernetes `ownerReferences`; ownership is tracked by the `app.kubernetes.io/managed-by: takserver-oidc` label, the `<group>/takclient` label/annotation, and the `TakClient` finalizer. Deleting a `TakClient` while the old controller is running revokes its certificate and deletes the Secret; removing `pepr.dev/finalizer` before deleting the old `TakClient` keeps the Secret and its issued certificate active across the upgrade window.
+- **Issued credentials**: When a `tak.uds.dev/v1alpha1` `TakClient` reconciles against an existing Secret carrying `tak.jonathanagustin.github.io/*` annotations, the watcher revokes the prior certificate through TAK's certadmin API, records its serial in `takserver/takserver-crl`, unregisters the prior file user, enrolls a replacement certificate, and overwrites the Secret's metadata with `tak.uds.dev/*` keys. Distribute the updated `package.zip` to devices after recreation.
+- **Previously revoked credentials**: Revocations already recorded in TAK's certificate table and `takserver/takserver-crl` do not depend on the `TakClient` API group prefix and remain revoked across the upgrade.
+
+To migrate existing `TakClient` resources without stalling CRD removal:
+
+1. Export existing `TakClient` manifests before upgrading:
+
+   ```bash
+   kubectl get takclients.tak.jonathanagustin.github.io -n takclients -o yaml > takclients-backup.yaml
+   ```
+
+2. Remove the old-group `TakClient` objects before upgrading so Helm can replace `takclients.tak.jonathanagustin.github.io` with `takclients.tak.uds.dev` without finalizer deadlock.
+   - To revoke immediately before upgrading, delete them normally:
+
+     ```bash
+     kubectl delete takclients.tak.jonathanagustin.github.io --all -n takclients
+     ```
+
+   - To keep existing device certificates working during the upgrade window and rotate them when recreating each `TakClient`, strip `pepr.dev/finalizer` from each old-group object and then delete the old-group objects (leaving the `takclients/<name>` Secrets intact for the new watcher to revoke and replace):
+
+     ```bash
+     for name in $(kubectl get takclients.tak.jonathanagustin.github.io -n takclients -o jsonpath='{.items[*].metadata.name}'); do
+       kubectl patch takclients.tak.jonathanagustin.github.io "${name}" -n takclients --type=merge -p '{"metadata":{"finalizers":[]}}'
+       kubectl delete takclients.tak.jonathanagustin.github.io "${name}" -n takclients
+     done
+     ```
+
+3. Upgrade the TAK Server package. Confirm `kubectl get crd takclients.tak.uds.dev` succeeds.
+4. Recreate each `TakClient` from `takclients-backup.yaml` with `apiVersion: tak.uds.dev/v1alpha1` (dropping cluster-managed `metadata` fields and `status`), wait for `Ready`, and distribute each updated `package.zip` from Secret `takclients/<name>`.
+
 ## Network rules
 
 The UDS Package `atak` sets ambient mesh for the viewer. The VM's launcher pod carries `istio.io/dataplane-mode: none` and stays out of the mesh. ztunnel hands inbound connections to the pod from inside its network namespace. That path bypasses KubeVirt's masquerade destination network address translation (DNAT), so adb never reached the guest (`adb: device offline`). Its traffic is still limited by these NetworkPolicies, and TAK traffic is mutual TLS from the device to TAK. adb from the viewer and the driver to the device is plain Transmission Control Protocol (TCP) inside the cluster.
