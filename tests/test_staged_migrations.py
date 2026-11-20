@@ -236,7 +236,7 @@ class StagedMigrationTests(unittest.TestCase):
                                'manifest unknown; failed to verify signature; unauthorized; '
                                'helm upgrade failed; unknown field; connection refused; '
                                'checksum mismatch; unknown flag; certificate has expired; '
-                               'failed calling webhook; ' + 'context deadline exceeded; ' * 40)
+                               'failed calling webhook; apply failed with conflicts: fixture-manager; ' + 'context deadline exceeded; ' * 40)
             progress = {'ownerSteps': [{'name': 'bootstrap-exemption', 'status': 'failed'}]}
             diagnostic = S.failure_categories(root, progress)
             self.assertEqual(diagnostic['sourceSHA'], ENV['GITHUB_SHA'])
@@ -264,6 +264,8 @@ class StagedMigrationTests(unittest.TestCase):
                     'cli-arguments': ['unknown flag: --fixture-secret', 'unknown command fixture-secret'],
                     'tls-certificate': ['x509: fixture-secret', 'unknown CA fixture-secret',
                                         'certificate has expired fixture-secret'],
+                    'apply-field-conflict': ['Apply failed with 1 conflict: fixture-secret',
+                                             'Apply failed with conflicts with fixture-secret'],
                     'package-integrity': ['invalid tar fixture-secret', 'unexpected EOF fixture-secret',
                                           'checksum mismatch fixture-secret']}
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, ENV, clear=True):
