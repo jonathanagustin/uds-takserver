@@ -25,23 +25,30 @@ def diagnostic_case(event, requested, selected="none"):
     return selected
 
 
-def plan(event, requested, amd64_runner, selected="none"):
+def plan(event, requested, amd64_runner, selected="none", profile="temporary"):
+    if event != "workflow_dispatch":
+        profile = "temporary"
+    if profile not in {"temporary", "ubuntu-24.04", "ubuntu-26.04"}:
+        raise ValueError("Unknown runner profile")
+    if profile != "temporary":
+        amd64_runner = profile
+    arm64_runner = profile + "-arm" if profile != "temporary" else "ubuntu-22.04-arm"
     selected = diagnostic_case(event, requested, selected)
     upgrades = {"include": [{"arch": "amd64", "runner": amd64_runner},
-                             {"arch": "arm64", "runner": "ubuntu-22.04-arm"}]}
+                             {"arch": "arm64", "runner": arm64_runner}]}
     single = {"include": [{"arch": "amd64", "runner": amd64_runner}]}
-    return {"install-matrix": install_matrix(event, requested, amd64_runner, selected),
+    return {"install-matrix": install_matrix(event, requested, amd64_runner, selected, arm64_runner),
             "upgrade-matrix": single if selected == "upgrade-amd64" else upgrades,
             "pg15-matrix": single if selected == "pg15-amd64" else upgrades,
             "diagnostic-case": selected}
 
 
-def install_matrix(event, requested, amd64_runner, selected="none"):
+def install_matrix(event, requested, amd64_runner, selected="none", arm64_runner="ubuntu-22.04-arm"):
     selected = diagnostic_case(event, requested, selected)
     if selected == "airgap-amd64":
         return {"include": [{"arch": "amd64", "runner": amd64_runner, "airgap": True}]}
     include = [{"arch": "amd64", "runner": amd64_runner},
-               {"arch": "arm64", "runner": "ubuntu-22.04-arm"}]
+               {"arch": "arm64", "runner": arm64_runner}]
     if not trust_only(event, requested):
         include.append({"arch": "amd64", "runner": amd64_runner, "airgap": True})
     return {"include": include}
@@ -80,7 +87,8 @@ def main():
     event, requested = os.environ["EVENT_NAME"], os.environ.get("TRUST_BUNDLE", "false")
     selected = diagnostic_case(event, requested, os.environ.get("DIAGNOSTIC_CASE", "none"))
     if sys.argv[1:] == ["plan"]:
-        outputs = plan(event, requested, os.environ.get("TEST_RUNNER") or "ubuntu-22.04", selected)
+        outputs = plan(event, requested, os.environ.get("TEST_RUNNER") or "ubuntu-22.04",
+                     selected, os.environ.get("RUNNER_PROFILE", "temporary"))
         output = "".join(key + "=" + (value if isinstance(value, str) else
                          json.dumps(value, separators=(",", ":"))) + "\n"
                          for key, value in outputs.items())

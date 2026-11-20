@@ -1,0 +1,13 @@
+#!/bin/sh
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+# Real local tools and chart renders; no cluster or package downloads.
+set -eu
+
+[ "$(helm version --template '{{.Version}}')" = v4.3.1 ]
+shellcheck --version | grep -qx 'version: 0.11.0'
+shellcheck --enable=all --severity=style --exclude=SC2310,SC2312 \
+  dev/run dev/check dev/install-tools dev/smoke
+helm template takserver charts/takserver --namespace takserver >/dev/null
+helm template cloudtak charts/cloudtak --namespace cloudtak >/dev/null
+echo 'Helm 4.3.1, ShellCheck 0.11.0 and both local chart renders passed.'

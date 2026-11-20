@@ -25,6 +25,7 @@ LIMIT = 1024 * 1024
 @contextlib.contextmanager
 def open_peer(args, deadline):
     context = ssl.create_default_context(cafile=args.ca)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     pin = getattr(args, "server_leaf_sha256", None)
     if pin:
         if not re.fullmatch("[0-9a-f]{64}", pin):

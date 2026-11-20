@@ -8,7 +8,8 @@
 # to 8447 over TLS and verifies this certificate against the deploy-time CA,
 # so its SANs are the in-cluster names of Service WEB_SERVICE.
 # Runs in the cert-init Job after publish-cert-configmap.sh. On an upgrade
-# the ConfigMap already exists, so the CA comes out of the ConfigMap.
+# the ConfigMap already exists, so the CA comes out of the ConfigMap. Reuse
+# a keystore only while it matches that CA and Service and has 30 days left.
 
 # Retry a refused or reset handshake. The k3s port-6443 tunnel refuses new
 # connections for several seconds after this hook reads cert-migration, which
@@ -39,10 +40,15 @@ if [[ -z "${CAPASS:-}" ]]; then
 fi
 pass="${CAPASS}"
 
-ns="$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)"
-token="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
-ca="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-api="https://kubernetes.default.svc/api/v1/namespaces/${ns}/configmaps/cert-migration"
+# These overrides also let the executable tests use a local Kubernetes API.
+sa="${SA_DIR:-/var/run/secrets/kubernetes.io/serviceaccount}"
+ns="$(cat "${sa}/namespace")"
+token="$(cat "${sa}/token")"
+ca="${sa}/ca.crt"
+base="${KUBE_API:-https://kubernetes.default.svc}/api/v1/namespaces/${ns}"
+api="${base}/configmaps/cert-migration"
+ca_key_file="${CA_KEY_FILE:-/opt/tak/certs/files/ca-do-not-share.key}"
+fqdn="${service}.${ns}.svc.cluster.local"
 
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
@@ -51,33 +57,60 @@ api_curl -f --cacert "${ca}" -H "Authorization: Bearer ${token}" "${api}" > "${w
 
 # Pull one binaryData key out of the ConfigMap JSON. Base64 has no quotes.
 field() {
-  grep -o "\"$1\": *\"[^\"]*\"" "${work}/cm.json" | head -n 1 | sed 's/.*: *"\(.*\)"/\1/'
+  local name="${1//./\\.}" file="${2:-${work}/cm.json}"
+  grep -o "\"${name}\": *\"[^\"]*\"" "${file}" | sed -n '1s/.*: *"\(.*\)"/\1/p'
 }
 
-if [[ -n "$(field "${key_name}")" ]]; then
-  echo "ConfigMap cert-migration already has ${key_name}"
-  exit 0
-fi
-# split-key-material.sh moves the keystore into the Secret. A later upgrade
-# must not issue a second certificate just because the ConfigMap no longer
-# has it.
-secret_code="$(api_curl -o "${work}/certs.json" -w '%{http_code}' --cacert "${ca}" \
-  -H "Authorization: Bearer ${token}" \
-  "https://kubernetes.default.svc/api/v1/namespaces/${ns}/secrets/takserver-certs")"
-if [[ "${secret_code}" == "200" ]] && grep -F -q "\"${key_name}\"" "${work}/certs.json"; then
-  echo "Secret takserver-certs already has ${key_name}"
-  exit 0
+field ca.pem | base64 -d > "${work}/ca.pem"
+if [[ ! -s "${work}/ca.pem" ]]; then
+  echo "ConfigMap cert-migration has no ca.pem" >&2
+  exit 1
 fi
 
-field ca.pem | base64 -d > "${work}/ca.pem"
+# The ConfigMap takes precedence because split-key-material.sh copies its
+# values over the Secret. On normal upgrades only the Secret has a keystore.
+stored="$(field "${key_name}" || true)"
+if [[ -z "${stored}" ]]; then
+  secret_code="$(api_curl -o "${work}/certs.json" -w '%{http_code}' --cacert "${ca}" \
+    -H "Authorization: Bearer ${token}" "${base}/secrets/takserver-certs")"
+  if [[ "${secret_code}" == "200" ]]; then
+    stored="$(field "${key_name}" "${work}/certs.json" || true)"
+  elif [[ "${secret_code}" != "404" ]]; then
+    echo "Reading Secret takserver-certs returned HTTP ${secret_code}" >&2
+    exit 1
+  fi
+fi
+
+current_keystore() {
+  printf '%s' "${stored}" | base64 -d > "${work}/existing.jks" || return 1
+  # A trusted-certificate entry without a private key cannot serve TLS.
+  keytool -J-Duser.language=en -J-Duser.country=US -list -v -alias takserver-web \
+    -keystore "${work}/existing.jks" -storepass "${pass}" > "${work}/entry.txt" 2>/dev/null || return 1
+  grep -F 'PrivateKeyEntry' "${work}/entry.txt" >/dev/null || return 1
+  keytool -exportcert -rfc -alias takserver-web -keystore "${work}/existing.jks" \
+    -storepass "${pass}" > "${work}/existing.pem" 2>/dev/null || return 1
+  openssl verify -CAfile "${work}/ca.pem" -purpose sslserver -verify_hostname "${fqdn}" \
+    "${work}/existing.pem" >/dev/null 2>&1 || return 1
+  openssl x509 -in "${work}/existing.pem" -noout -checkend 2592000 >/dev/null || return 1
+  # Istio checks SANs, so a matching CN alone is insufficient.
+  openssl x509 -in "${work}/existing.pem" -noout -ext subjectAltName \
+    | tr ',' '\n' | sed 's/^[[:space:]]*//' | grep -Fx "DNS:${fqdn}" >/dev/null
+}
+
+if [[ -n "${stored}" ]] && current_keystore; then
+  echo "${key_name} already has a current certificate for ${fqdn}"
+  exit 0
+fi
+echo "Issuing ${key_name}: the web keystore is missing, unreadable, expires soon, or does not match the CA and Service"
+
 # The CA key is not left in the ConfigMap TAK pods mount. A fresh install
 # still has it on local disk. An older ConfigMap, or Secret takserver-ca-key,
 # covers the upgrade and a Job retry.
-if [[ -s /opt/tak/certs/files/ca-do-not-share.key ]]; then
-  cp /opt/tak/certs/files/ca-do-not-share.key "${work}/ca.key"
+if [[ -s "${ca_key_file}" ]]; then
+  cp "${ca_key_file}" "${work}/ca.key"
 else
   key_b64="$(api_curl --cacert "${ca}" -H "Authorization: Bearer ${token}" \
-    "https://kubernetes.default.svc/api/v1/namespaces/${ns}/secrets/takserver-ca-key" \
+    "${base}/secrets/takserver-ca-key" \
     | grep -o '"ca-do-not-share.key": *"[^"]*"' | head -n 1 | sed 's/.*: *"\(.*\)"/\1/' || true)"
   if [[ -n "${key_b64}" ]]; then
     printf '%s' "${key_b64}" | base64 -d > "${work}/ca.key"
@@ -90,7 +123,6 @@ if [[ ! -s "${work}/ca.pem" ]] || [[ ! -s "${work}/ca.key" ]]; then
   exit 1
 fi
 
-fqdn="${service}.${ns}.svc.cluster.local"
 cat > "${work}/ext.cnf" <<CNF
 basicConstraints = CA:FALSE
 keyUsage = critical, digitalSignature, keyEncipherment

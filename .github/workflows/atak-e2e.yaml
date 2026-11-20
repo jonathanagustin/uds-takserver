@@ -170,8 +170,10 @@ jobs:
       # Pulls the device images; publishes the Zarf package and, on main,
       # the release tags.
       packages: write
+      pull-requests: read
     timeout-minutes: 300
     env:
+      GH_TOKEN: ${{ github.token }}
       FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
     steps:
       - name: Checkout
@@ -405,3 +407,8 @@ jobs:
           name: atak-e2e
           path: out/
           if-no-files-found: warn
+
+      - name: Remove this job's candidate source registry
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        timeout-minutes: 1
+        run: python3 .github/scripts/candidate-consumer.py cleanup --state "${RUNNER_TEMP}/uds-candidate/state.json"

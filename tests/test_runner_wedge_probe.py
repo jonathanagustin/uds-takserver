@@ -181,11 +181,28 @@ class RunnerWedgeProbeTests(unittest.TestCase):
                                      [("amd64", runner or "ubuntu-22.04"),
                                       ("arm64", "ubuntu-22.04-arm")])
                     self.assertEqual(job["runs-on"], "${{ matrix.runner }}")
-        for job in (full["validate-full-core"], bench["benchmark"]):
+        for job in (full["validate-full-core"],):
             rows = job["strategy"]["matrix"]["include"]
             self.assertEqual([(row["arch"], row["runner"]) for row in rows],
                              [("amd64", expected), ("arm64", "ubuntu-22.04-arm")])
             self.assertEqual(job["runs-on"], "${{ matrix.runner }}")
+        # Benchmark also plans its default matrix at runtime. Keep checking the
+        # actual CLI output, including the repository override, for non-manual runs.
+        benchmark = bench["benchmark"]
+        self.assertEqual(benchmark["strategy"]["matrix"], "${{ fromJSON(needs.plan.outputs.matrix) }}")
+        self.assertIn("plan", benchmark["needs"])
+        self.assertEqual(benchmark["runs-on"], "${{ matrix.runner }}")
+        planner = next(step for step in bench["plan"]["steps"] if step.get("id") == "plan")
+        self.assertEqual(planner["env"]["TEST_RUNNER"], "${{ vars.TEST_RUNNER }}")
+        for runner in ("", "custom-amd64-runner"):
+            env = {**os.environ, "EVENT_NAME": "pull_request", "TEST_RUNNER": runner,
+                   "ARCHITECTURE": "arm64", "RUNNER_PROFILE": "ubuntu-26.04"}
+            env.pop("GITHUB_OUTPUT", None)
+            result = subprocess.run(["python3", str(ROOT / ".github/scripts/benchmark-matrix.py")],
+                                    env=env, capture_output=True, text=True, check=True)
+            rows = json.loads(result.stdout.split("=", 1)[1])["include"]
+            self.assertEqual([(row["arch"], row["runner"]) for row in rows],
+                             [("amd64", runner or "ubuntu-22.04"), ("arm64", "ubuntu-22.04-arm")])
         # Explicit hosted22 override still receives disk/swap preparation.
         for job in (test["validate-install"], full["validate-full-core"], bench["benchmark"]):
             guarded = [step for step in job["steps"]

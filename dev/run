@@ -1,0 +1,109 @@
+#!/bin/sh
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+# Build and run the Linux shell/Python developer-check environment.
+set -eu
+
+fail() { printf 'dev/run: %s\n' "$*" >&2; exit 1; }
+directory() { (CDPATH='' cd -P "$1" && pwd); }
+mount_path() {
+  case "$1" in *:*) fail "bind-mount paths containing ':' are unsupported: $1" ;; *) ;; esac
+}
+read_path() {
+  line=
+  IFS= read -r line < "$1" || [ -n "${line}" ] || return 1
+  printf '%s' "${line}"
+}
+
+here=$(directory "$(dirname "$0")")
+root=$(directory "${here}/..")
+mount_path "${root}"
+[ -r "${here}/Dockerfile" ] || fail "missing development Dockerfile: ${here}/Dockerfile"
+image=${DEV_TOOLCHAIN_IMAGE-uds-takserver-dev:local}
+[ -n "${image}" ] || fail 'DEV_TOOLCHAIN_IMAGE must not be empty'
+
+if [ "${CONTAINER_RUNTIME+x}" = x ]; then
+  runtime=${CONTAINER_RUNTIME}
+  [ -n "${runtime}" ] || fail 'CONTAINER_RUNTIME must name one executable'
+  if [ "${runtime}" = podman ] && ! command -v podman >/dev/null 2>&1 \
+      && [ "$(uname -s)" = Darwin ] && [ -x /opt/podman/bin/podman ]; then
+    runtime=/opt/podman/bin/podman
+  fi
+elif command -v docker >/dev/null 2>&1; then
+  runtime=docker
+elif command -v podman >/dev/null 2>&1; then
+  runtime=podman
+elif [ "$(uname -s)" = Darwin ] && [ -x /opt/podman/bin/podman ]; then
+  runtime=/opt/podman/bin/podman
+else
+  fail 'install Docker or Podman, or set CONTAINER_RUNTIME to its executable'
+fi
+command -v "${runtime}" >/dev/null 2>&1 || fail "container runtime is unavailable: ${runtime}"
+
+# Linked worktrees point outside the mounted source. Mount only this repo's
+# common metadata, read-only, at its original path so that pointer still works.
+# Do not set GIT_DIR: checks create independent Git repositories in /tmp.
+metadata=
+if [ -f "${root}/.git" ]; then
+  pointer=$(read_path "${root}/.git") || fail 'cannot read linked-worktree Git pointer'
+  case "${pointer}" in
+    'gitdir: '*) gitdir=${pointer#gitdir: } ;;
+    *) fail 'unsupported Git pointer format' ;;
+  esac
+  case "${gitdir}" in /*) ;; *) gitdir=${root}/${gitdir} ;; esac
+  gitdir=$(directory "${gitdir}") || fail 'linked-worktree Git directory is unavailable'
+  [ -f "${gitdir}/HEAD" ] && [ -f "${gitdir}/commondir" ] && [ -f "${gitdir}/gitdir" ] ||
+    fail 'unsupported linked-worktree metadata layout'
+  common=$(read_path "${gitdir}/commondir") || fail 'cannot read common Git directory'
+  case "${common}" in /*) ;; *) common=${gitdir}/${common} ;; esac
+  metadata=$(directory "${common}") || fail 'common Git directory is unavailable'
+  [ -d "${metadata}/objects" ] && [ -d "${metadata}/refs" ] &&
+    [ "${gitdir%/*}" = "${metadata}/worktrees" ] || fail 'unsupported common Git metadata layout'
+  backref=$(read_path "${gitdir}/gitdir") || fail 'cannot read Git worktree back-reference'
+  case "${backref}" in /*) ;; *) backref=${gitdir}/${backref} ;; esac
+  backdir=$(directory "$(dirname "${backref}")") || fail 'Git worktree back-reference is unavailable'
+  [ "${backdir}/$(basename "${backref}")" = "${root}/.git" ] || fail 'Git metadata belongs to another worktree'
+  mount_path "${metadata}"
+elif [ -d "${root}/.git" ]; then
+  metadata=${root}/.git
+fi
+
+if ! "${runtime}" info >/dev/null 2>&1; then
+  fail "selected runtime '${runtime}' is not ready; start its daemon or VM and retry (no other runtime was selected)"
+fi
+runtime_version=$("${runtime}" --version) || fail "cannot identify selected runtime: ${runtime}"
+keep_id=false
+case "${runtime_version}" in
+  [Pp]odman\ *)
+    rootless=$("${runtime}" info --format '{{.Host.Security.Rootless}}') || fail 'cannot determine Podman user namespace mode'
+    case "${rootless}" in
+      true) keep_id=true ;;
+      false) ;;
+      *) fail 'unsupported Podman user namespace response' ;;
+    esac
+    ;;
+  [Dd]ocker\ *) ;;
+  *) fail 'CONTAINER_RUNTIME must be a Docker or Podman executable' ;;
+esac
+"${runtime}" build --file "${here}/Dockerfile" --tag "${image}" "${here}"
+
+[ "$#" -gt 0 ] || set -- check
+set -- "${image}" "$@"
+if [ -n "${metadata}" ]; then
+  if [ -d "${root}/.git" ]; then
+    set -- --volume "${metadata}:/workspace/.git:ro" "$@"
+  else
+    set -- --volume "${metadata}:${metadata}:ro" "$@"
+  fi
+fi
+# Preserve stdin for pipelines, and allocate a terminal only for an actual TTY.
+if [ -t 0 ] && [ -t 1 ]; then
+  set -- --tty "$@"
+fi
+if [ "${keep_id}" = true ]; then
+  set -- --userns=keep-id "$@"
+fi
+set -- run --rm --interactive --user "$(id -u):$(id -g)" \
+  --env HOME=/tmp/uds-dev-home --workdir /workspace \
+  --volume "${root}:/workspace:rw" "$@"
+exec "${runtime}" "$@"

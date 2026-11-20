@@ -6,7 +6,7 @@
 
 The config below is what NATS chart 1.0.1 renders with clustering and
 JetStream off. `server_name: $SERVER_NAME` is the chart's env substitution,
-not JSON. NATS 2.15.1 accepts the file when SERVER_NAME is set and
+not JSON. NATS 2.15.3 accepts the file when SERVER_NAME is set and
 /var/run/nats exists, which the chart's reloader emptyDir provides.
 """
 
