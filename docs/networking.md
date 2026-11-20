@@ -115,7 +115,7 @@ The pod mounts only that Secret, read-only, and runs as a non-root user with no 
 
 **Network.** The pod may connect only to the passthrough gateway on ports 443, 8446, and 8089. Its HTTP answers carry only a pass or fail and a short reason, never certificate material.
 
-**What the certificate can and cannot do.** TAK accepts it on 8089 and 8443 because the deploy-time CA signed it. The `auth` block in `CoreConfig.xml` sets `x509groups="true"` and leaves `x509addAnonymous` at its default, `false`, so the certificate gets no groups. With no groups it receives no CoT from other clients, and data that TAK limits by group, such as missions and files, is not visible to it. It has no admin role, so admin pages and admin API calls are refused. It can still open a connection and call API endpoints that TAK does not limit by group, such as `/Marti/api/version`. This health certificate is signed locally and has no TAK enrollment-table row. To revoke it before expiry, update the CA-signed CRL and reload its TAK consumers, or rotate the deploy-time CA. TakClient certificates use the separate [certificate-table revocation path](../adr/0024-tak-signed-takclient-revocation.md).
+**What the certificate can and cannot do.** TAK accepts it on 8089 and 8443 because the deploy-time CA signed it. The `auth` block in `CoreConfig.xml` sets `x509groups="true"` and leaves `x509addAnonymous` at its default, `false`, so the certificate gets no groups. With no groups it receives no CoT from other clients, and data that TAK limits by group, such as missions and files, is not visible to it. It has no admin role, so admin pages and admin API calls are refused. It can still open a connection and call API endpoints that TAK does not limit by group, such as `/Marti/api/version`. This health certificate is signed locally and has no TAK enrollment-table row. To revoke it before expiry, update the CA-signed CRL and reload its TAK consumers, or rotate the deploy-time CA. TakClient certificates use the separate certificate-table revocation path.
 
 **With the TAK alerts.** These checks are in addition to the alerts in PrometheusRule `takserver` (see [Monitoring](configuration.md#monitoring)), not a replacement. Those alerts read the JMX exporter and kube-state-metrics: a Deployment scaled to 0, no available pods, a high Java virtual machine (JVM) heap, or a restart loop. They do not show whether a client can connect. `tak-health` checks that. It does not see heap use or restarts.
 
@@ -152,7 +152,7 @@ A field client such as ATAK enrolls at `<host>:8446` and then streams to the sam
 
 The same VirtualService sends 8089 to `takserver-messaging-service:8089` and matches on port alone. ATAK's streaming library does not send SNI, so an SNI match on 8089 would drop it. TLS still runs end to end on 8089 and TAK still requires the client certificate. The 443 routes stay as they are.
 
-See [architecture decision record (ADR) 0012](../adr/0012-standard-tak-ports-on-the-passthrough-gateway.md). The gateway Service publishes the two ports through the bundle override `istio-passthrough-gateway.gateway` `service.ports` in `bundle/uds-bundle.yaml`. The Istio gateway chart's NetworkPolicy opens every port in that list. Traffic to TAK uses the same Service ports as the Package expose entries, so the operator's ingress rules for 8446 and 8089 already cover it and no rule is added. Set `standardPorts.enabled: false` to drop the listeners. Without the Service ports they are inert.
+The gateway Service publishes the two ports through the bundle override `istio-passthrough-gateway.gateway` `service.ports` in `bundle/uds-bundle.yaml`. The Istio gateway chart's NetworkPolicy opens every port in that list. Traffic to TAK uses the same Service ports as the Package expose entries, so the operator's ingress rules for 8446 and 8089 already cover it and no rule is added. Set `standardPorts.enabled: false` to drop the listeners. Without the Service ports they are inert.
 
 Inside the cluster, `takserver.<domain>` resolves to the tenant gateway (see [In-cluster Domain Name System (DNS)](#in-cluster-dns)), so in-cluster clients use `takserver-stream.<domain>:8446` and `:8089`. Outside the cluster, point the TAK host at the passthrough gateway's load balancer. On k3d, host ports 8446 and 8089 are not mapped. Tests port-forward them.
 
@@ -269,7 +269,7 @@ The reconcile does nothing when `coredns-custom` does not exist, which is the ca
 
 The default `tak.workloadIdentityPhase: shared` retains the upstream chart's
 shared `takserver-ignite` account. Dedicated identities are opt-in and have not
-yet passed a live upgrade on both architectures; this does not close issue #32.
+yet passed a live upgrade on both architectures.
 The existing admission adapter assigns the API, messaging, config and plugins
 Deployments their corresponding `takserver-*` ServiceAccounts. Ignite keeps its
 upstream account, and the database setup Job remains unchanged. Standalone pods

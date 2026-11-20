@@ -32,7 +32,7 @@ Zarf packages the application charts, container images, and deployment configura
 <details>
 <summary>Contents</summary>
 
-- [Background](#background)
+- [What's included](#whats-included)
 - [Install](#install)
 - [Usage](#usage)
 - [Demo](#demo)
@@ -52,13 +52,7 @@ Zarf packages the application charts, container images, and deployment configura
 
 </details>
 
-## Background
-
-The repository is `uds-takserver`; the Zarf package remains `takserver`, and its Pepr module is `takserver-oidc`. Those component names and the existing GitHub Container Registry (GHCR) namespace are retained for compatibility.
-
-Local install and upgrade tests run on k3d. Azure Kubernetes Service (AKS), Amazon Elastic Kubernetes Service (EKS) and RKE2 (Rancher's Kubernetes distribution) have infrastructure scaffolds; their manual workflows validate the scaffolds without deploying clusters. The test cluster is `k3d-core-slim-dev` (UDS Core 1.16.0), on amd64 and arm64.
-
-### What you get
+## What's included
 
 - **Upstream TAK chart.** Zarf pulls the public TAK Server chart when it creates the package. A small config chart in `charts/takserver/` adds the UDS `Package` and the ConfigMaps the upstream chart mounts.
 - **Keycloak single sign-on (SSO).** The UDS operator registers the Keycloak client, and TAK's own OpenID Connect client handles browser sign-in. Keycloak groups map to TAK roles and groups. See [docs/sso.md](docs/sso.md).
