@@ -1180,7 +1180,7 @@ test("core-config with uds.dev/sso-enabled=false skips import-trust and takserve
   await reconcileDeployment(
     deploy("takserver-messaging"),
     "CREATED",
-    { ...ssoOffCluster, patchDeployment: async (_ns, _name, ops) => { patches.push(ops); } } as unknown as Cluster,
+    { ...ssoOffCluster, patchDeployment: async (_ns: string, _name: string, ops: unknown) => { patches.push(ops); } } as unknown as Cluster,
     { RENDER_IMAGE: IMAGE },
   );
   assert.equal(patches.length, 1);
