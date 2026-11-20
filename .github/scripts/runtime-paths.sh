@@ -66,6 +66,7 @@ compliance/README.md
 .github/workflows/unit-tests.yaml
 .github/workflows/mutation.yaml
 .github/workflows/ui-reel.yaml
+.github/workflows/civilian-trailer.yaml
 .github/workflows/atak.yaml
 .github/workflows/atak-vm.yaml
 .github/workflows/atak-e2e.yaml
@@ -73,6 +74,7 @@ compliance/README.md
 .github/workflows/migrate-packages.yaml
 .github/workflows/native-cache.yaml
 .github/workflows/native-cache-pr.yaml
+.github/workflows/geos-local-qualification.yaml
 .github/scripts/migrate-ghcr.py
 .github/workflows/test-aks.yaml
 .github/workflows/test-eks.yaml
