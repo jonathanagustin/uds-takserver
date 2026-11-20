@@ -325,9 +325,9 @@ def main() -> None:
         chapters = [
             ("hud1.webm", 4.8, "FIELD TEAMS  //  ATAK & ITAK", "Live position and hazard sharing across every crew"),
             ("hud2.webm", 4.8, "INCIDENT COMMAND  //  CLOUDTAK + SSO", "Browser common operating picture with zero-trust auth"),
-            ("hud3.webm", 11.5, "LIVE STACK  //  UDS CORE + PEPR", "Automated mTLS certificates, CRLs, and air-gapped sync"),
-            ("hud4.webm", 4.8, "AIR-GROUND COORDINATION  //  MULTI-ARCH", "Runs identically on amd64 and arm64 edge clusters"),
-            ("hud5.webm", 4.8, "DISCONNECTED EDGE  //  ZARF AIR-GAP", "One signed Zarf package — deploy anywhere in minutes"),
+            ("hud3.webm", 11.5, "RECORDED DEMO  //  CLOUDTAK", "Create a map marker and open sharing controls"),
+            ("hud4.webm", 4.8, "AIR-GROUND COORDINATION  //  MULTI-ARCH", "Native builds for amd64 and arm64"),
+            ("hud5.webm", 4.8, "DISCONNECTED EDGE  //  ZARF AIR-GAP", "Signed Zarf packages for disconnected installs"),
         ]
         for fname, dur, tag, head in chapters:
             pipe_frames_to_webm(
