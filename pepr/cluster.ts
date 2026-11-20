@@ -24,14 +24,14 @@ RegisterKind(DestinationRule, {
 // TakClient custom resource. The CRD is crds/takclient.yaml, generated from
 // api/v1alpha1/takclient_types.ts. See ADR 22.
 export class TakClient implements KubernetesObject {
-  apiVersion = "tak.jonathanagustin.github.io/v1alpha1";
+  apiVersion = "tak.uds.dev/v1alpha1";
   kind = "TakClient";
   spec?: TakClientDoc["spec"];
   status?: TakClientDoc["status"];
 }
 
 RegisterKind(TakClient, {
-  group: "tak.jonathanagustin.github.io",
+  group: "tak.uds.dev",
   version: "v1alpha1",
   kind: "TakClient",
   plural: "takclients",
@@ -251,7 +251,7 @@ const live: TakClientCluster = {
     // Server-side apply of the annotations only. The spec stays the user's.
     await K8s(TakClient).Apply(
       {
-        apiVersion: "tak.jonathanagustin.github.io/v1alpha1",
+        apiVersion: "tak.uds.dev/v1alpha1",
         kind: "TakClient",
         metadata: { name, namespace, annotations },
       } as TakClient,

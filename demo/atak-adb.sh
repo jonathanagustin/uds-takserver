@@ -65,7 +65,7 @@ metadata:
   labels:
     app.kubernetes.io/name: atak-driver
     zarf.dev/agent: ignore
-    tak.jonathanagustin.github.io/scenario-owner: "${owner:-none}"
+    tak.uds.dev/scenario-owner: "${owner:-none}"
 spec:
   restartPolicy: Never
   securityContext:
