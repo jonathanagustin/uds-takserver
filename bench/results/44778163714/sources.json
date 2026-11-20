@@ -1,0 +1,25 @@
+{
+  "amd64_measured": false,
+  "arm64_job": 136433576648,
+  "artifact_id": 14670083172,
+  "artifact_sha256": "4c5f9fdd461b75654d0ce3b95a13f0cd4dbbc7501931032450222a571ba57662",
+  "attempt": 1,
+  "record_sha256": {
+    "arm64/baseline-r1.json": "524697e5d760d0f3a5616679a5ab310370ae6451377fe1e61b26353e7041cc19",
+    "arm64/baseline-r2.json": "e4833110ed1a3765ecc6433b467843d779f479729af362388a2e4a357a879392",
+    "arm64/baseline-r3.json": "d88226b03c25d01580cede52af6128267d483ac62c53e89b2b4adc16a746ad9c",
+    "arm64/postgis-buffers-r1.json": "9802a36f8f7e9c013b7618716ab3e28e89fd3454bc6c997024bffc8fbca2399e",
+    "arm64/postgis-buffers-r2.json": "970c3d972d622c72382dec150afc272757fccf26416f91fec9f9716c0cf031b2",
+    "arm64/postgis-buffers-r3.json": "6219340400036d0bdc0ac72d674fb56501e3ef95b1c45b8e60a1fa35f24671c3",
+    "arm64/postgis-wal-r1.json": "0824f87353796ad3040e299d9cea6af91105a2e44aa230c44da9267bd71d1191",
+    "arm64/postgis-wal-r2.json": "d83ad4b9363e9cdff99bf93afe7c061d9b842d48cee5bd17fa7d439741ba71e9",
+    "arm64/postgis-wal-r3.json": "c177d72fe91971e13158ca4e69d068cd07c10482cb17e501b76612a852c5cfd0"
+  },
+  "run_id": 44778163714,
+  "source": "1d2fe18c68ddc5600c21d020e737708f2630e595",
+  "validation_code_sha256": {
+    "bench/fixtures/tester/tak_tester.py.txt": "435dc1bd54390c52c3a4bb1906b54f5af1a975d5c893ca19b80001098d02f244",
+    "bench/postgis_study.py": "3ec439b433996eba37368b685358a9a71d291f1076e47b2efc9ee209013f646e",
+    "bench/sustained.py": "701287c56abf7111868ed72a5ac4f9ff6940b164a46df2ecb5c6671746466676"
+  }
+}
