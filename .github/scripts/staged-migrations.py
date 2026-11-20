@@ -679,8 +679,8 @@ def identity_failure_callsites(directory, diagnostic=False):
     return result
 
 
-def owner_command_failure(directory, failed_step, binding):
-    """Allow only the failed source-owned stage's numeric process outcome."""
+def owner_failure_details(directory, failed_step, binding):
+    """Allow fixed diagnostics for the failed source-owned stage."""
     try:
         journal = bounded_json(directory / 'owner/journal.json')
         require(type(journal.get('schema')) is int and journal['schema'] == 1 and journal.get('accepted') is False
@@ -698,7 +698,16 @@ def owner_command_failure(directory, failed_step, binding):
         require(type(reason) is str and reason in ('nonzero-exit', 'signal', 'timeout', 'stdout-limit')
                 and (reason != 'nonzero-exit' or code > 0) and (reason != 'signal' or code < 0),
                 'invalid command termination metadata')
-        return {'exitStatus': code, 'terminationReason': reason}
+        details = {'commandFailure': {'exitStatus': code, 'terminationReason': reason}}
+        owners = entries[0].get('agentFieldOwners')
+        if (failed_step in ('deploy-core-agent', 'deploy-local-agent') and type(owners) is dict
+                and set(owners) == {'args', 'image', 'nodeNameFieldRef', 'namespaceFieldRef'}
+                and all(type(values) is list and len(values) <= 3
+                        and all(type(manager) is str and manager in ('kubectl-create', 'other', 'zarf')
+                                for manager in values)
+                        and values == sorted(set(values)) for values in owners.values())):
+            details['agentFieldOwners'] = owners
+        return details
     except (ValueError, OSError, KeyError, TypeError, AttributeError):
         return None
 
@@ -714,10 +723,10 @@ def failure_categories(directory, progress):
     result = {'schema': 1, 'sourceSHA': source, 'runID': run, 'runAttempt': attempt,
               'failedStep': failed[-1] if failed else 'unavailable',
               'scope': 'retained-tail-signatures-only', 'status': 'unavailable', 'categories': []}
-    command = owner_command_failure(directory, result['failedStep'],
+    details = owner_failure_details(directory, result['failedStep'],
                                     {'sourceSHA': source, 'runID': run, 'runAttempt': attempt})
-    if command is not None:
-        result['commandFailure'] = command
+    if details is not None:
+        result.update(details)
     if 'identities' in SCENARIOS.get(os.environ.get('SCENARIO'), []):
         calls = identity_failure_callsites(directory)
         result['identityFailures'] = calls
