@@ -24,71 +24,88 @@ SPDX-License-Identifier: GPL-3.0-only
   vertical-align: middle;
 }
 
-/* The demo players fill the column at 16:9. */
+/* The demo players fill the column at 16:9 with a machined frame. */
 .sl-markdown-content video {
   display: block;
   width: 100%;
   height: auto;
   aspect-ratio: 16 / 9;
-  background: #000;
-  border-radius: 0.25rem;
+  background: #050709;
+  border-radius: 0.375rem;
+  border: 1px solid var(--sl-color-hairline);
+  box-shadow: 0 20px 50px -24px rgba(0, 0, 0, 0.75);
 }
 
-/* Share UDS's slate and indigo documentation palette while keeping TAK's mark. */
+#ui-preview {
+  margin-block: 2rem 2.5rem;
+  padding: 0.75rem;
+  background: var(--sl-color-gray-7);
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 0.5rem;
+}
+
+#ui-preview figcaption {
+  margin-top: 0.75rem;
+  font-size: 0.875rem;
+  color: var(--sl-color-gray-3);
+  text-align: center;
+}
+
+/* Tactical Obsidian & Signal Amber documentation palette. */
 :root {
-  --sl-content-width: 50rem;
+  --sl-content-width: 52rem;
   --sl-nav-height: 4rem;
-  --sl-color-bg: #111827;
-  --sl-color-bg-nav: #1f2937;
-  --sl-color-bg-sidebar: #1f2937;
-  --sl-color-bg-inline-code: #1f2937;
-  --sl-color-text: #f9fafb;
-  --sl-color-text-accent: #c7d2fe;
-  --sl-color-text-invert: #111827;
-  --sl-color-white: #fff;
-  --sl-color-gray-1: #e5e7eb;
-  --sl-color-gray-2: #d1d5db;
-  --sl-color-gray-3: #9ca3af;
-  --sl-color-gray-4: #4b5563;
-  --sl-color-gray-5: #374151;
-  --sl-color-gray-6: #1f2937;
-  --sl-color-gray-7: #182133;
-  --sl-color-black: #111827;
-  --sl-color-accent-low: #1e1b4b;
-  --sl-color-accent: #4f46e5;
-  --sl-color-accent-high: #c7d2fe;
-  --sl-color-hairline: #374151;
-  --sl-color-hairline-light: #374151;
+  --sl-color-bg: #0b0e11;
+  --sl-color-bg-nav: #11161d;
+  --sl-color-bg-sidebar: #0f141a;
+  --sl-color-bg-inline-code: #171e27;
+  --sl-color-text: #eef2f6;
+  --sl-color-text-accent: #f5b82e;
+  --sl-color-text-invert: #0b0e11;
+  --sl-color-white: #f8fafc;
+  --sl-color-gray-1: #e2e8f0;
+  --sl-color-gray-2: #cbd5e1;
+  --sl-color-gray-3: #8b98a8;
+  --sl-color-gray-4: #475569;
+  --sl-color-gray-5: #242e3a;
+  --sl-color-gray-6: #151b23;
+  --sl-color-gray-7: #10151c;
+  --sl-color-black: #0b0e11;
+  --sl-color-accent-low: #271d08;
+  --sl-color-accent: #e5a00d;
+  --sl-color-accent-high: #fcd34d;
+  --sl-color-hairline: #1f2937;
+  --sl-color-hairline-light: #253040;
 }
 
 :root[data-theme='light'] {
-  --sl-color-bg: #fff;
-  --sl-color-bg-nav: #f3f4f6;
-  --sl-color-bg-sidebar: #f3f4f6;
-  --sl-color-bg-inline-code: #e5e7eb;
-  --sl-color-text: #111827;
-  --sl-color-text-accent: #4f46e5;
-  --sl-color-text-invert: #fff;
-  --sl-color-white: #111827;
+  --sl-color-bg: #f7f6f2;
+  --sl-color-bg-nav: #efede8;
+  --sl-color-bg-sidebar: #f1efe9;
+  --sl-color-bg-inline-code: #e6e3db;
+  --sl-color-text: #11151a;
+  --sl-color-text-accent: #b45309;
+  --sl-color-text-invert: #ffffff;
+  --sl-color-white: #11151a;
   --sl-color-gray-1: #1f2937;
   --sl-color-gray-2: #374151;
-  --sl-color-gray-3: #6b7280;
+  --sl-color-gray-3: #5b6470;
   --sl-color-gray-4: #9ca3af;
-  --sl-color-gray-5: #d1d5db;
-  --sl-color-gray-6: #e5e7eb;
-  --sl-color-gray-7: #f3f4f6;
-  --sl-color-black: #fff;
-  --sl-color-accent-low: #e0e7ff;
-  --sl-color-accent: #4f46e5;
-  --sl-color-accent-high: #312e81;
-  --sl-color-hairline: #e5e7eb;
-  --sl-color-hairline-light: #d1d5db;
+  --sl-color-gray-5: #d6d3cb;
+  --sl-color-gray-6: #eae7df;
+  --sl-color-gray-7: #f2f0ea;
+  --sl-color-black: #f7f6f2;
+  --sl-color-accent-low: #fef3c7;
+  --sl-color-accent: #b45309;
+  --sl-color-accent-high: #78350f;
+  --sl-color-hairline: #dcd8ce;
+  --sl-color-hairline-light: #d0cbc0;
 }
 
 .site-title {
-  font-size: 1.125rem;
-  font-weight: 650;
-  letter-spacing: -.025em;
+  font-size: 1.075rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--sl-color-white);
   white-space: nowrap;
 }
@@ -100,69 +117,93 @@ SPDX-License-Identifier: GPL-3.0-only
 .starlight-sidebar-topics { display: none; }
 
 .sidebar-content summary {
-  border-radius: .25rem;
-  padding-block: .45rem;
+  border-radius: 0.25rem;
+  padding-block: 0.45rem;
 }
 
 .sidebar-content summary:hover,
 .sidebar-content a:not([aria-current='page']):hover {
-  background: color-mix(in srgb, var(--sl-color-gray-3) 10%, transparent);
+  background: color-mix(in srgb, var(--sl-color-accent) 10%, transparent);
 }
 
-.sidebar-content .top-level > li + li { margin-top: .35rem; }
-.sidebar-content a { padding-block: .4rem; }
-.sidebar-content [aria-current='page'] { border-radius: .25rem; }
+.sidebar-content .top-level > li + li { margin-top: 0.35rem; }
+.sidebar-content a { padding-block: 0.4rem; }
+.sidebar-content [aria-current='page'] {
+  border-radius: 0.25rem;
+  font-weight: 600;
+}
 
-.sl-markdown-content h2 { margin-top: 2.5rem; }
-.sl-markdown-content :not(pre) > code { border-radius: .25rem; }
+.sl-markdown-content h2 {
+  margin-top: 2.5rem;
+  letter-spacing: -0.02em;
+}
+.sl-markdown-content :not(pre) > code {
+  border-radius: 0.25rem;
+  border: 1px solid var(--sl-color-hairline);
+}
 
-/* The same centered identity works for current and historical channel shells. */
+/* Topographic tactical hero banner. */
 .hero {
+  position: relative;
   display: flex;
   flex-direction: column;
   text-align: center;
-  padding-block: 2rem 2.5rem;
+  padding: 3rem 1.5rem 3.25rem;
+  margin-bottom: 1.5rem;
   gap: 1.5rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--sl-color-hairline);
+  overflow: hidden;
+  background-color: var(--sl-color-gray-7);
 }
-
 
 .hero .stack,
-.hero .copy { align-items: center; }
+.hero .copy {
+  position: relative;
+  z-index: 1;
+  align-items: center;
+}
 .hero .copy { gap: 1.25rem; text-align: center; }
-.hero h1 { max-width: 44rem; font-size: clamp(2.25rem, 5vw, 3.75rem); letter-spacing: -.045em; line-height: 1.1; }
-.hero .tagline { max-width: 42rem; font-size: 1.2rem; line-height: 1.65; color: var(--sl-color-gray-2); }
+.hero h1 { max-width: 44rem; font-size: clamp(2.25rem, 5vw, 3.75rem); letter-spacing: -0.04em; line-height: 1.1; }
+.hero .tagline { max-width: 42rem; font-size: 1.15rem; line-height: 1.6; color: var(--sl-color-gray-2); }
 .hero .actions { justify-content: center; gap: 1rem; }
-.hero .sl-link-button { border-radius: .4rem; }
+.hero .sl-link-button { border-radius: 0.375rem; }
 
 .sl-link-card {
-  border-radius: .75rem;
-  padding: 1.65rem;
+  border-radius: 0.5rem;
+  padding: 1.5rem;
   box-shadow: none;
-  min-height: 10rem;
+  min-height: 9.5rem;
   align-items: start;
+  background: var(--sl-color-gray-7);
+  border-color: var(--sl-color-hairline);
 }
 
-.sl-link-card .stack { gap: .75rem; }
-.sl-link-card .title { font-size: 1.25rem; }
-.sl-link-card .description { color: var(--sl-color-gray-2); line-height: 1.65; }
-.sl-link-card .icon { margin-top: .2rem; color: var(--sl-color-text-accent); }
-.sl-link-card:hover { border-color: var(--sl-color-accent); background: var(--sl-color-bg-nav); }
+.sl-link-card .stack { gap: 0.65rem; }
+.sl-link-card .title { font-size: 1.2rem; font-weight: 650; letter-spacing: -0.015em; }
+.sl-link-card .description { color: var(--sl-color-gray-2); line-height: 1.6; }
+.sl-link-card .icon { margin-top: 0.2rem; color: var(--sl-color-text-accent); }
+.sl-link-card:hover {
+  border-color: var(--sl-color-accent);
+  background: var(--sl-color-gray-6);
+  transform: translateY(-2px);
+}
 .sl-link-card:focus-within { outline: 2px solid var(--sl-color-text-accent); outline-offset: 3px; }
 
 .expressive-code {
-  --ec-brdCol: var(--sl-color-gray-5);
-  --ec-brdRad: .5rem;
+  --ec-brdCol: var(--sl-color-hairline-light);
+  --ec-brdRad: 0.375rem;
 }
 
 @media (max-width: 49.99rem) {
-  .site-title { font-size: 1rem; gap: .5rem; }
+  .site-title { font-size: 1rem; gap: 0.5rem; }
   .site-title img { width: auto; height: 2rem; flex-shrink: 0; }
   .site-title span { text-overflow: ellipsis; }
-  .hero { padding-block: 1rem 2rem; }
+  .hero { padding: 1.75rem 1rem 2rem; }
   .hero .tagline { font-size: 1.05rem; }
   .sl-link-card { min-height: 0; padding: 1.25rem; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .sl-link-card { transition: border-color .15s ease, background-color .15s ease; }
+  .sl-link-card { transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease; }
 }

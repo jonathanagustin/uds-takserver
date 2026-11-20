@@ -57,6 +57,7 @@ const pages = [
   { src: 'docs/atak-device.md', slug: 'atak-device', label: 'ATAK test device' },
   { src: 'docs/building.md', slug: 'building', label: 'Building images' },
   { src: 'docs/data.md', slug: 'data', label: 'Data' },
+  { src: 'docs/reference.md', slug: 'reference', label: 'Package reference' },
   { src: 'docs/profiles.md', slug: 'profiles', label: 'Values profiles' },
   { src: 'docs/ci.md', slug: 'ci', label: 'CI workflows' },
   { src: 'docs/branch-protection.md', slug: 'branch-protection', label: 'Review rules for main' },

@@ -50,15 +50,16 @@ CONTENT_X, CONTENT_Y = FRAME_X, FRAME_Y + TITLE_BAR
 FRAME_W, FRAME_H = CONTENT_W, CONTENT_H + TITLE_BAR
 RADIUS = 12
 
-# Palette. Nothing else is drawn.
-BG = "#0F172A"
-BG_EDGE = "#020617"
-INDIGO = "#818CF8"
+# Palette. Tactical Obsidian, Signal Amber, and Phosphor Emerald.
+BG = "#0B0E11"
+BG_EDGE = "#050709"
+AMBER = "#E5A00D"
+INDIGO = AMBER
 EMERALD = "#34D399"
 HEADER = "#F8FAFC"
 BODY = "#CBD5E1"
-OVERLAY = (15, 23, 42, 217)  # rgba(15,23,42,0.85)
-OVERLAY_BORDER = (255, 255, 255, 26)  # rgba(255,255,255,0.1)
+OVERLAY = (11, 14, 17, 224)  # rgba(11,14,17,0.88)
+OVERLAY_BORDER = (229, 160, 13, 46)  # subtle amber hairline
 FRAME_BORDER = (255, 255, 255, 38)  # rgba(255,255,255,0.15)
 
 # Fonts, by fontconfig name. check_fonts() fails on a fallback.
