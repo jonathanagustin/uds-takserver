@@ -487,6 +487,60 @@ spec:
 ${restore_scope}
 EOF
 
+# Capture whether the chart's upgrade-crds hook ran, which Velero image it
+# used, and whether the live Restore CRD exposes spec.resourcePolicy.
+velero_restore_crd_diagnostics() {
+  k get crd restores.velero.io -o json 2>/dev/null | python3 -B -c '
+import hashlib, json, sys
+crd = json.load(sys.stdin)
+meta = crd.get("metadata") or {}
+v1 = next((v for v in (crd.get("spec") or {}).get("versions", []) if v.get("name") == "v1"), {})
+schema = (v1.get("schema") or {}).get("openAPIV3Schema") or {}
+spec_props = ((schema.get("properties") or {}).get("spec") or {}).get("properties") or {}
+managers = sorted({m.get("manager", "") for m in meta.get("managedFields") or [] if m.get("manager")})
+summary = {
+    "resourceVersion": meta.get("resourceVersion"),
+    "creationTimestamp": meta.get("creationTimestamp"),
+    "managedBy": (meta.get("labels") or {}).get("app.kubernetes.io/managed-by"),
+    "helmRelease": (meta.get("annotations") or {}).get("meta.helm.sh/release-name"),
+    "managers": managers,
+    "hasResourcePolicy": "resourcePolicy" in spec_props,
+    "v1SchemaSha256": hashlib.sha256(json.dumps(schema, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+}
+print("velero_restore_crd=" + json.dumps(summary, sort_keys=True))
+' | while IFS= read -r line; do say "${line}"; done || say "velero_restore_crd=unavailable"
+
+  k get deploy velero -n velero -o json 2>/dev/null | python3 -B -c '
+import json, sys
+dep = json.load(sys.stdin)
+spec = (dep.get("spec") or {}).get("template", {}).get("spec") or {}
+images = [c.get("image") for c in (spec.get("initContainers") or []) + (spec.get("containers") or [])]
+print("velero_deployment_images=" + json.dumps(images))
+' | while IFS= read -r line; do say "${line}"; done || say "velero_deployment_images=unavailable"
+
+  k get jobs -n velero -o json 2>/dev/null | python3 -B -c '
+import json, sys
+items = json.load(sys.stdin).get("items") or []
+jobs = []
+for item in items:
+    meta = item.get("metadata") or {}
+    pod_spec = (item.get("spec") or {}).get("template", {}).get("spec") or {}
+    containers = pod_spec.get("containers") or []
+    status = item.get("status") or {}
+    jobs.append({
+        "name": meta.get("name"),
+        "hook": (meta.get("annotations") or {}).get("helm.sh/hook"),
+        "images": [c.get("image") for c in containers],
+        "succeeded": status.get("succeeded", 0),
+        "failed": status.get("failed", 0),
+        "active": status.get("active", 0),
+        "completionTime": status.get("completionTime"),
+    })
+print("velero_jobs=" + json.dumps(jobs, sort_keys=True))
+' | while IFS= read -r line; do say "${line}"; done || say "velero_jobs=unavailable"
+}
+
+velero_restore_crd_diagnostics
 # Fail against the actual API schema before deleting application namespaces.
 # A new server image alone does not prove that its Restore CRD was upgraded.
 k create --dry-run=server --validate=strict -f "${work}/restore.yaml" >/dev/null
