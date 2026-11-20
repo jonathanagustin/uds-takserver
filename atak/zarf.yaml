@@ -1,38 +1,31 @@
 # Copyright 2026 uds-takserver authors
 # SPDX-License-Identifier: GPL-3.0-only
 
-# yaml-language-server: $schema=https://raw.githubusercontent.com/zarf-dev/zarf/main/zarf.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/zarf-dev/zarf/v0.89.0/src/pkg/schema/zarf-v1beta1-package-schema.json
 #
 # Optional ATAK-CIV test device: KubeVirt, an Android-x86 VM with ATAK, and a
 # phone viewer behind Keycloak. It is a separate package so the TAK package
 # does not carry about 1.5 GB of VM and KubeVirt images. amd64 nodes with
 # /dev/kvm only. Deploy it after the TAK package; see docs/atak-device.md.
 #
-#   uds zarf package create atak --set ATAK_TAG=5.5.1.10 --confirm
+#   ./atak/ci/create-package.sh 5.5.1.10 --confirm
 #   uds zarf package deploy zarf-package-atak-device-amd64-*.tar.zst --confirm
+apiVersion: zarf.dev/v1beta1
 kind: ZarfPackageConfig
 metadata:
   name: atak-device
   description: ATAK-CIV in a KubeVirt VM as a TAK test client (amd64 with KVM only)
-  version: "###ZARF_PKG_TMPL_ATAK_TAG###"
+  version: "atak-build-tag"
   architecture: amd64
 
-constants:
-  - name: ATAK_TAG
-    value: "###ZARF_PKG_TMPL_ATAK_TAG###"
-
-variables:
-  - name: DOMAIN
-    description: Domain suffix for gateway hosts. The viewer is atak.<DOMAIN>.
-    default: uds.dev
+values:
+  files: [values.yaml]
 
 components:
   - name: kubevirt
-    required: true
     description: KubeVirt v1.9.1 and the UDS policy exemption it needs
-    only:
-      cluster:
-        architecture: amd64
+    selector:
+      architecture: amd64
     manifests:
       - name: kubevirt-exemption
         files:
@@ -50,16 +43,16 @@ components:
           # see the comment in the file.
           - deploy/kubevirt-cr.yaml
     images:
-      - quay.io/kubevirt/virt-operator:v1.9.1
-      - quay.io/kubevirt/virt-api:v1.9.1
-      - quay.io/kubevirt/virt-controller:v1.9.1
-      - quay.io/kubevirt/virt-handler:v1.9.1
-      - quay.io/kubevirt/virt-launcher:v1.9.1
-      - quay.io/kubevirt/virt-exportproxy:v1.9.1
-      - quay.io/kubevirt/virt-exportserver:v1.9.1
+      - name: quay.io/kubevirt/virt-operator:v1.9.1
+      - name: quay.io/kubevirt/virt-api:v1.9.1
+      - name: quay.io/kubevirt/virt-controller:v1.9.1
+      - name: quay.io/kubevirt/virt-handler:v1.9.1
+      - name: quay.io/kubevirt/virt-launcher:v1.9.1
+      - name: quay.io/kubevirt/virt-exportproxy:v1.9.1
+      - name: quay.io/kubevirt/virt-exportserver:v1.9.1
     actions:
       onDeploy:
-        after:
+        onSuccess:
           - description: Wait for KubeVirt
             maxTotalSeconds: 900
             wait:
@@ -70,22 +63,25 @@ components:
                 condition: Available
 
   - name: atak-device
-    required: true
     description: The ATAK VM, its adb Service, the phone viewer, and their UDS Package
-    only:
-      cluster:
-        architecture: amd64
+    selector:
+      architecture: amd64
     manifests:
       - name: atak-device
         namespace: atak
+        enableTemplating: true
         files:
           - deploy/device.yaml
     images:
-      - ghcr.io/jonathanagustin/uds-takserver/atak-civ-vm:###ZARF_PKG_TMPL_ATAK_TAG###
-      - ghcr.io/jonathanagustin/uds-takserver/atak-viewer:###ZARF_PKG_TMPL_ATAK_TAG###
+      - name: ghcr.io/jonathanagustin/uds-takserver/atak-civ-vm:atak-build-tag
+        id: atak-vm
+        source: registry
+      - name: ghcr.io/jonathanagustin/uds-takserver/atak-viewer:atak-build-tag
+        id: atak-viewer
+        source: registry
     actions:
       onDeploy:
-        after:
+        onSuccess:
           - description: Wait for the VM to boot its kernel
             maxTotalSeconds: 900
             wait:
