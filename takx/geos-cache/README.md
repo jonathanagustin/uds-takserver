@@ -2,8 +2,10 @@
 
 This separate opt-in profile builds historical GEOS 3.4.3 and prepares a bounded
 local OCI component for [#482](https://github.com/jonathanagustin/uds-takserver/issues/482).
-It adds no registry writer, signing, promotion or automatic SDK consumer. Draco
-and the historical `native-geos` profile retain their existing behavior. An old
+The default build and PR workflow remain read-only. Registry publication is a
+separate protected-main opt-in described below; it has not yet been qualified.
+It adds no automatic SDK consumer. Draco and the historical `native-geos`
+profile retain their existing behavior. An old
 producer receipt is never accepted as fresh input or upgraded into this schema.
 The existing profile's GCC 14 configure-feature diagnosis is tracked separately
 in [#680](https://github.com/jonathanagustin/uds-takserver/issues/680); this change
@@ -114,7 +116,7 @@ exclude unrecorded metadata, links, sparse entries, traversal and extras.
 Offline parser, key, alias, privacy, payload-lease and cleanup controls run with:
 
 ```sh
-python3 -B -m unittest discover -s takx/geos-cache -p 'test_*.py' -v
+uv run --no-project --with pyyaml==6.0.3 python -B -m unittest discover -s takx/geos-cache -p 'test_*.py' -v
 ```
 
 These synthetic fixtures never establish native compilation. Fresh build and
@@ -134,8 +136,8 @@ network, filesystem, CPU, memory, source and timeout constraints remain active.
 Docker runs as the invoking numeric UID/GID so the container can use private
 runner-owned bind mounts with all capabilities dropped. Rootless Podman retains
 its existing mapping. No directory permissions or capabilities are relaxed.
-Checkout credentials are not persisted; the job has only `contents: read` and
-adds no registry writer, signing or publisher authentication.
+Checkout credentials are not persisted; the read-only `qualify` job has only
+`contents: read`, without registry writer, signing or publisher authentication.
 
 A successful job retains the exact capsule and OCI layout, fresh producer and
 two-prefix consumer records, plus checkout/tree/run/attempt bindings and record
@@ -144,10 +146,53 @@ sizes and hashes pass through the existing whole-stream redactor. Incomplete,
 changed, oversized or invalid logs are omitted; failed output never becomes a
 success receipt. Original failed/emulated trials remain historical evidence.
 
-This workflow supplies a way to collect the missing native local evidence.
-Its addition alone does not qualify the build, cache publication, security
+This job supplies a way to collect native local evidence.
+Its execution alone does not qualify cache publication, security
 suitability, the SDK or TAKX. Assess the exact successful run's bytes separately;
-registry, publisher, SDK and security acceptance remain false.
+registry, publisher, SDK and security acceptance remain false in local receipts.
+
+## Opt-in protected registry qualification
+
+After reviewing and merging the workflow, a maintainer can manually select
+`publish=true` in **GEOS local qualification** on `main`. The default is false.
+PRs and non-main dispatches cannot reach the publisher or its job-scoped package,
+OIDC and attestation grants. A fresh native build and two-prefix qualification
+must finish first; the publisher downloads that exact artifact ID from its own
+run, then verifies its checkout/tree/run/attempt, recipe and receipt hashes,
+native identity, five-file capsule and OCI subject before staging any bytes.
+
+The fixed namespace is
+`ghcr.io/jonathanagustin/uds-takserver/native-cache/geos-capi`. The existing
+`geos-capi-local-v1-*` key still describes the unchanged local payload format;
+registry qualification does not rewrite its local claims. Staging uses an
+attempt-specific tag. An existing input key with another immutable subject is a
+collision, never an overwrite or a reason to rebuild a published object.
+Authorization failures, transport failures and generic HTTP 404 responses are
+not cache misses. The workflow serializes main dispatches; other writers must
+not be granted permission to race this namespace.
+
+The publisher attests SLSA provenance and a distinct GEOS predicate binding the
+exact source/run/attempt and native evidence. Readback requires successful
+`gh attestation verify` with that exact protected workflow/source and hosted
+runner policy before processing a remote capsule. It fetches the fixed subject
+and bounded blobs with an empty registry credential configuration, rechecks all
+digests and the original strict capsule/OCI contract, then runs genuine geometry
+and whole-archive PIC controls at two new unrelated prefixes in the isolated
+compiler container. Only successful readback, a second attestation check and
+these consumers permit input-key promotion and an accepted registry receipt.
+
+Both output pipes are drained with byte accounting before capture files are
+written; overflow kills and reaps the process group. Closing the pipes does not
+remove the command deadline. The GitHub client is bound to `github.com` and the
+fixed repository. Command output stays private; only compact
+typed qualification, readback, consumer and accepted receipts are uploaded.
+Failure emits no accepted receipt. The original producer/local relocation
+records keep all four wider acceptance flags false. A successful registry
+receipt can establish component transport/publisher acceptance only; SDK,
+renderer, client and security suitability remain false. No cache is wired into
+automatic consumers by this experiment. Until an actual protected run and its
+immutable bytes are independently reviewed, registry acceptance remains open
+under #482; mocked transport tests establish no live publication or native proof.
 
 ### Accepted native local evidence
 

@@ -32,7 +32,7 @@ Zarf packages the application charts, container images, and deployment configura
 <details>
 <summary>Contents</summary>
 
-- [Background](#background)
+- [What's included](#whats-included)
 - [Install](#install)
 - [Usage](#usage)
 - [Demo](#demo)
@@ -40,11 +40,11 @@ Zarf packages the application charts, container images, and deployment configura
 - [Architecture](#architecture)
 - [Access](#access)
 - [Configuration](#configuration)
-- [Supported architectures](#supported-architectures)
-- [Testing](#testing)
-- [Repository layout](#repository-layout)
+- [Supported architectures](docs/reference.md#supported-architectures)
+- [Testing](docs/reference.md#testing)
+- [Repository layout](docs/reference.md#repository-layout)
 - [Documentation](#documentation)
-- [Known limitations](#known-limitations)
+- [Known limitations](docs/reference.md#known-limitations)
 - [Security](#security)
 - [Contributing](#contributing)
 - [Code of conduct](#code-of-conduct)
@@ -52,17 +52,11 @@ Zarf packages the application charts, container images, and deployment configura
 
 </details>
 
-## Background
-
-The repository is `uds-takserver`; the Zarf package remains `takserver`, and its Pepr module is `takserver-oidc`. Those component names and the existing GitHub Container Registry (GHCR) namespace are retained for compatibility.
-
-Local install and upgrade tests run on k3d. Azure Kubernetes Service (AKS), Amazon Elastic Kubernetes Service (EKS) and RKE2 (Rancher's Kubernetes distribution) have infrastructure scaffolds; their manual workflows validate the scaffolds without deploying clusters. The test cluster is `k3d-core-slim-dev` (UDS Core 1.16.0), on amd64 and arm64.
-
-### What you get
+## What's included
 
 - **Upstream TAK chart.** Zarf pulls the public TAK Server chart when it creates the package. A small config chart in `charts/takserver/` adds the UDS `Package` and the ConfigMaps the upstream chart mounts.
 - **Keycloak single sign-on (SSO).** The UDS operator registers the Keycloak client, and TAK's own OpenID Connect client handles browser sign-in. Keycloak groups map to TAK roles and groups. See [docs/sso.md](docs/sso.md).
-- **Certificates made at deploy time.** A pre-install Job runs TAK's `generateClusterCerts.sh`. No keys or keystores are in git or in any image. See [architecture decision record (ADR) 2](adr/0002-generate-certificates-at-deploy-time.md).
+- **Certificates made at deploy time.** A pre-install Job runs TAK's `generateClusterCerts.sh`. No keys or keystores are in git or in any image.
 - **UDS networking.** The browser user interface (UI) goes through the tenant gateway. Traffic for the application programming interface (API), enrollment, and streaming goes through the passthrough gateway, including the standard TAK ports 8446 and 8089. NetworkPolicies are default-deny, with explicit per-workload rules. See [docs/networking.md](docs/networking.md).
 - **CloudTAK in the browser.** The optional `cloudtak` component (on by default) runs CloudTAK v13.112.3 at `map.<domain>` with its own PostGIS database. Each Keycloak user gets their own TAK certificate. See [docs/cloudtak.md](docs/cloudtak.md).
 - **A real ATAK test device.** `atak/` runs Android Tactical Assault Kit for Civilian Use (ATAK-CIV) 5.5.1.10, built from public source, in an Android virtual machine (VM) under KubeVirt. It connects to TAK over mutual Transport Layer Security (TLS) on 8089 like a field device. It is a separate package for amd64 nodes with Kernel-based Virtual Machine (KVM). See [docs/atak-device.md](docs/atak-device.md).
@@ -147,14 +141,14 @@ The host needs a POSIX shell and a running container engine; see
 
 ### Deploy a release
 
-From 0.11 on, releases use `oci://ghcr.io/jonathanagustin/uds-takserver/takserver:<version>-upstream`, with one entry per architecture. Releases through 0.10 keep their original registry coordinates; follow the documentation for that release. Add it to a UDS bundle next to UDS Core with the [`keylessVerification`](#verify-a-release) block below, or deploy it directly onto a cluster that already runs UDS Core with the passthrough gateway:
+Release packages are published to `oci://ghcr.io/jonathanagustin/uds-takserver/takserver:<version>-upstream`, with one artifact per architecture. Add the package to a UDS bundle alongside UDS Core with the [`keylessVerification`](#verify-a-release) block below, or deploy it directly onto a cluster that already runs UDS Core with the passthrough gateway:
 
 ```bash
 VERSION=0.18.2 # x-release-please-version
 uds zarf package deploy "oci://ghcr.io/jonathanagustin/uds-takserver/takserver:${VERSION}-upstream" --confirm
 ```
 
-Pass `--architecture amd64` or `--architecture arm64` when the cluster differs from the machine you deploy from. See [ADR 10](adr/0010-amd64-and-arm64.md).
+Pass `--architecture amd64` or `--architecture arm64` when the cluster architecture differs from the machine you deploy from.
 
 [![Demo clip: the package is one file, TAK images come from the in-cluster Zarf registry, and the SBOMs are inside the package](docs-site/public/demo/demo-clip-airgap.jpg)](#operate-and-trust)
 
@@ -263,7 +257,7 @@ https://github.com/user-attachments/assets/2773b517-9793-45b9-811b-147ce0671d69
 
 ## Verify a release
 
-From v0.4.0 on, each release package is signed keylessly by `.github/workflows/release.yaml` on `main`, and the signature is in the public Sigstore transparency log. Check it before you deploy, once per architecture:
+Each release package is signed keylessly by `.github/workflows/release.yaml` on `main`, and the signature is recorded in the public Sigstore transparency log. Verify it before deploying, once per architecture:
 
 ```bash
 VERSION=0.18.2 # x-release-please-version
@@ -273,7 +267,7 @@ uds zarf package verify "oci://ghcr.io/jonathanagustin/uds-takserver/takserver:$
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-For releases from 0.11 on, put the same check on the package entry, as `core-base` has in [bundle/uds-bundle.yaml](bundle/uds-bundle.yaml):
+Add the same `keylessVerification` block to the package entry in your bundle (as `core-base` does in [bundle/uds-bundle.yaml](bundle/uds-bundle.yaml)):
 
 ```yaml title="uds-bundle.yaml"
   - name: takserver
@@ -284,7 +278,7 @@ For releases from 0.11 on, put the same check on the package entry, as `core-bas
       certificateOIDCIssuer: https://token.actions.githubusercontent.com
 ```
 
-The package index also has signed SLSA v1 build provenance, stored in GHCR and in the repository's attestations. Check it with the [GitHub CLI](https://cli.github.com/):
+The package index also carries signed SLSA v1 build provenance in GHCR and in the repository's attestations. Verify it with the [GitHub CLI](https://cli.github.com/):
 
 ```bash
 VERSION=0.18.2 # x-release-please-version
@@ -293,17 +287,15 @@ gh attestation verify "oci://ghcr.io/jonathanagustin/uds-takserver/takserver:${V
   --signer-workflow jonathanagustin/uds-takserver/.github/workflows/release.yaml
 ```
 
-Each release also has the same provenance as a Sigstore bundle, `takserver-<version>-upstream.provenance.sigstore.json`. To check against that file instead, add `--bundle <file>`. Releases after 0.5.4 also have `takserver-<version>-upstream.intoto.jsonl`, which holds the signed in-toto statement from that bundle (its DSSE envelope) on one line, for tools that read SLSA provenance in that layout.
+Each release attaches the same provenance as a Sigstore bundle (`takserver-<version>-upstream.provenance.sigstore.json`, pass `--bundle <file>`) and as an in-toto JSONL statement (`takserver-<version>-upstream.intoto.jsonl`). To read the verification bundle directly from GHCR, add `--bundle-from-oci`.
 
-For a manual recovery, the provenance records the workflow commit that published the package. That can differ from the application commit named by the release tag. The publisher checks the tag and application source before building. To read the verification bundle directly from GHCR, use a recent GitHub CLI and add `--bundle-from-oci`.
-
-The TAK, CloudTAK, and PostGIS images have signed SLSA v1 build provenance too. Each architecture's image is signed by the workflow run that built it. A multi-arch tag is signed by the run that wrote the index. Images built before that was added, including the ones in 0.5.4 and earlier, have none. To check an image tag listed in `zarf.yaml`:
+The TAK, CloudTAK, and PostGIS container images carry signed SLSA v1 build provenance as well. To verify an image tag listed in `zarf.yaml`:
 
 ```bash
 gh attestation verify "oci://ghcr.io/jonathanagustin/uds-takserver/<image>:<tag>" --owner jonathanagustin
 ```
 
-The existing demo videos retain their original signing identity from before the repository rename. The videos on the `demo` release are signed by `.github/workflows/demo.yaml` on `main`. Each video has a Cosign bundle, `<video>.sigstore.json`, and both have SLSA v1 provenance in `demo-videos.intoto.jsonl`:
+Demo videos on the `demo` release include Cosign bundles (`<video>.sigstore.json`) and SLSA v1 provenance (`demo-videos.intoto.jsonl`):
 
 ```bash
 cosign verify-blob demo-deploy.mp4 --bundle demo-deploy.mp4.sigstore.json \
@@ -387,7 +379,7 @@ Release Please opens a release pull request from the Conventional Commit titles.
 | Streaming (ATAK, WinTAK) | `takserver-stream.<domain>` | passthrough, 443 SNI or 8089 | 8089 |
 | ATAK test device screen (optional) | `atak.<domain>` | tenant, 443 | 8000 in namespace `atak` |
 
-`<domain>` defaults to `uds.dev`. "443 SNI" means the passthrough gateway routes port 443 by the host name the client sends in TLS SNI. Ports 8443 and 8089 require a client certificate. A client can enroll on `<host>:8446` and stream to the same `<host>:8089`, the way ATAK expects ([ADR 12](adr/0012-standard-tak-ports-on-the-passthrough-gateway.md)). QUIC on User Datagram Protocol (UDP) 8090 is off unless `quic.enabled` is set. It uses the same client-certificate check and is reached through Envoy Gateway, not Istio ([ADR 20](adr/0020-quic-through-envoy-gateway.md)).
+`<domain>` defaults to `uds.dev`. "443 SNI" means the passthrough gateway routes port 443 by the host name the client sends in TLS SNI. Ports 8443 and 8089 require a client certificate. A client can enroll on `<host>:8446` and stream to the same `<host>:8089`, the way ATAK expects. QUIC on User Datagram Protocol (UDP) 8090 is off unless `quic.enabled` is set; when enabled, it uses the same client-certificate check through Envoy Gateway.
 
 **Browser sign-in:** members of the Keycloak group `/UDS Core/Admin` get `ROLE_ADMIN`. Groups under `/TAK/` with a `_READ` or `_WRITE` suffix become TAK groups. For example, `/TAK/Operators_READ` becomes the TAK group `Operators`. Only `/UDS Core/Admin` can sign in to the TAK Server web UI. CloudTAK also lets in `/CloudTAK/Users`, a group for people who use the map but are not admins. See [docs/cloudtak.md](docs/cloudtak.md#who-can-sign-in).
 
@@ -409,60 +401,11 @@ Release Please opens a release pull request from the Conventional Commit titles.
 
 The first six also have package values (`global.domain`, `tak.imageTag`, `dns.inCluster`, `dns.passthroughHosts`, `tak.plugins.memoryRequest`, `tak.plugins.memoryLimit`) that override them at deploy time. `values/common-values.yaml` is the overlay for the upstream chart. `bundle/test-values.yaml` is applied only by the test bundle. Named `small` and `production` overlays are in [docs/profiles.md](docs/profiles.md). See [docs/configuration.md](docs/configuration.md).
 
-## Supported architectures
-
-| Architecture | Images | Zarf package | Tested in CI |
-| --- | --- | --- | --- |
-| `amd64` (x86_64) | yes | yes | install and upgrade |
-| `arm64` (aarch64) | yes | yes | install and upgrade |
-
-The images are multi-arch: one tag serves both. Zarf packages are per architecture, and `uds run create-dev-package` builds for the machine you run it on. To build for the other one:
-
-```bash
-uds zarf package create . --flavor upstream --architecture arm64 --confirm
-```
-
-The ATAK test device is amd64 only and needs KVM on the node.
-
-## Testing
-
-`uds run test-install` runs the full suite against a new `k3d-core-slim-dev` cluster. The checks are in [`tasks/test.yaml`](tasks/test.yaml) and [`tests/`](tests/):
-
-- Pod health, Istio mesh, UDS policy, and gateway checks.
-- `tests/api-smoke.sh` exercises the Marti API on 8443, 8447, and 8446, and streams a Cursor on Target (CoT) event on 8089.
-- `tests/oidc-render.sh` checks that every TAK pod rendered the OIDC client secret.
-- Playwright tests sign in through Keycloak, check the admin role and mapped groups, enroll a client certificate on 8446, and open the admin UI with a client certificate.
-- The CloudTAK tests go from `map.<domain>` to the Keycloak login and back as that user, and require a live TAK connection with that user's certificate.
-
-In GitHub Actions, the Test workflow runs the install test on amd64 and arm64. It runs the upgrade test from the last release on both architectures too. Full Core deploys the full UDS Core layers and checks monitoring, logging, Falco, Portal, and a Velero backup and restore. It runs nightly, on relevant pushes to `main`, and on pull requests that touch those areas or carry the `full-core` label. The ATAK e2e workflow deploys the KubeVirt device and checks that it connects.
-
-The EKS, RKE2, and AKS workflows are manual. They initialize and validate the OpenTofu scaffolds in `.github/test-infra/` without creating cloud resources. Cloud credentials are not configured. [CI workflows](docs/ci.md) lists every workflow and when it runs.
-
-## Repository layout
-
-| Path | Purpose |
-| --- | --- |
-| `zarf.yaml`, `common/zarf.yaml` | Package metadata, variables, images, and the `takserver` and `cloudtak` components |
-| `charts/takserver/` | Config chart: UDS `Package`, ConfigMaps, standard TAK ports, and the certificate Job |
-| `charts/cloudtak/` | CloudTAK chart: Deployment, PostGIS, and its UDS `Package` |
-| `values/` | Values overlays for the upstream chart and the Pepr module |
-| `pepr/` | `takserver-oidc` Pepr module. It renders CoreConfig, sets the TAK startup order, writes the CoreDNS rewrite, and copies certificates. See [docs/configuration.md](docs/configuration.md#the-takserver-oidc-module) |
-| `bundle/` | Test bundle (UDS Core passthrough gateway plus this package), `uds-config.yaml`, and `test-values.yaml` |
-| `atak/` | Optional ATAK test device: KubeVirt package, VM, viewer, and Android application package (APK) build |
-| `upstream/` | Git submodules: TAK Server, CloudTAK, and ATAK-CIV source at pinned tags |
-| `tasks.yaml`, `tasks/` | `uds run` tasks, built on [uds-common](https://github.com/defenseunicorns/uds-common) |
-| `tests/` | API smoke scripts, upgrade and backup checks, Python unit tests, and Playwright tests |
-| `bench/` | Load benchmark harness, its configs, and the report. See [docs/benchmarks.md](docs/benchmarks.md) |
-| `demo/` | Scripts that record the demo videos |
-| `docs/`, `adr/` | Documentation and architecture decision records |
-| `.github/` | CI workflows, image builds, and test infrastructure |
-
-The layout follows the [UDS package guide](https://docs.defenseunicorns.com/core/how-to-guides/packaging-applications/create-uds-package/) and [uds-packages/reference-package](https://github.com/uds-packages/reference-package).
-
 ## Documentation
 
 | Doc | Covers |
 | --- | --- |
+| [Package reference](docs/reference.md) | Supported architectures, automated testing, repository layout, and known limitations |
 | [Configuration](docs/configuration.md) | Zarf variables, the values overlay, resource sizing, and what the config chart mounts |
 | [Single sign-on](docs/sso.md) | Keycloak client, group mapping, and certificate enrollment |
 | [Networking](docs/networking.md) | Gateway exposure, standard TAK ports, and the NetworkPolicy allow list |
@@ -477,19 +420,10 @@ The layout follows the [UDS package guide](https://docs.defenseunicorns.com/core
 | [Policy exemptions](docs/justifications.md) | Every UDS policy exemption, why it exists, and the package requirements not met yet |
 | [Decisions](adr/) | Architecture decision records, from certificates at deploy time to the ATAK device |
 
-## Known limitations
-
-- On k3d, host ports 8446 and 8089 are not mapped, and host port 443 is the tenant gateway. Reach the passthrough gateway with a port-forward or a load balancer.
-- Ports 8444, 9000, and 9001 are not exposed through a gateway.
-- The upstream chart renders the `postgres-configuration` ConfigMap with empty `pg_hba.conf` and `postgres.conf` keys.
-- The upstream chart does not mount the `uds-trust-bundle` ConfigMap. The API and messaging init containers import it into a copy of the Java virtual machine (JVM) trust store instead. See [docs/sso.md](docs/sso.md).
-- CloudTAK has no OpenID Connect route of its own yet ([upstream issue #661](https://github.com/dfpc-coe/CloudTAK/issues/661)), so this package adds the Keycloak sign-in route in the CloudTAK pod. CloudTAK logout ends the Keycloak session. Its default basemap is OpenStreetMap through a tile proxy in its pod; set `basemap.enabled: false` where the cluster cannot reach it. Features that need S3 are not available. See [docs/cloudtak.md](docs/cloudtak.md).
-- Resource requests are sized for a small development node, and NATS runs as a single replica. Production sizing and storage are not tuned yet.
-
 ## Security
 
 > [!NOTE]
-> **Status:** pre-1.0 and under active development. See [Known limitations](#known-limitations).
+> **Status:** pre-1.0 and under active development. See [Known limitations](docs/reference.md#known-limitations).
 
 
 
