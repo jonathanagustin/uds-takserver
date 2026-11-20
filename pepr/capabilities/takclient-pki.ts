@@ -117,7 +117,10 @@ function utcTime(date: Date): forge.asn1.Asn1 {
 }
 
 function integer(hex: string): forge.asn1.Asn1 {
-  return asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, false, util.hexToBytes(hex.length % 2 ? `0${hex}` : hex));
+  const padded = hex.length % 2 ? `0${hex}` : hex;
+  const trimmed = padded.replace(/^(?:00)+(?=[0-9a-f]{2})/i, "");
+  const der = parseInt(trimmed.slice(0, 2), 16) >= 0x80 ? `00${trimmed}` : trimmed;
+  return asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, false, util.hexToBytes(der));
 }
 
 function sha256WithRsa(): forge.asn1.Asn1 {
