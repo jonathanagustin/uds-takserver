@@ -42,6 +42,14 @@ class ImageTagPinning(unittest.TestCase):
                     self.assertEqual(data["variables"]["takserver"]["TAK_IMAGE_TAG"], tag)
             self.assertIs(yaml.safe_load((root / "bundle/airgap-config.yaml").read_text())
                           ["variables"]["takserver"]["CLOUDTAK_BASEMAP_ENABLED"], False)
+            postgis_tag = subprocess.check_output(
+                ["bash", ".github/container-and-chart/postgis/build.sh", "--tag"], cwd=root, text=True,
+            ).strip()
+            tak_values = yaml.safe_load((root / "charts/takserver/values.yaml").read_text())
+            self.assertTrue(
+                tak_values["backup"]["dump"]["image"].endswith(":" + postgis_tag),
+                tak_values["backup"]["dump"]["image"],
+            )
 
 
 if __name__ == "__main__":
