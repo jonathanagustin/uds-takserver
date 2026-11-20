@@ -57,6 +57,7 @@ replace charts/cloudtak/values.yaml "tag: ${cloudtak_version} # cloudtak-version
 
 replace zarf.yaml "${repo}/postgis:${postgis_version}\"" "${repo}/postgis:${postgis_tag}\""
 replace charts/cloudtak/values.yaml "${repo}/postgis:${postgis_version}" "${repo}/postgis:${postgis_tag}"
+replace charts/takserver/values.yaml "${repo}/postgis:${postgis_version}" "${repo}/postgis:${postgis_tag}"
 replace values/common-values.yaml "tag: \"${postgis_version}\"" "tag: \"${postgis_tag}\""
 
 # The six TAK images, plus TAK_IMAGE_TAG wherever a package is created or a
