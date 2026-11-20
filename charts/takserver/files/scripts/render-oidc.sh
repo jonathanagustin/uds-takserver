@@ -29,14 +29,21 @@ wait_for() {
   return 1
 }
 
-wait_for /var/run/tak-sso/TAK_OIDC_CLIENT_SECRET
 wait_for /var/run/tak-keystore/CAPASS
 
-TAK_OIDC_CLIENT_SECRET="$(xml_escape < /var/run/tak-sso/TAK_OIDC_CLIENT_SECRET)"
 TAK_KEYSTORE_PASS="$(xml_escape < /var/run/tak-keystore/CAPASS)"
-export TAK_OIDC_CLIENT_SECRET TAK_KEYSTORE_PASS
-# shellcheck disable=SC2016 # envsubst must see the names, not the values.
-envsubst '${TAK_OIDC_CLIENT_SECRET}${TAK_KEYSTORE_PASS}' < /template/CoreConfig.xml > /conf/CoreConfig.xml
+export TAK_KEYSTORE_PASS
+# shellcheck disable=SC2016
+if grep -q '${TAK_OIDC_CLIENT_SECRET}' /template/CoreConfig.xml; then
+  wait_for /var/run/tak-sso/TAK_OIDC_CLIENT_SECRET
+  TAK_OIDC_CLIENT_SECRET="$(xml_escape < /var/run/tak-sso/TAK_OIDC_CLIENT_SECRET)"
+  export TAK_OIDC_CLIENT_SECRET
+  # shellcheck disable=SC2016 # envsubst must see the names, not the values.
+  envsubst '${TAK_OIDC_CLIENT_SECRET}${TAK_KEYSTORE_PASS}' < /template/CoreConfig.xml > /conf/CoreConfig.xml
+else
+  # shellcheck disable=SC2016 # envsubst must see the name, not the value.
+  envsubst '${TAK_KEYSTORE_PASS}' < /template/CoreConfig.xml > /conf/CoreConfig.xml
+fi
 # shellcheck disable=SC2016
 if grep -q '${TAK_OIDC_CLIENT_SECRET}' /conf/CoreConfig.xml \
   || grep -q '${TAK_KEYSTORE_PASS}' /conf/CoreConfig.xml; then
