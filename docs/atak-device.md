@@ -30,11 +30,11 @@ For deployment, provisioning, and connection checks in one procedure, see
 [Connect the ATAK test device](how-to/connect-atak-test-device.md).
 
 ```bash
-uds zarf package create atak --set ATAK_TAG=5.5.1.10 --confirm
-uds zarf package deploy zarf-package-atak-device-amd64-*.tar.zst --set-variables DOMAIN=uds.dev --confirm
+./atak/ci/create-package.sh 5.5.1.10 --confirm
+uds zarf package deploy zarf-package-atak-device-amd64-*.tar.zst --set-values global.domain=uds.dev --confirm
 ```
 
-Or deploy the package the last `main` run tested, without building it:
+Or deploy the published package without building it. For v1beta1 packages, use `--set-values global.domain=uds.dev`. Existing v1alpha1 packages use `--set-variables DOMAIN=uds.dev`.
 
 ```bash
 uds zarf package deploy oci://ghcr.io/jonathanagustin/uds-takserver/packages/atak-device:5.5.1.10 \
