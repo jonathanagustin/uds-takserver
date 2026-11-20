@@ -25,7 +25,7 @@ PHASES = ['stage-and-ui-import', 'android-broadcast-and-fresh-peer-observation',
 STATUS = 'ui-import-broadcast-action-fresh-challenge-and-return-verified'
 # These contain producer/publisher code and tool/environment choices. Runtime
 # harness changes may reuse only after their exact integrated tree was tested.
-SEMANTICS = ['.github/workflows/atak-e2e.yaml', '.gitmodules', 'atak/apk', 'atak/driver', 'atak/vm', 'atak/viewer', 'atak/deploy', 'atak/zarf.yaml', 'atak/ci/device-images.sh', 'atak/ci/build-apk.sh', 'atak/ci/fetch-source.sh', 'upstream/atak-civ']
+SEMANTICS = ['.github/workflows/atak-e2e.yaml', '.gitmodules', 'atak/apk', 'atak/driver', 'atak/vm', 'atak/viewer', 'atak/deploy', 'atak/zarf.yaml', 'atak/values.yaml', 'atak/ci/create-package.sh', 'atak/ci/device-images.sh', 'atak/ci/build-apk.sh', 'atak/ci/fetch-source.sh', 'upstream/atak-civ']
 
 
 def stop_group(process):
