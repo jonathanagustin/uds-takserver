@@ -14,6 +14,10 @@ on:
         description: "Source live-action B-roll MP4 URL"
         type: string
         default: "https://github.com/user-attachments/assets/dfeb7d83-5728-4720-9f19-6707ca48af8f"
+      music_track_url:
+        description: "Optional soundtrack MP3 URL (leave empty to keep segment audio)"
+        type: string
+        default: "https://github.com/user-attachments/files/35176012/Pulse.of.Hope.mp3"
 
 permissions:
   contents: read
@@ -36,18 +40,27 @@ jobs:
       - name: Download source clips
         env:
           VEO_CLIP_URL: ${{ inputs.veo_clip_url }}
+          MUSIC_TRACK_URL: ${{ inputs.music_track_url }}
         run: |
           mkdir -p /tmp/trailer-src
           curl -fsSL "$VEO_CLIP_URL" -o /tmp/trailer-src/veo-clip.mp4
           curl -fsSL "https://github.com/jonathanagustin/uds-takserver/releases/download/v0.12.0/uds-takserver-ui-preview.mp4" -o /tmp/trailer-src/ui-preview.mp4
+          if [ -n "$MUSIC_TRACK_URL" ]; then
+            curl -fsSL "$MUSIC_TRACK_URL" -o /tmp/trailer-src/music-track.mp3
+          fi
 
       - name: Render hero trailer and alpha overlays
         run: |
+          extra_args=()
+          if [ -f /tmp/trailer-src/music-track.mp3 ]; then
+            extra_args+=(--music-track /tmp/trailer-src/music-track.mp3)
+          fi
           python3 demo/civilian-trailer.py \
             --veo-clip /tmp/trailer-src/veo-clip.mp4 \
             --ui-clip /tmp/trailer-src/ui-preview.mp4 \
             --topo-bg assets/tactical-topo.jpg \
-            --out-dir /tmp/trailer-out
+            --out-dir /tmp/trailer-out \
+            "${extra_args[@]}"
           ls -lh /tmp/trailer-out
 
       - name: Upload trailer artifact
