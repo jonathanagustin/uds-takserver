@@ -161,7 +161,7 @@ test("render volumes, init container spec, and CRL mount match exact contracts",
     { name: CONFIG_MOUNT, emptyDir: {} },
     { name: "oidc-script", configMap: { name: "takserver-oidc-render" } },
     { name: "oidc-template", configMap: { name: "core-config" } },
-    { name: "oidc-secret", secret: { secretName: "takserver-sso" } },
+    { name: "oidc-secret", secret: { secretName: "takserver-sso", optional: true } },
     { name: "keystore-secret", secret: { secretName: "takserver-keystore" } },
     { name: "takserver-crl", secret: { secretName: "takserver-crl", items: [{ key: "ca.crl", path: "ca.crl" }] } },
   ]);
@@ -238,4 +238,9 @@ test("exported names and minimal pod shapes hold their contracts", () => {
   assert.equal(bare.spec?.containers, undefined);
 });
 
-
+test("takserver-sso volume is optional so sso.enabled=false pods can schedule", () => {
+  const p = certVolume("takserver-api");
+  assert.equal(addRender(p, IMAGE), true);
+  const sso = p.spec?.volumes?.find(v => v.name === "oidc-secret");
+  assert.deepEqual(sso?.secret, { secretName: "takserver-sso", optional: true });
+});
