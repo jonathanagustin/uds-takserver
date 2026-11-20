@@ -25,7 +25,7 @@ export const TAK_NAMESPACE = "takserver";
 // TakClients and their Secrets live here and nowhere else, so the watcher's
 // Secret access outside takserver is this one namespace. See ADR 22.
 export const CLIENT_NAMESPACE = "takclients";
-export const GROUP = "tak.jonathanagustin.github.io";
+export const GROUP = "tak.uds.dev";
 export const CRL_SECRET = "takserver-crl";
 export const CA_KEY_SECRET = "takserver-ca-key";
 export const KEYSTORE_SECRET = "takserver-keystore";

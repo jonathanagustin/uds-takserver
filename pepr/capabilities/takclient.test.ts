@@ -1186,7 +1186,7 @@ test("a replacement cannot bypass a missing certificate fingerprint", async () =
   const { d, calls, store } = fake();
   await reconcileCurrentEvent(client(), "ADDED", d);
   const annotations = { ...calls.annotate.at(-1)!.annotations };
-  delete annotations["tak.jonathanagustin.github.io/fingerprint"];
+  delete annotations["tak.uds.dev/fingerprint"];
   store.secrets["takclients/takclient-test"].metadata!.annotations = annotations;
   const doc = client({ metadata: { name: "takclient-test", annotations }, spec: { callsign: "different" } });
   assert.equal(await reconcileCurrentEvent(doc, "MODIFIED", d), true);
@@ -1254,7 +1254,7 @@ test("finalization uses the delivered certificate even if resource annotation fa
   assert.equal(annotations[ISSUER], "tak");
   assert.equal(store.secrets["takclients/takclient-test"].data!["user-password"], undefined);
   assert.equal(await finalizeCurrentEvent(client(), d), true);
-  const hash = annotations["tak.jonathanagustin.github.io/fingerprint"];
+  const hash = annotations["tak.uds.dev/fingerprint"];
   assert.ok(calls.tak.some(call => call.path === `/Marti/api/certadmin/cert/${encodeURIComponent(hash)}`));
   assert.equal(store.secrets["takclients/takclient-test"], undefined);
   assert.equal(await readCredential(d.cluster, "takclient-test"), undefined);

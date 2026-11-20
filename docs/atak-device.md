@@ -137,7 +137,7 @@ ATAK always enrolls on 8446 with Hypertext Transfer Protocol (HTTP) Basic authen
 For a real device, apply a `TakClient` in namespace `takclients`:
 
 ```yaml
-apiVersion: tak.jonathanagustin.github.io/v1alpha1
+apiVersion: tak.uds.dev/v1alpha1
 kind: TakClient
 metadata:
   name: alpha-1
@@ -150,7 +150,7 @@ spec:
 
 When `kubectl get takclient alpha-1 -n takclients` shows `Ready`, Secret `takclients/alpha-1` has `package.zip`. Copy it to the device's `Download` folder as `atak-alpha-1.dpk`, or open it with ATAK's Import Manager. The Secret also has `client.pem`, `client.key`, and `ca.pem` for other clients.
 
-The Secret always keeps the full `TakClient` resource name. Newly issued Secrets also record that exact name in the `tak.jonathanagustin.github.io/takclient` annotation. The label with the same key keeps names up to 63 characters unchanged. For longer names, its value is `sha256_` followed by the first 56 lowercase hexadecimal characters of the SHA-256 hash of the full name, encoded as UTF-8. Use that value for label selectors, or retrieve the Secret directly by its full name. Reconciliation and deletion use the full name rather than the label. `spec.callsign` still has its separate 4-to-63-character limit.
+The Secret always keeps the full `TakClient` resource name. Newly issued Secrets also record that exact name in the `tak.uds.dev/takclient` annotation. The label with the same key keeps names up to 63 characters unchanged. For longer names, its value is `sha256_` followed by the first 56 lowercase hexadecimal characters of the SHA-256 hash of the full name, encoded as UTF-8. Use that value for label selectors, or retrieve the Secret directly by its full name. Reconciliation and deletion use the full name rather than the label. `spec.callsign` still has its separate 4-to-63-character limit.
 
 Delete the `TakClient` to remove the device. The watcher first revokes its certificate-table row through TAK's certadmin API on 8443, which closes its streaming connection and rejects reconnects. It then deletes the file user and Secret and records the serial in the CRL as a backstop. Revoking a new TAK-issued certificate does not request a TAK restart. A pending legacy migration or periodic CRL-expiry refresh can still require one. A failed certificate lookup or revoke retains the finalizer and Secret for retry.
 

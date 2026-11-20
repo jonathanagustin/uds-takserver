@@ -134,7 +134,7 @@ const withTakClients = generated.replace(
   "    sideEffects: None",
   [
     "      - apiGroups:",
-    "          - tak.jonathanagustin.github.io",
+    "          - tak.uds.dev",
     "        apiVersions:",
     "          - v1alpha1",
     "        operations:",

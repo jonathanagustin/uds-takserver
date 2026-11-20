@@ -28,11 +28,11 @@ What TAK Server 5.7 (`5.7-RELEASE-14`, the upstream tag this repository builds) 
 
 ### The resource
 
-- `TakClient`, group `tak.jonathanagustin.github.io`, version `v1alpha1`, namespaced. The TypeScript type is in `pepr/api/` and the CRD is generated with `npx pepr crd generate`. The generated CRD ships in the module chart. The group is a domain this repository's owner controls, and `v1alpha1` leaves room to change the schema.
+- `TakClient`, group `tak.uds.dev`, version `v1alpha1`, namespaced. The TypeScript type is in `pepr/api/` and the CRD is generated with `npx pepr crd generate`. The generated CRD ships in the module chart. The group follows the `uds.dev` namespace convention (renamed from `tak.jonathanagustin.github.io`), and `v1alpha1` leaves room to change the schema.
 - `spec.callsign`: the certificate CN and the TAK file user name. It must pass TAK's username rule.
 - `spec.groups`: one or more TAK groups, for example `["Operators"]`.
 - `spec.validityDays`: certificate lifetime, default 30, maximum 365.
-- `status.conditions`: `Ready`, with a reason when it is false (`InvalidSpec`, `NoDomain`, `WaitingForCa`, `WaitingForAdmin`, `TakUnavailable`) and `Issued` when it is true. The condition has `observedGeneration`. The Pepr 2.0.7 CRD generator writes only `conditions` under `status`, so the serial number, the SHA-256 fingerprint, and `notAfter` are annotations (`tak.jonathanagustin.github.io/serial`, `/fingerprint`, `/not-after`) on the `TakClient` and on its Secret.
+- `status.conditions`: `Ready`, with a reason when it is false (`InvalidSpec`, `NoDomain`, `WaitingForCa`, `WaitingForAdmin`, `TakUnavailable`) and `Issued` when it is true. The condition has `observedGeneration`. The Pepr 2.0.7 CRD generator writes only `conditions` under `status`, so the serial number, the SHA-256 fingerprint, and `notAfter` are annotations (`tak.uds.dev/serial`, `/fingerprint`, `/not-after`) on the `TakClient` and on its Secret.
 - A `TakClient` is reconciled only in namespace `takclients`, which the module chart creates. Its Secret has the same name, in the same namespace, with `client.pem`, `client.key`, `ca.pem`, `package.zip` (the data package), and `password` (the PKCS#12 password in the package). Only these Secrets live in `takclients`, so the watcher's Secret verbs there need no names. A Role cannot pin Secret `create` to a name, and this keeps that grant away from namespaces with other Secrets. A device in another namespace, such as the ATAK test VM in `atak`, gets a copy made by whoever deploys it.
 
 ### Where signing happens
@@ -52,7 +52,7 @@ What TAK Server 5.7 (`5.7-RELEASE-14`, the upstream tag this repository builds) 
 ### Registering the client in TAK
 
 - The watcher calls TAK's admin API on `takserver-api:8443` with the admin certificate it already reads: `POST /user-management/api/new-user` with the callsign, the groups, and a random password that nobody keeps (TAK requires one). `X509Authenticator` then maps the certificate to that user by CN.
-- `UserAuthenticationFile.xml` is not on a volume, so a messaging restart loses the user. The watcher already watches `takserver-messaging` for the startup order. When it becomes Available, the watcher registers every `TakClient` again. A `TakClient` that is not `Ready` because the CA, the admin certificate, or TAK is not ready yet is tried again every minute: the watcher writes annotation `tak.jonathanagustin.github.io/reconcile-retry`, which sends another update.
+- `UserAuthenticationFile.xml` is not on a volume, so a messaging restart loses the user. The watcher already watches `takserver-messaging` for the startup order. When it becomes Available, the watcher registers every `TakClient` again. A `TakClient` that is not `Ready` because the CA, the admin certificate, or TAK is not ready yet is tried again every minute: the watcher writes annotation `tak.uds.dev/reconcile-retry`, which sends another update.
 - The takserver Package allows ingress to `takserver-api` on 8443 from the watcher pods in `pepr-system` (`app: pepr-<uuid>-watcher`), with the watcher's ServiceAccount (`pepr-<uuid>-watcher`) as `remoteServiceAccount`. `pepr-system` is ambient, like `takserver`.
 - The TAK API's server certificate is not issued for the Service name, so the watcher checks the chain against the TAK CA and skips the host name check.
 
@@ -83,5 +83,5 @@ What TAK Server 5.7 (`5.7-RELEASE-14`, the upstream tag this repository builds) 
 - The module's watcher can now read the TAK CA key. A compromise of the watcher pod is a compromise of the CA. The admission pods cannot read it. Before this change, the cert Job was the only workload with that access.
 - Deleting the `takclients` namespace, or uninstalling the module chart, deletes every `TakClient` Secret. If the watcher is not running then, the finalizers hold the delete until it is.
 - The watcher makes HTTPS calls to TAK, which it did not do before. That is a new network rule and a new failure mode, reported in the `Ready` condition.
-- Nothing schedules a renewal. A reconcile issues a new certificate when less than a third of its lifetime is left, but a reconcile runs only when the `TakClient` changes or the watcher starts. Annotation `tak.jonathanagustin.github.io/not-after` shows the expiry. Scheduled renewal is a later change.
+- Nothing schedules a renewal. A reconcile issues a new certificate when less than a third of its lifetime is left, but a reconcile runs only when the `TakClient` changes or the watcher starts. Annotation `tak.uds.dev/not-after` shows the expiry. Scheduled renewal is a later change.
 - Certificates that TAK issues through enrollment on 8446 are not affected. They are still revoked through TAK's own certificate table.
