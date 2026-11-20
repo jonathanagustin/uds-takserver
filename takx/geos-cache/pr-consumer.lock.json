@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "source_commit": "8d3dd69ad95358707d65d137744291c042297c9f",
+  "run_id": "44709400370",
+  "run_attempt": "1",
+  "subject_digest": "sha256:82a172964c74b9f5afe8e429ccc921780d0a95a2b842a194ba52616b9ad7dba4",
+  "input_key": "geos-capi-local-v1-729850301b927b26abad38a5b029e8acb6de22cf4b8171bd336d52f8a463c1b2",
+  "capsule_sha256": "d9675543cc0eb18df38f5f38e4deb02ca5ff43c0de8d29f76d8ac8325d1ae66b"
+}
