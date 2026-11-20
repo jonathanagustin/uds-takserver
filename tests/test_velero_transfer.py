@@ -78,6 +78,23 @@ class TransferTests(unittest.TestCase):
         self.assertEqual(tests['/metadata/labels/app.kubernetes.io~1managed-by'], 'Helm')
         self.assertTrue(all(op['path'].startswith('/metadata/') for op in patch))
 
+    def test_field_release_keeps_unrelated_fields_and_refuses_unknown_owners(self):
+        fields = {'f:args': {}, 'f:image': {}, 'f:command': {},
+                  'f:env': {'k:{"name":"NODE_NAME"}': {'f:valueFrom': {'f:fieldRef': {}}}}}
+        for key in reversed(T.NODE_AGENT_CONTAINER):
+            fields = {key: fields}
+        entry = {'manager': 'zarf', 'apiVersion': 'apps/v1', 'fieldsType': 'FieldsV1', 'fieldsV1': fields}
+        patch = T.field_release_patch([entry])
+        self.assertEqual(len(patch), 3)
+        self.assertTrue(all(op['op'] == 'remove' and op['path'].startswith('/metadata/managedFields/0/')
+                            for op in patch))
+        self.assertCountEqual([op['path'].rsplit('/', 1)[-1] for op in patch], ['f:args', 'f:image', 'f:fieldRef'])
+        with self.assertRaisesRegex(ValueError, 'unexpected manager'):
+            T.field_release_patch([{**entry, 'manager': 'unreviewed'}])
+        with self.assertRaisesRegex(ValueError, 'unavailable'):
+            T.field_release_patch(None)
+        self.assertEqual(T.field_release_patch([{**entry, 'subresource': 'status'}]), [])
+
     def test_forward_real_commands_and_actual_state_idempotence(self):
         api = API()
         result = api.driver().transfer(T.LOCAL, T.CORE)

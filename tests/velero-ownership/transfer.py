@@ -31,6 +31,45 @@ TERMINAL = {
 }
 
 
+NODE_AGENT_CONTAINER = ('f:spec', 'f:template', 'f:spec', 'f:containers', 'k:{"name":"node-agent"}')
+NODE_AGENT_FIELDS = {
+    'args': ('f:args',),
+    'image': ('f:image',),
+    'nodeNameFieldRef': ('f:env', 'k:{"name":"NODE_NAME"}', 'f:valueFrom', 'f:fieldRef'),
+    'namespaceFieldRef': ('f:env', 'k:{"name":"VELERO_NAMESPACE"}', 'f:valueFrom', 'f:fieldRef'),
+}
+NODE_AGENT_MANAGERS = ('kubectl-create', 'zarf')
+
+
+def node_agent_fields_owned(entry):
+    if entry.get('fieldsType') != 'FieldsV1' or entry.get('subresource'):
+        return []
+    owned = []
+    for name, path in NODE_AGENT_FIELDS.items():
+        node = entry.get('fieldsV1', {})
+        for key in (*NODE_AGENT_CONTAINER, *path):
+            node = node.get(key)
+            if node is None:
+                break
+        if node is not None:
+            owned.append(name)
+    return owned
+
+
+def field_release_patch(managed_fields):
+    """Release only the four reviewed leaf paths from the two observed managers."""
+    require(isinstance(managed_fields, list) and managed_fields, 'managed fields are unavailable')
+    patch = []
+    for index, entry in enumerate(managed_fields):
+        for name in node_agent_fields_owned(entry):
+            require(entry.get('manager') in NODE_AGENT_MANAGERS and entry.get('apiVersion') == 'apps/v1',
+                    'reviewed agent field has an unexpected manager or API version')
+            path = '/'.join(key.replace('~', '~0').replace('/', '~1')
+                            for key in (*NODE_AGENT_CONTAINER, *NODE_AGENT_FIELDS[name]))
+            patch.append({'op': 'remove', 'path': f'/metadata/managedFields/{index}/fieldsV1/{path}'})
+    return patch
+
+
 def require(value, message):
     if not value:
         raise ValueError(message)
@@ -99,15 +138,18 @@ def validate_idle(objects):
 
 
 class Transfer:
-    def __init__(self, context, uid, command, guard=GUARD.verify):
+    def __init__(self, context, uid, command, guard=GUARD.verify, *, release_agent_fields=False):
         self.context, self.uid, self.command, self.guard = context, uid, command, guard
         self.identity = guard(context, command)
+        self.release_agent_fields = release_agent_fields
 
-    def read(self, kind, name=None):
+    def read(self, kind, name=None, *, managed_fields=False):
         args = ['kubectl', '--context', self.context, 'get', kind]
         if name:
             args.append(name)
         args += ['-n', 'velero', '-o', 'json']
+        if managed_fields:
+            args.append('--show-managed-fields')
         return json.loads(self.command(args))
 
     def before_write(self):
@@ -136,7 +178,8 @@ class Transfer:
 
     def transfer(self, source, target):
         self.before_write()
-        ds = self.read('daemonset', 'node-agent')
+        release_fields = self.release_agent_fields and source != target
+        ds = self.read('daemonset', 'node-agent', managed_fields=release_fields)
         # Idempotence is based on actual API state, not a prior success journal.
         if source != target and ownership(ds) == target:
             validate_agent(ds, self.uid, target)
@@ -151,12 +194,17 @@ class Transfer:
             require(ds['metadata'].get('annotations', {}).get('helm.sh/resource-policy') == 'keep',
                     'Core source agent lacks prior keep protection')
         patch = ownership_patch(ds, self.uid, source, target)
+        if release_fields:
+            patch.extend(field_release_patch(ds['metadata'].get('managedFields')))
         # Recheck run/cluster immediately before the guarded write as idle reads take time.
         require(self.guard(self.context, self.command) == self.identity, 'ephemeral cluster receipt changed')
         self.command(['kubectl', '--context', self.context, 'patch', 'daemonset', 'node-agent', '-n', 'velero',
                       '--type=json', '--patch-file=/dev/stdin', '-o', 'json'], json.dumps(patch))
-        actual = self.read('daemonset', 'node-agent')
+        actual = self.read('daemonset', 'node-agent', managed_fields=release_fields)
         validate_agent(actual, self.uid, target)
+        if release_fields:
+            require(not field_release_patch(actual['metadata'].get('managedFields')),
+                    'reviewed field ownership release did not persist')
         require(actual['metadata']['annotations'].get('helm.sh/resource-policy') == 'keep', 'keep patch not retained')
         return {'changed': True, 'uid': self.uid, 'resourceVersion': actual['metadata']['resourceVersion']}
 
