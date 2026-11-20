@@ -119,12 +119,9 @@ Offline parser, key, alias, privacy, payload-lease and cleanup controls run with
 uv run --no-project --with pyyaml==6.0.3 python -B -m unittest discover -s takx/geos-cache -p 'test_*.py' -v
 ```
 
-These synthetic fixtures never establish native compilation. Fresh build and
-two-prefix execution receipts must be assessed separately. Registry push/pull,
-protected publisher/source trust, authenticated and anonymous readback,
-immutable-key promotion, SDK/renderer/TAKX acceptance and security suitability
-remain unqualified. Native local hosted evidence is recorded below. The schema keeps registry,
-publisher, SDK and security acceptance explicitly false. Issue #482 stays open.
+These synthetic fixtures exercise the cache contract. See the hosted evidence
+below for native compilation, two-prefix execution, and registry publication.
+Issue #482 tracks automatic cache reuse.
 
 ## Read-only hosted trial
 
@@ -189,10 +186,23 @@ typed qualification, readback, consumer and accepted receipts are uploaded.
 Failure emits no accepted receipt. The original producer/local relocation
 records keep all four wider acceptance flags false. A successful registry
 receipt can establish component transport/publisher acceptance only; SDK,
-renderer, client and security suitability remain false. No cache is wired into
-automatic consumers by this experiment. Until an actual protected run and its
-immutable bytes are independently reviewed, registry acceptance remains open
-under #482; mocked transport tests establish no live publication or native proof.
+renderer, client and security suitability remain false. Automatic cache reuse remains open under #482.
+
+### Published GEOS cache
+
+[Protected-main run 44709400370](https://github.com/jonathanagustin/uds-takserver/actions/runs/44709400370)
+passed native qualification, publisher verification, registry readback,
+two-prefix execution, and input-key promotion on 2026-11-20.
+
+- Registry: `ghcr.io/jonathanagustin/uds-takserver/native-cache/geos-capi`
+- Manifest: `sha256:82a172964c74b9f5afe8e429ccc921780d0a95a2b842a194ba52616b9ad7dba4`
+- Input key: `geos-capi-local-v1-729850301b927b26abad38a5b029e8acb6de22cf4b8171bd336d52f8a463c1b2`
+- Capsule: `sha256:d9675543cc0eb18df38f5f38e4deb02ca5ff43c0de8d29f76d8ac8325d1ae66b`
+
+An independent read-only GHCR check retrieved identical manifest bytes by
+digest and input key. The config and capsule matched the manifest, and
+the cache verifier matched all five capsule files and both static archive
+object inventories to the [registry receipt](https://github.com/jonathanagustin/uds-takserver/actions/runs/44709400370/artifacts/14616307543).
 
 ### Accepted native local evidence
 
@@ -201,5 +211,5 @@ passed on source `df1eb30b32aa6311e3523726c2e75b30a3075f33`. Both restored
 prefixes passed genuine geometry/error and whole-archive PIC controls, with
 matching tools, providers, headers and payload. The exact records and independent
 integrity review are retained in [the qualification checkpoint](qualification/2026-11-18/README.md).
-This closes the missing native local build/relocation evidence only; the
-remaining registry, publisher, SDK and security gates above stay open.
+This checkpoint covers native local build and relocation. The registry
+publication has its own evidence above.
