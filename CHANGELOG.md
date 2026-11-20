@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/jonathanagustin/uds-takserver/compare/v1.0.0...v1.1.0) (2026-11-20)
+
+
+### Features
+
+* **demo:** mix Pulse of Hope soundtrack into civilian hero trailer ([#765](https://github.com/jonathanagustin/uds-takserver/issues/765)) ([b8ccc1e](https://github.com/jonathanagustin/uds-takserver/commit/b8ccc1e8ff664cd2e8170f7f2a602e3827108a96))
+
+
+### Bug Fixes
+
+* **demo:** align trailer captions with recorded evidence ([#762](https://github.com/jonathanagustin/uds-takserver/issues/762)) ([ded2ebc](https://github.com/jonathanagustin/uds-takserver/commit/ded2ebce86422c68050bd643979ad830ae865e84))
+
 ## [1.0.0](https://github.com/jonathanagustin/uds-takserver/compare/v0.20.0...v1.0.0) (2026-11-20)
 
 
