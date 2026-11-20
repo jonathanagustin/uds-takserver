@@ -187,7 +187,7 @@ force loopback. Local route/stream tests run with
 Their controlled TLS-alert peer tests the refusal verdict; the real TAK
 certificate-refusal and CoT checks remain part of the cluster test above.
 
-The script exits early when the QUIC Service is missing, unless Envoy Gateway is installed, because then the flag did not reach the chart. See [ADR 20](../adr/0020-quic-through-envoy-gateway.md).
+The script exits early when the QUIC Service is missing, unless Envoy Gateway is installed, because then the flag did not reach the chart.
 
 ## Tenant gateway to 8447
 
@@ -198,7 +198,7 @@ The Package custom resource (CR) `expose` entry cannot ask the gateway to use TL
 - DestinationRule `takserver-web` sets TLS mode `SIMPLE` on port 8447 with SNI `takserver-web.takserver.svc.cluster.local`, the same expected name, and `credentialName: takserver-web-ca`. It is exported only to `istio-tenant-gateway`. `insecureSkipVerify` is not set.
 - A Zarf deploy action copies `ca.pem` from ConfigMap `cert-migration` into Secret `takserver-web-ca` (key `cacert`) in `istio-tenant-gateway`. A gateway reads `credentialName` only from its own namespace. The CA key is not copied.
 
-In ambient mode the gateway's TLS connection still travels inside HBONE (Istio's HTTP-based tunnel between workloads), so strict mutual TLS (mTLS) still applies. TAK then reports no non-secure ports and marks its cookies Secure. The trade-offs are in [ADR 0006](../adr/0006-re-encrypt-gateway-traffic-to-tak.md).
+In ambient mode the gateway's TLS connection still travels inside HBONE (Istio's HTTP-based tunnel between workloads), so strict mutual TLS (mTLS) still applies. TAK then reports no non-secure ports and marks its cookies Secure.
 
 ## Allow rules
 
@@ -217,13 +217,13 @@ The package allows only the flows below. Every allow rule has its own descriptio
 
 Postgres, NATS, and Ignite are installed in the `takserver` namespace by the upstream chart. There is no namespace-wide allow rule. Each pod-to-pod flow is its own rule pair, from `intraNamespace` in `charts/takserver/values.yaml`: an Egress rule on the client and an Ingress rule on the server, both limited to the port.
 
-The list comes from `tests/flows.py`, which reads `/proc/net/tcp` in every pod and maps each connection to a client pod, a server pod, and a port. Task `test:flows` runs it after the other tests and fails when a connection has no rule. The config pod holds no Postgres or NATS connection, so it is not a client of either. See [ADR 0007](../adr/0007-per-workload-network-rules.md).
+The list comes from `tests/flows.py`, which reads `/proc/net/tcp` in every pod and maps each connection to a client pod, a server pod, and a port. Task `test:flows` runs it after the other tests and fails when a connection has no rule. The config pod holds no Postgres or NATS connection, so it is not a client of either.
 
 Ignite also has explicit rules both ways between `takserver-ignite` and the API, messaging, config, and plugins pods on 47100, 47500, and 10800. A missing return path stalls until `igniteConnectionTimeoutSeconds` (300) before the client falls back.
 
 Keycloak is not in the namespace. The API and messaging selectors' only external allow is port 443 on the tenant gateway, which fronts discovery, the token endpoint, and JWKS. Messaging needs it because a certificate enrolled with a Keycloak token is checked against the issuer again when the client connects on 8089 (`X509Authenticator` calls the OAuth authenticator). Without it the TLS handshake completes and TAK then drops the client.
 
-There is no `remoteGenerated: Anywhere` rule and no Prometheus scrape rule. TAK does not expose a Prometheus endpoint, so nothing is opened for a scraper. See [ADR 0003](../adr/0003-no-prometheus-monitor.md).
+There is no `remoteGenerated: Anywhere` rule and no Prometheus scrape rule. TAK does not expose a Prometheus endpoint, so nothing is opened for a scraper.
 
 The Ignite chart and the API, messaging, config, and plugins Deployments use ServiceAccount `takserver-ignite`. Each of those pod labels needs its own Kubernetes API rule. One rule limited to `app: takserver-ignite` drops the clients' API calls during the TLS handshake.
 

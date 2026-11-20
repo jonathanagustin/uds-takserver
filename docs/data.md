@@ -78,7 +78,7 @@ Velero's default schedule is `velero-udsbackup`, daily at 03:00 Coordinated Univ
 
 To cover the databases, the package stores a logical `pg_dump` in Secret `tak-db-dump` (database `cot`) and Secret `cloudtak-db-dump` (CloudTAK's PostGIS database). CronJobs `tak-db-dump` (02:15 UTC) and `cloudtak-db-dump` (02:20 UTC) refresh those Secrets. They render only when `backup.dump.enabled` is true, which the full bundle sets. A slim install does not create them.
 
-`FILESYSTEM_BACKUP` defaults to `false`. Slim leaves it there. The full-core deploy (`bundle/full/uds-config.yaml`) sets it to `true`. That renders DaemonSet `node-agent` from `docker.io/velero/velero:v1.18.4` (amd64 and arm64, the same tag Core already runs), Exemption `velero-node-agent`, and `backup.velero.io/backup-volumes: data` on the Postgres and PostGIS pods. The Velero Package gets an egress allow to the Kubernetes API for pods labeled `name: node-agent`. See [ADR 0021](../adr/0021-velero-node-agent.md).
+`FILESYSTEM_BACKUP` defaults to `false`. Slim leaves it there. The full-core deploy (`bundle/full/uds-config.yaml`) sets it to `true`. That renders DaemonSet `node-agent` from `docker.io/velero/velero:v1.18.4` (amd64 and arm64, the same tag Core already runs), Exemption `velero-node-agent`, and `backup.velero.io/backup-volumes: data` on the Postgres and PostGIS pods. The Velero Package gets an egress allow to the Kubernetes API for pods labeled `name: node-agent`.
 
 File-system backup needs volumes that are not hostPath. Velero skips a hostPath PersistentVolume (`isHostPathVolume` in Velero's `pkg/podvolume/backupper.go`), and k3d's default `local-path` class makes hostPath PersistentVolumes. So on a default k3d install the node-agent runs but copies nothing.
 
