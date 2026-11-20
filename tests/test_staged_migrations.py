@@ -40,6 +40,30 @@ class StagedMigrationTests(unittest.TestCase):
         driver.transfer.read.side_effect = ValueError('private secondary observation')
         return module, driver, driver.directory / 'PRIVATE-command-failure.txt'
 
+    def test_handoff_field_owners_publication_is_allowlisted(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, ENV, clear=True):
+            root = Path(temporary).resolve()
+            module, driver, _ = self.owner_command_fixture(root)
+            node_agent = {'f:args': {}, 'f:env': {'k:{"name":"NODE_NAME"}': {'f:valueFrom': {'f:fieldRef': {}}}}}
+            fields = node_agent
+            for key in reversed(('f:spec', 'f:template', 'f:spec', 'f:containers', 'k:{"name":"node-agent"}')):
+                fields = {key: fields}
+            managers = [{'manager': name, 'fieldsType': 'FieldsV1', 'fieldsV1': fields}
+                        for name in ('zarf', 'fixture-secret-manager')]
+            owners = module.node_agent_field_owners(managers)
+            expected = {'args': ['other', 'zarf'], 'image': [], 'nodeNameFieldRef': ['other', 'zarf'],
+                        'namespaceFieldRef': []}
+            self.assertEqual(owners, expected)
+            driver.state['steps'] = [{'name': 'deploy-local-agent', 'status': 'failed',
+                                      'commandFailure': {'exitStatus': 1, 'terminationReason': 'nonzero-exit'},
+                                      'agentFieldOwners': owners}]
+            driver.journal()
+            binding = driver.state['cluster']
+            self.assertEqual(S.owner_failure_details(root, 'deploy-local-agent', binding)['agentFieldOwners'], expected)
+            owners['image'] = ['fixture-secret-manager']
+            driver.journal()
+            self.assertNotIn('agentFieldOwners', S.owner_failure_details(root, 'deploy-local-agent', binding))
+
     def test_real_child_exit_seven_survives_secondary_failure_and_publication(self):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, ENV, clear=True):
             root = Path(temporary).resolve()
