@@ -1161,3 +1161,39 @@ test("a same-label standalone Pod keeps its distinct identity for negative contr
   await preparePod(pod, { RENDER_IMAGE: IMAGE, TAK_WORKLOAD_IDENTITY_PHASE: "strict" }, recordedCluster().cluster);
   assert.equal(pod.spec?.serviceAccountName, "negative-control");
 });
+
+test("core-config with uds.dev/sso-enabled=false skips import-trust and takserver-sso across workloads", async () => {
+  const ssoOffCluster = {
+    ...recordedCluster().cluster,
+    getConfigMap: async () => ({
+      metadata: { annotations: { "uds.dev/sso-enabled": "false" } },
+      data: { "CoreConfig.xml": "<Configuration/>" },
+    }),
+  } as unknown as Cluster;
+  const apiDeploy = deploy("takserver-api");
+  await prepareDeployment(apiDeploy, { RENDER_IMAGE: IMAGE }, ssoOffCluster);
+  const deployInits = (apiDeploy.spec?.template?.spec?.initContainers ?? []).map(c => c.name);
+  assert.deepEqual(deployInits, ["wait-deps"]);
+  assert.equal((apiDeploy.spec?.template?.spec?.volumes ?? []).some(v => v.name === "jvm-trust"), false);
+
+  const patches: unknown[] = [];
+  await reconcileDeployment(
+    deploy("takserver-messaging"),
+    "CREATED",
+    { ...ssoOffCluster, patchDeployment: async (_ns, _name, ops) => { patches.push(ops); } } as unknown as Cluster,
+    { RENDER_IMAGE: IMAGE },
+  );
+  assert.equal(patches.length, 1);
+
+  for (const app of ["takserver-api", "takserver-config"] as const) {
+    const pod: PodLike = {
+      metadata: { labels: { app } },
+      spec: { containers: [{ name: app }] },
+    };
+    await preparePod(pod, { RENDER_IMAGE: IMAGE }, ssoOffCluster);
+    assert.deepEqual((pod.spec?.initContainers ?? []).map(c => c.name), ["wait-deps", "render-oidc"]);
+    assert.deepEqual(pod.spec?.volumes?.find(v => v.name === "oidc-secret")?.secret, { secretName: "takserver-sso", optional: true });
+    assert.equal((pod.spec?.volumes ?? []).some(v => v.name === "jvm-trust"), false);
+  }
+});
+
