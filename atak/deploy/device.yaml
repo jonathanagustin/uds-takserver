@@ -30,7 +30,7 @@ spec:
         firmware:
           kernelBoot:
             container:
-              image: {{ ( ( .Pkg.GetComponent "atak-device" ).GetImageByID "atak-vm" ).Reference }}
+              image: '{{ ( ( .Pkg.GetComponent "atak-device" ).GetImageByID "atak-vm" ).Reference }}'
               imagePullPolicy: IfNotPresent
               kernelPath: /boot/kernel
               initrdPath: /boot/initrd.img
@@ -53,7 +53,7 @@ spec:
       volumes:
         - name: android
           containerDisk:
-            image: {{ ( ( .Pkg.GetComponent "atak-device" ).GetImageByID "atak-vm" ).Reference }}
+            image: '{{ ( ( .Pkg.GetComponent "atak-device" ).GetImageByID "atak-vm" ).Reference }}'
             imagePullPolicy: IfNotPresent
             path: /disk/android.qcow2
 ---
@@ -94,7 +94,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: viewer
-          image: {{ ( ( .Pkg.GetComponent "atak-device" ).GetImageByID "atak-viewer" ).Reference }}
+          image: '{{ ( ( .Pkg.GetComponent "atak-device" ).GetImageByID "atak-viewer" ).Reference }}'
           imagePullPolicy: IfNotPresent
           env:
             - name: DEVICE
