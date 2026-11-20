@@ -225,7 +225,7 @@ Keycloak is not in the namespace. The API and messaging selectors' only external
 
 There is no `remoteGenerated: Anywhere` rule and no Prometheus scrape rule. TAK does not expose a Prometheus endpoint, so nothing is opened for a scraper.
 
-The Ignite chart and the API, messaging, config, and plugins Deployments use ServiceAccount `takserver-ignite`. Each of those pod labels needs its own Kubernetes API rule. One rule limited to `app: takserver-ignite` drops the clients' API calls during the TLS handshake.
+With the default shared phase, the Ignite chart and the API, messaging, config, and plugins Deployments use ServiceAccount `takserver-ignite`. Each of those pod labels needs its own Kubernetes API rule. One rule limited to `app: takserver-ignite` drops the clients' API calls during the TLS handshake.
 
 `additionalNetworkAllow` appends deployer rules. Each entry needs a unique `description`.
 
@@ -275,39 +275,42 @@ Deployments their corresponding `takserver-*` ServiceAccounts. Ignite keeps its
 upstream account, and the database setup Job remains unchanged. Standalone pods
 keep their chosen account even if they copy a TAK app label.
 
-Migration requires a deliberate config-first stage. A Package CR being stored
-is not proof that the operator has generated its policies. Before changing the
-admission phase, render/apply the config chart with the same deployed values and
-`workloadIdentityPhase=transition` using its existing `uds-takserver-config` Helm
-release. Wait for Package Ready and inspect the generated AuthorizationPolicies:
-every affected ingress flow must admit both its new account and
-`takserver-ignite`. Preserve app labels and all existing values. Do not proceed
-on a timeout, stale condition, or missing principal. This manual staging step is
-required until an automated convergence gate has live validation.
+The package deploys the configuration chart first and waits for the Package to
+be Ready for its current generation before updating admission. No separate manual
+Helm stage is needed; see [ADR 0007](../adr/0007-per-workload-network-rules.md#dedicated-tak-identities-opt-in-migration)
+for the pinned implementation and readiness checks.
 
-1. After that verified policy stage, deploy with `--set-values tak.workloadIdentityPhase=transition`. The config
-   chart first admits both the old and new principal for each existing labeled
-   ingress flow, then admission and reconciliation rotate the four Deployments
-   to their dedicated identities. The temporary legacy rules preserve the
-   existing access during this handoff; they are not strict isolation.
-2. Wait for all four Deployments to complete rollout. Inspect **every live Pod's
-   `spec.serviceAccountName`**, including old terminating replicas, using
+For an existing installation, keep the same package archive and deployed values
+through these stages:
+
+1. Deploy with `--set-values tak.workloadIdentityPhase=transition`. Configuration
+   first admits the old and dedicated principals for each affected ingress flow.
+   The admission chart then rotates the four Deployments to dedicated accounts.
+   The temporary legacy rules preserve access during this handoff; they are not
+   strict isolation.
+2. Wait for rollout and inspect **every live Pod's `spec.serviceAccountName`**,
+   including terminating replicas, using
    `uds zarf tools kubectl get pods -n takserver -o custom-columns=NAME:.metadata.name,APP:.metadata.labels.app,SA:.spec.serviceAccountName`.
-   Each of the four workloads must use its matching account, with no remaining
-   shared-account replicas. Verify positive traffic and same-label,
+   Each workload must use its matching account, with no shared-account replicas.
+   Verify generated principals, positive traffic, and same-label,
    different-account negative controls before continuing.
-3. Deploy with `--set-values tak.workloadIdentityPhase=strict`. This removes only
-   those transitional legacy ingress rules. Verify generated principals and
-   repeat live traffic tests on both architectures before declaring migration
-   complete. Never switch directly from shared to strict on an existing install.
+3. Deploy with `--set-values tak.workloadIdentityPhase=strict`. This removes the
+   transitional legacy ingress rules. Repeat policy, identity, and traffic
+   checks. Never switch directly from shared to strict on an existing install.
 
-For rollback, first stage the config chart in `rollback` and observe the same
-dual-principal policy convergence **before** changing admission. Then deploy
-`rollback`. It retains both principal sets while
-admission restores the four Deployments to `takserver-ignite`. Wait for rollout
-and inspect every Pod identity again; only then deploy `shared`. A direct
-strict-to-shared switch could remove the dedicated principals before the old
-identities are restored. Unknown phase values fail closed.
+Reverse the migration with `strict` → `rollback` → `shared`. Deploying
+`rollback` first restores dual-principal policy through the same config-first
+gate, then admission restores the legacy accounts. Wait for rollout and inspect
+every Pod identity before deploying `shared`. A direct strict-to-shared switch
+could remove dedicated principals before legacy identities return. Unknown
+phase values fail closed.
+
+A fresh strict installation is a separate case: a new application has no legacy
+Pods to migrate. The guarded qualification trial tests this only after a complete
+migration and reversal, removing the bound application package and its verified
+retained application data before reinstalling the same archive in strict mode.
+That destructive disposable-cluster check is not an instruction to remove an
+existing deployment or its data.
 
 Dedicated discovery permissions are namespace Roles for pods/endpoints and
 Deployments; only the config account can read the single Ignite Pod's log.
@@ -316,7 +319,8 @@ unchanged. Ordinary package deployment and these opt-in changes still require
 live migration validation; rendered policies alone do not prove continuity.
 
 The [disposable identity trial driver](../tests/workload-identities/README.md)
-implements guarded API staging, protocol controls and reversal for a reviewed
-manual Full Core experiment. Its fixtures are not a live migration result; both
-architecture trials and ordinary application acceptance remain required. It does
-not replace Helm release values or provide a production upgrade command.
+exercises these package stages, policy and Pod convergence, application traffic,
+negative controls, reversal, and a separate clean strict installation in a
+job-bound disposable Full Core cluster. **Qualification is pending on both native
+architectures.** No successful run is claimed here; rendered manifests and source
+tests do not establish live acceptance. The default remains `shared`.
