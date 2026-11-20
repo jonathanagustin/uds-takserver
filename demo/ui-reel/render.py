@@ -148,9 +148,11 @@ def render(cache, output, offline=False, export=False):
             # Relative, fixed names prevent FFmpeg filter/concat path escaping.
             filters = [
                 "crop=1632:784:144:134", "scale=1856:-2:flags=lanczos",
-                "pad=1920:1080:32:112:color=0x0B1220",
-                f"drawtext=fontfile=font-label.ttf:text='{label}':fontsize=25:fontcolor=0x22D3EE:x=w-tw-40:y=35",
-                "drawtext=fontfile=font-label.ttf:text='UI EDIT PREVIEW  /  RECORDED DEMO FOOTAGE':fontsize=17:fontcolor=0x94A3B8:x=40:y=1033",
+                "pad=1920:1080:32:112:color=0x0B0E11",
+                "drawbox=x=32:y=96:w=1856:h=2:color=0xE5A00D@0.55:t=fill",
+                "drawbox=x=32:y=1012:w=1856:h=1:color=0x1F2937@0.95:t=fill",
+                f"drawtext=fontfile=font-label.ttf:text='{label}':fontsize=25:fontcolor=0xF5B82E:x=w-tw-40:y=35",
+                "drawtext=fontfile=font-label.ttf:text='UI EDIT PREVIEW  /  RECORDED DEMO FOOTAGE':fontsize=17:fontcolor=0x8B98A8:x=40:y=1033",
                 "fade=t=in:st=0:d=0.12", f"fade=t=out:st={length-.12}:d=0.12",
                 "fps=30", "format=yuv420p",
             ]

@@ -35,9 +35,9 @@ HOLD = os.environ.get("CAST_HOLD", "2.5")
 # The demo palette (demo/style.py) as an agg theme: background, foreground,
 # then the 16 ANSI colours.
 THEME = ",".join(c.lstrip("#") for c in (
-    "#0F172A", "#CBD5E1",
-    "#020617", "#F8FAFC", "#34D399", "#F8FAFC", "#818CF8", "#818CF8", "#818CF8", "#CBD5E1",
-    "#CBD5E1", "#F8FAFC", "#34D399", "#F8FAFC", "#818CF8", "#818CF8", "#818CF8", "#F8FAFC"))
+    "#0B0E11", "#CBD5E1",
+    "#050709", "#F8FAFC", "#34D399", "#F5B82E", "#E5A00D", "#F5B82E", "#E5A00D", "#CBD5E1",
+    "#8B98A8", "#F8FAFC", "#34D399", "#FCD34D", "#F5B82E", "#F5B82E", "#F5B82E", "#F8FAFC"))
 
 def human(seconds):
     seconds = int(round(seconds))
