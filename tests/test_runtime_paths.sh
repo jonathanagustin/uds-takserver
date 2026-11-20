@@ -256,7 +256,7 @@ for helper, suite in [('drive.py', 'test_identity_rollout_driver'),
             assert result.returncode != 0 and 'FileNotFoundError' in result.stdout and helper in result.stdout, (helper, operation, result.stdout)
             print('ok: unconditional Unit import rejects', operation, helper)
 PYTHON
-for shared_path in tests/backup-restore.sh tests/backup-names.sh tests/ephemeral-cluster.py tests/upgrade-agent-watch.py .github/scripts/node-agent-ready.sh tasks/test.yaml bundle/full/uds-bundle.yaml; do
+for shared_path in .github/scripts/velero-controller-state.py tests/velero-controller-restore-policy.yaml tests/backup-restore.sh tests/backup-names.sh tests/ephemeral-cluster.py tests/upgrade-agent-watch.py .github/scripts/node-agent-ready.sh tasks/test.yaml bundle/full/uds-bundle.yaml; do
   check_match "${shared_path}" relevant
   check_decide true $'.github/scripts/staged-migrations.sh\n'"${shared_path}"
 done
