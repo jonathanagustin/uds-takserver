@@ -94,10 +94,10 @@ test('root and main present the recorded preview as an accessible inline player'
     assert.match(player, /\bcontrols(?:[ =/>])/);
     assert.match(player, /\bplaysinline(?:[ =/>])/);
     assert.match(player, /preload="none"/);
-    assert.match(player, /poster="https:\/\/github\.com\/jonathanagustin\/uds-takserver\/releases\/download\/v0\.12\.0\/poster\.jpg"/);
+    assert.match(player, /poster="https:\/\/github\.com\/jonathanagustin\/uds-takserver\/releases\/download\/v1\.2\.0\/poster\.jpg"/);
     assert.match(player, /aria-label="Recorded CloudTAK and TAK Server preview"/);
     assert.match(player, /aria-describedby="ui-preview-caption"/);
-    assert.match(player, /uds-takserver-ui-preview\.mp4" type="video\/mp4"/);
+    assert.match(player, /src="https:\/\/github\.com\/jonathanagustin\/uds-takserver\/releases\/download\/v1\.2\.0\/uds-takserver-ui-preview\.mp4" type="video\/mp4"/);
     assert.doesNotMatch(player, /\bautoplay(?:[ =/>])/);
     assert.match(html, /id="ui-preview-caption"/);
     assert.doesNotMatch(html, /href="[^"]*edit-manifest\.json"/);
