@@ -169,21 +169,70 @@ def git_fetch(work, repository, reference):
     raise RuntimeError('git fetch failed: ' + str(failure))
 
 
-def git_archive(owner, repository, reference, prefix, target):
+SMUDGE = r"""import re, shutil, sys
+data = sys.stdin.buffer.read()
+match = re.search(rb'oid sha256:([0-9a-f]{64})\nsize (\d+)', data)
+if data.startswith(b'version https://git-lfs.github.com/spec/v1') and match:
+    with open(sys.argv[1] + '/' + match.group(1).decode(), 'rb') as stream:
+        shutil.copyfileobj(stream, sys.stdout.buffer)
+else:
+    sys.stdout.buffer.write(data)
+"""
+
+
+def lfs_objects(work, owner, repository, commit, store):
+    """Download the Git LFS objects a commit's tree points at; each is checked against its oid."""
+    listing = run(['git', '-C', work, 'ls-tree', '-r', '-l', '-z', commit], env=git_env()).stdout.decode().split('\0')
+    count = 0
+    for line in listing:
+        if not line:
+            continue
+        meta, path = line.split('\t', 1)
+        mode, kind, blob, size = meta.split()
+        if kind != 'blob' or int(size) > 300:
+            continue
+        data = run(['git', '-C', work, 'cat-file', 'blob', blob], env=git_env()).stdout
+        match = re.search(rb'oid sha256:([0-9a-f]{64})\nsize (\d+)', data)
+        if not (data.startswith(b'version https://git-lfs.github.com/spec/v1') and match):
+            continue
+        oid, length = match.group(1).decode(), int(match.group(2))
+        target = store / oid
+        url = f'https://media.githubusercontent.com/media/{owner}/{repository}/{commit}/{urllib.parse.quote(path)}'
+        error = download(url, target, limit=length)
+        if error or digest(target) != oid:
+            raise RuntimeError(f'Git LFS object for {path} unavailable or differs from its pointer: {error}')
+        count += 1
+    return count
+
+
+def git_archive(owner, repository, reference, prefix, target, include_lfs=False):
     """Rebuild the archive GitHub serves for owner/repository at reference.
 
     `git archive --prefix=<root>/ <commit> | gzip -n` is how GitHub produces these
-    files, so the result can be compared with a pinned digest. Returns the commit.
+    files, so the result can be compared with a pinned digest. Repositories with
+    the "include Git LFS objects in archives" setting get the real object in
+    place of each pointer; include_lfs reproduces that with a smudge filter that
+    only reads objects already verified against their pointer oid.
+    Returns (commit, number of LFS objects included).
     """
     with tempfile.TemporaryDirectory(prefix='git-archive-', dir=target.parent) as work:
         commit = git_fetch(work, f'https://github.com/{owner}/{repository}.git', reference)
+        options, count = [], 0
+        if include_lfs:
+            store = Path(work) / 'lfs-store'
+            store.mkdir()
+            count = lfs_objects(work, owner, repository, commit, store)
+            helper = Path(work) / 'lfs-smudge.py'
+            helper.write_text(SMUDGE)
+            options = ['-c', f'filter.lfs.smudge={sys.executable} -I {helper} {store}', '-c', 'filter.lfs.required=true']
         tar = Path(work) / 'archive.tar'
         with tar.open('wb') as stream:
-            run(['git', '-C', work, 'archive', '--format=tar', '--prefix=' + prefix, commit], env=git_env(), stdout=stream)
+            run(['git', '-C', work, *options, 'archive', '--format=tar', '--prefix=' + prefix, commit], env=git_env(),
+                stdout=stream, timeout=1800)
         with tar.open('rb') as source, open(str(target) + '.partial', 'wb') as output:
-            subprocess.run(['gzip', '-n'], stdin=source, stdout=output, check=True, timeout=600)
+            subprocess.run(['gzip', '-n'], stdin=source, stdout=output, check=True, timeout=1800)
         os.replace(str(target) + '.partial', target)
-    return commit
+    return commit, count
 
 
 def default_prefix(repository, reference):
@@ -268,7 +317,7 @@ def fetch_lock_entry(item, cache, pointers):
             owner, repository, reference = github_archive_parts(url)
             prefix = next((c['prefix'] for c in item['consumers'] if c.get('prefix')), None) or default_prefix(repository, reference)
             try:
-                extra['commit'] = git_archive(owner, repository, reference, prefix, candidate)
+                extra['commit'], _ = git_archive(owner, repository, reference, prefix, candidate)
                 extra['prefix'] = prefix
             except (RuntimeError, subprocess.SubprocessError, OSError) as failure:
                 error = str(failure)
@@ -383,16 +432,22 @@ def fetch_cesium(root):
         target = cache / (port + '.tar.gz')
         owner, repository, reference = github_archive_parts(url)
         prefix = default_prefix(repository, reference)
-        note, commit, cached = '', None, target.is_file()
+        note, commit, cached, lfs_count = '', None, target.is_file(), 0
+        staging = target
         if not cached:
             staging = root / 'tmp' / ('cesium-' + port + '.tar.gz')
             staging.parent.mkdir(exist_ok=True)
             try:
-                commit = git_archive(owner, repository, reference, prefix, staging)
+                commit, _ = git_archive(owner, repository, reference, prefix, staging)
+                if expected and digest(staging, 'sha512') != expected:
+                    # Second and last attempt: the form GitHub serves when the repository
+                    # includes Git LFS objects in its archives. Still judged by the pin alone.
+                    plain = digest(staging, 'sha512')
+                    commit, lfs_count = git_archive(owner, repository, reference, prefix, staging, include_lfs=True)
+                    if digest(staging, 'sha512') != expected:
+                        note = f'neither form matches the pin (without LFS objects: sha512 {plain[:32]}...)'
             except (RuntimeError, subprocess.SubprocessError, OSError) as failure:
                 note = str(failure)
-        else:
-            staging = target
         verified, actual, check = False, None, None
         if staging.is_file():
             actual = digest(staging, 'sha512')
@@ -423,7 +478,7 @@ def fetch_cesium(root):
         record(kind='cesium-source', name=port + '.tar.gz', source=url, method='git-archive', expected_sha512=expected,
                actual_sha512=actual, actual_sha256=digest(target) if verified else None, verified=verified, required=True,
                cached=cached, path=str(target) if verified else None, commit=commit or entry.get('commit'), prefix=prefix,
-               verification=check, note=note)
+               lfs_objects_included=lfs_count, verification=check, note=note)
     return entries, one
 
 
