@@ -23,10 +23,6 @@
 </p>
 <!-- github-only:end -->
 
-[![Watch the TAK Server on UDS overview trailer](https://github.com/jonathanagustin/uds-takserver/releases/download/demo/civilian-trailer-poster.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo/uds-takserver-civilian-trailer.mp4)
-
-<p align="center"><em>42-second overview: public-safety field operations, CloudTAK + Keycloak SSO, and air-gapped Zarf deployment.</em></p>
-
 TAK Server on the Unified Defense Stack (UDS) brings applications, identity, networking, security, and operations together in one integrated environment. [TAK Server](https://github.com/TAK-Product-Center/Server) provides the services that connect Team Awareness Kit (TAK) clients and exchange data. Deploying it on a shared platform also requires identity integration, client certificates, gateways, network rules, databases, and an upgrade process. Adding [CloudTAK](https://github.com/dfpc-coe/CloudTAK) introduces a browser application and its own database. Those pieces need to work together and stay aligned as the deployment changes.
 
 This package connects TAK Server and CloudTAK to [UDS Core](https://docs.defenseunicorns.com/core/)'s Keycloak sign-in, gateways, and default-deny networking. It supplies deployment charts and configuration, uses TAK's certificate tooling at install time, and includes database backup and recovery workflows. Operators get a defined integration to deploy, test, and maintain alongside their other UDS applications.
