@@ -1,0 +1,61 @@
+{
+  "annotations_coordinate": "jakarta.annotation:jakarta.annotation-api:2.1.1",
+  "annotations_sha256": "5f65fdaf424eee2b55e1d882ba9bb376be93fb09b37b808be6e22e8851c909fe",
+  "components": {
+    "takx/contour-elevation/java/gov/tak/project/contour/ContourFeatures.java": "5dd50f983b4f9f025f161e5a16335c056cf1b6cd2ff2795a2c4a8c279ba1320c",
+    "takx/contour-elevation/java/gov/tak/project/contour/ContourLayer.java": "7763787f5bc810442f66741daec2f6aab8429b1ea34a90b8161960f4777f06e0",
+    "takx/contour-elevation/java/gov/tak/project/contour/ElevationContours.java": "1402af3589ef750691cbfbbf8747d1a033b8bd45bfe73861f941223cd44ce48b"
+  },
+  "contour_api_implemented": false,
+  "control_inventory": {
+    "ContourStyleControls": 311,
+    "PinnedContourStyleCaller": 23
+  },
+  "elevation_source_integrated": false,
+  "full_client_accepted": false,
+  "gradient_sha256": "9efddbba7b9ae8801a6b39d8158c0662a8fef405675ac3edfb89ad9f70503c1b",
+  "jdk": {
+    "bin/java": "a0c0cd823f79e87a0df485249c50efee2ab6080fb8fbd04f2a5c1c15c14001cf",
+    "bin/javac": "e0f86103f729fd0300bad95a94ec94ed22b2bad8a68f31296c69a5b5382b8872",
+    "lib/modules": "fa48946c718db4f399bd143756469c8c3891f3d2803885c978f0bf5339ccae1a",
+    "release": "860df77f49d1947f1147f70c220f24e492bf77ec96d619921cbb181bce68e000"
+  },
+  "jdk_archive_sha256": "524850138c742324fb21fca4ff6ef68ea25f25bf59366a864e45b4a0c45ed0df",
+  "jdk_provider": "Eclipse Temurin 17.0.20+8 macOS aarch64 archive",
+  "kernel": {
+    "LICENSE.md": "3db8b919e1f1cb3dff5114ea875d3a758ff367e6490622780d0f7092daebd8f9",
+    "takkernel/annotation/src/main/java/gov/tak/api/annotation/NonNull.java": "0f1dd179e8f04647c442b326ff7786753a0b3ed38e3aeb071966ce85f58620d5",
+    "takkernel/engine/src/main/java/com/atakmap/coremap/conversions/Span.java": "c0ac342e8309f896cf1ec2ed5030837bcda09708107a0bf8b54d102fffa34d38"
+  },
+  "kernel_repository": "https://github.com/TAK-Product-Center/atak-civ",
+  "kernel_revision": "9f6893dd657feacc35ec5de03dad721c2e44170e",
+  "layer_runtime_accepted": false,
+  "owned": {
+    "java/gov/tak/api/contour/ContourFunction.java": "108fc6433dcb40c3cf0eca37dc47c46d4365e1fd3c787949045382647c56d63a",
+    "java/gov/tak/api/contour/ContourStyle.java": "5c252c59b88175bad4d9d48386331529e0d816c2fdffd2c526b167f94977c3f5",
+    "tests/ContourStyleControls.java": "01a2b16914f4660a167c164f9d01c77ba66cca4f881e711fb35dfb543829d6c8",
+    "tests/PinnedContourStyleCaller.java.in": "7483288915994231cb4c9a7e481de45e70a68163ae93a80e5e002f47c77573ec"
+  },
+  "profile": "observable-contour-style-java-v1",
+  "schema": 1,
+  "scope": "Project observable contour style model and exact TAKX 5.8 caller slices only. No generation, native style application, native lifecycle, complete panel compilation, private SDK or complete client acceptance.",
+  "takx": {
+    "Client/src/main/java/gov/tak/core/map/layer/feature/datastore/memory/InMemoryFeatureDataStore.java": "0505015d605e603f3856c4e8192b0bb3024eb51998df908fa582dc930fcbad0d",
+    "Client/src/main/java/gov/takx/api/layer/IRaptorLayerManager.java": "c89efc9f06889bad9586ba333416d63ed5f129ddebecbba8779ae294d3a2597d",
+    "Client/src/main/java/gov/takx/core/contour/ContourLinesService.java": "d340dab2f3ef75ebfde853c839ce056928ccba178a1f0444679d7638c6fa18cf",
+    "Client/src/main/java/gov/takx/core/globe/tak/TakLayerManager.java": "35beecbf55501726432a65912bfe7f5adc05dae82ae40c7ebc4040ab336b5810",
+    "Client/src/main/java/gov/takx/core/layer/RaptorLayerManager.java": "3ac2c824dd1a8209f1c76d65978c70f11724003350ab8e01dfa68feca97940bd",
+    "Client/src/main/java/gov/takx/core/view/gui/maptools/elevationtools/contour/ContourListPanel.java": "20c8b83696654c4204cca3f16a952a52e28de1ac3d57364a654a4a94174f1d23",
+    "Client/src/main/java/gov/takx/core/view/gui/maptools/elevationtools/contour/ContourMapRenderer.java": "0befe36dd7f18749a983c2e2d0f6dca2adbec85a27707f09560691feb03c3327",
+    "Client/src/main/java/gov/takx/core/view/gui/maptools/elevationtools/contour/ContourPanel.java": "1484c4d6ef367d9d00e0dd7724c1cf823d56d2ed9eb158e36d0cd2584dcd7063",
+    "Client/src/main/java/gov/takx/core/view/gui/maptools/elevationtools/contour/ContourProgressPanel.java": "d0c6ef9eeff9227aeffc3f4823ac4709ebca1dc97548119e49538140d8162f0d",
+    "Client/src/main/java/gov/takx/core/view/gui/maptools/elevationtools/contour/ContourUnits.java": "9b6817694b8c91af12e137742359598d9ee90abf86f4f0de54cc57d809e23954",
+    "Client/src/main/java/gov/takx/core/view/gui/maptools/elevationtools/contour/GenerationDialog.java": "826fcd0c1a4a18e5814da4a07b6bf7d7367c5244eecf765fe9dbae385e47cfc5",
+    "LICENSE.md": "3db8b919e1f1cb3dff5114ea875d3a758ff367e6490622780d0f7092daebd8f9",
+    "Platform/src/main/java/gov/tak/platform/contour/ContourGroupListener.java": "1af20245e55ce3a20511d859f8ef760c37be1c30821a007bb405cb959af3bc35",
+    "Platform/src/main/java/gov/tak/platform/contour/ContourLineGroup.java": "137d27c736f17867ce42a12c37834a292d363d8d370a06cc3e334767f3301d66",
+    "Platform/src/main/java/gov/tak/platform/contour/IContourLinesService.java": "9b4917e090aa6285b49c96c8520f754bc4edd8381d0b37b35ae47d4ef426cb11"
+  },
+  "takx_repository": "https://github.com/TAK-Product-Center/TAKX",
+  "takx_revision": "af54a3e1fe8796b6e109e2e5925dbef524ea7e31"
+}
