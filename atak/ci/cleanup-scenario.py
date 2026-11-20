@@ -28,7 +28,7 @@ class Kubernetes:
                     process.wait(timeout=1)
 
     def identity(self, kind, namespace, name):
-        projection = r'jsonpath={.metadata.uid}{"\t"}{.metadata.labels.tak\.jonathanagustin\.github\.io/scenario-owner}'
+        projection = r'jsonpath={.metadata.uid}{"\t"}{.metadata.labels.tak\.uds\.dev/scenario-owner}'
         output = self.call(['get', kind, name, '-n', namespace, '--ignore-not-found', '-o', projection])
         if not output:
             return None
@@ -44,7 +44,7 @@ class Kubernetes:
 
 
 def remove_owned(api, owner, deadline):
-    resources = [('takclient', 'takclients', 'atak-peer-'+owner, '/apis/tak.jonathanagustin.github.io/v1alpha1/namespaces/takclients/takclients/atak-peer-'+owner),
+    resources = [('takclient', 'takclients', 'atak-peer-'+owner, '/apis/tak.uds.dev/v1alpha1/namespaces/takclients/takclients/atak-peer-'+owner),
                  ('pod', 'atak', 'atak-scenario-'+owner, '/api/v1/namespaces/atak/pods/atak-scenario-'+owner)]
     pending, foreign = [], False
     # Request both owned deletions before waiting, so one finalizer cannot

@@ -81,7 +81,7 @@ admin() {
 DEVICE_USER="${DEVICE_USER:-atak-device}"
 DEVICE_GROUP="${DEVICE_GROUP:-Operators}"
 k apply -f - <<YAML
-apiVersion: tak.jonathanagustin.github.io/v1alpha1
+apiVersion: tak.uds.dev/v1alpha1
 kind: TakClient
 metadata:
   name: ${DEVICE_USER}
