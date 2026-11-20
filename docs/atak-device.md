@@ -160,9 +160,7 @@ On upgrade, existing locally signed certificates are reissued through TAK. The p
 
 Releases before `tak.uds.dev/v1alpha1` served `TakClient` under `tak.jonathanagustin.github.io/v1alpha1`. Because the CustomResourceDefinition (CRD) is renamed, existing `TakClient` objects must be recreated under `tak.uds.dev/v1alpha1`:
 
-- **Generated Secret ownership**: Credential Secrets in `takclients/<name>` do not carry Kubernetes `ownerReferences`; ownership is tracked by the `app.kubernetes.io/managed-by: takserver-oidc` label, the `<group>/takclient` label/annotation, and the `TakClient` finalizer. Deleting a `TakClient` while the old controller is running revokes its certificate and deletes the Secret; removing `pepr.dev/finalizer` before deleting the old `TakClient` keeps the Secret and its issued certificate active across the upgrade window.
-- **Issued credentials**: When a `tak.uds.dev/v1alpha1` `TakClient` reconciles against an existing Secret carrying `tak.jonathanagustin.github.io/*` annotations, the watcher revokes the prior certificate through TAK's certadmin API, records its serial in `takserver/takserver-crl`, unregisters the prior file user, enrolls a replacement certificate, and overwrites the Secret's metadata with `tak.uds.dev/*` keys. Distribute the updated `package.zip` to devices after recreation.
-- **Previously revoked credentials**: Revocations already recorded in TAK's certificate table and `takserver/takserver-crl` do not depend on the `TakClient` API group prefix and remain revoked across the upgrade.
+The old controller revokes the certificate and removes its generated Secret when you delete a TakClient. Devices lose access from that point until they import the replacement package. Revocations recorded by the old controller persist across the API group change.
 
 To migrate existing `TakClient` resources without stalling CRD removal:
 
@@ -172,21 +170,11 @@ To migrate existing `TakClient` resources without stalling CRD removal:
    kubectl get takclients.tak.jonathanagustin.github.io -n takclients -o yaml > takclients-backup.yaml
    ```
 
-2. Remove the old-group `TakClient` objects before upgrading so Helm can replace `takclients.tak.jonathanagustin.github.io` with `takclients.tak.uds.dev` without finalizer deadlock.
-   - To revoke immediately before upgrading, delete them normally:
+2. Delete the old-group objects while the old controller is still running and let finalization complete:
 
-     ```bash
-     kubectl delete takclients.tak.jonathanagustin.github.io --all -n takclients
-     ```
-
-   - To keep existing device certificates working during the upgrade window and rotate them when recreating each `TakClient`, strip `pepr.dev/finalizer` from each old-group object and then delete the old-group objects (leaving the `takclients/<name>` Secrets intact for the new watcher to revoke and replace):
-
-     ```bash
-     for name in $(kubectl get takclients.tak.jonathanagustin.github.io -n takclients -o jsonpath='{.items[*].metadata.name}'); do
-       kubectl patch takclients.tak.jonathanagustin.github.io "${name}" -n takclients --type=merge -p '{"metadata":{"finalizers":[]}}'
-       kubectl delete takclients.tak.jonathanagustin.github.io "${name}" -n takclients
-     done
-     ```
+   ```bash
+   kubectl delete takclients.tak.jonathanagustin.github.io --all -n takclients
+   ```
 
 3. Upgrade the TAK Server package. Confirm `kubectl get crd takclients.tak.uds.dev` succeeds.
 4. Recreate each `TakClient` from `takclients-backup.yaml` with `apiVersion: tak.uds.dev/v1alpha1` (dropping cluster-managed `metadata` fields and `status`), wait for `Ready`, and distribute each updated `package.zip` from Secret `takclients/<name>`.

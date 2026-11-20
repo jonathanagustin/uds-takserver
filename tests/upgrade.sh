@@ -329,9 +329,8 @@ sha256sum "${work}/certs/admin.pem" "${work}/certs/admin.key" > "${work}/certs.s
 stream
 sso baseline
 
-# When the baseline serves the legacy TakClient API group, enroll a client
-# before upgrading and keep its credential Secret across the upgrade window so
-# the post-upgrade controller proves legacy-prefix revocation and reissue.
+# Exercise the documented revoke-before-upgrade path when the baseline
+# serves the legacy TakClient API group.
 legacy_takclient=""
 legacy_client_serial=""
 if k get crd takclients.tak.jonathanagustin.github.io >/dev/null 2>&1; then
@@ -356,11 +355,10 @@ YAML
   k get secret "${legacy_takclient}" -n takclients -o jsonpath='{.data.client\.pem}' | base64 -d > "${work}/legacy-client/client.pem"
   k get secret "${legacy_takclient}" -n takclients -o jsonpath='{.data.client\.key}' | base64 -d > "${work}/legacy-client/client.key"
   takclient_stream_check accept "${work}/legacy-client/client.pem" "${work}/legacy-client/client.key" "${legacy_takclient}"
-  # Follow the documented keep-Secret migration path: drop the old finalizer
-  # and CR before upgrading so Helm can replace the CRD while leaving Secret
-  # takclients/upgrade-client (with only legacy annotations) intact.
-  k patch "takclients.tak.jonathanagustin.github.io/${legacy_takclient}" -n takclients --type=merge -p '{"metadata":{"finalizers":[]}}'
-  k delete "takclients.tak.jonathanagustin.github.io/${legacy_takclient}" -n takclients --timeout=60s
+  k delete "takclients.tak.jonathanagustin.github.io/${legacy_takclient}" -n takclients --timeout=180s
+  test -z "$(k get secret "${legacy_takclient}" -n takclients --ignore-not-found -o name)"
+  takclient_stream_check reject "${work}/legacy-client/client.pem" "${work}/legacy-client/client.key" "${legacy_takclient}"
+  stream
 fi
 
 marker="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
@@ -469,12 +467,9 @@ if [[ -n "${legacy_takclient}" ]]; then
     echo "legacy CRD takclients.tak.jonathanagustin.github.io still exists after upgrade" >&2
     exit 1
   fi
-  # Confirm the retained Secret still has only the legacy annotation prefix
-  # before the replacement TakClient reconciles, and its cert still connects.
-  pre_reconcile_legacy="$(k get secret "${legacy_takclient}" -n takclients -o jsonpath='{.metadata.annotations.tak\.jonathanagustin\.github\.io/serial}')"
-  pre_reconcile_new="$(k get secret "${legacy_takclient}" -n takclients -o jsonpath='{.metadata.annotations.tak\.uds\.dev/serial}')"
-  [[ "${pre_reconcile_legacy}" == "${legacy_client_serial}" && -z "${pre_reconcile_new}" ]]
-  takclient_stream_check accept "${work}/legacy-client/client.pem" "${work}/legacy-client/client.key" "${legacy_takclient}"
+  test -z "$(k get secret "${legacy_takclient}" -n takclients --ignore-not-found -o name)"
+  takclient_stream_check reject "${work}/legacy-client/client.pem" "${work}/legacy-client/client.key" "${legacy_takclient}"
+  stream
 
   k apply -f - <<YAML
 apiVersion: tak.uds.dev/v1alpha1
@@ -522,6 +517,7 @@ serials = {entry.get("serial") for entry in json.load(sys.stdin)}
 assert want.issubset(serials), f"expected {want} in takserver-crl"
 ' "${legacy_client_serial}" "${migrated_serial}"
   takclient_stream_check reject "${work}/migrated-client/client.pem" "${work}/migrated-client/client.key" "${legacy_takclient}"
+  stream
   echo "PASS legacy-group TakClient migrated to tak.uds.dev, old cert revoked, new cert accepted and revoked on delete"
 fi
 sql <<< 'DROP SCHEMA upgrade_test CASCADE;'
