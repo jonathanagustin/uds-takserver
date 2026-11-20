@@ -302,6 +302,7 @@ def main() -> None:
     parser.add_argument("--veo-clip", type=Path, required=True, help="25s live-action responder B-roll MP4")
     parser.add_argument("--ui-clip", type=Path, required=True, help="Recorded CloudTAK/TAK Server UI MP4")
     parser.add_argument("--topo-bg", type=Path, default=Path("assets/tactical-topo.jpg"), help="Topographic outro image")
+    parser.add_argument("--music-track", type=Path, default=None, help="Optional soundtrack MP3/WAV replacing segment audio")
     parser.add_argument("--out-dir", type=Path, required=True, help="Output directory for MP4, poster, and alpha WebMs")
     args = parser.parse_args()
 
@@ -381,13 +382,27 @@ def main() -> None:
         concat_file = work / "concat.txt"
         concat_file.write_text("\n".join(f"file '{work / f'seg{i}.mp4'}'" for i in range(1, 8)) + "\n")
         out_mp4 = args.out_dir / "uds-takserver-civilian-trailer.mp4"
-        subprocess.run([
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file),
-            "-c:v", "libx264", "-preset", "medium", "-crf", "19", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
-            "-movflags", "+faststart",
-            str(out_mp4),
-        ], check=True, stderr=subprocess.DEVNULL)
+        if args.music_track is not None:
+            subprocess.run([
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0", "-i", str(concat_file),
+                "-i", str(args.music_track),
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-c:v", "libx264", "-preset", "medium", "-crf", "19", "-pix_fmt", "yuv420p",
+                "-af", "afade=t=in:st=0:d=0.25,afade=t=out:st=40.5:d=0.8,apad",
+                "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
+                "-shortest",
+                "-movflags", "+faststart",
+                str(out_mp4),
+            ], check=True, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.run([
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file),
+                "-c:v", "libx264", "-preset", "medium", "-crf", "19", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
+                "-movflags", "+faststart",
+                str(out_mp4),
+            ], check=True, stderr=subprocess.DEVNULL)
 
         subprocess.run([
             "ffmpeg", "-y", "-ss", "2.6", "-i", str(out_mp4),
