@@ -12,11 +12,11 @@
 # The builder digest is Temurin 17.0.20 on Ubuntu 22.04 (amd64 and arm64).
 # Gradle is the upstream wrapper (8.10.2). protoc 3.25.8 and the Node
 # versions used by the UI are downloaded by Gradle into the cache mount.
-# Runtime stages use the UBI9 OpenJDK 17 manifest list, which also covers
-# amd64 and arm64.
+# Runtime stages use the Temurin 17 JDK on Ubuntu 22.04, pinned by a
+# manifest list covering amd64 and arm64.
 
 ARG BUILDER_IMAGE=eclipse-temurin:17.0.20_8-jdk-jammy@sha256:51d32af96fb8a13ffbc96c719d7b05447a04ca69f314627d64050a64ecd13057
-ARG RUNTIME_IMAGE=registry.access.redhat.com/ubi9/openjdk-17:1.24-3.1793323799@sha256:2c4cd5de2c4f4b264f08ea9751e655641250175c6361401e5e62d7c74f2ad404
+ARG RUNTIME_IMAGE=eclipse-temurin:17.0.21_9-jdk-jammy@sha256:76751c16a2a07ec0960e659a2603491f8c79d95592173f6c0df8bf8ebab257cc
 
 FROM ${BUILDER_IMAGE} AS builder
 
@@ -137,8 +137,10 @@ FROM ${RUNTIME_IMAGE} AS cluster-base
 
 USER 0
 
-RUN microdnf install -y nmap-ncat \
-    && microdnf clean all \
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates curl ncat procps \
+    && rm -rf /var/lib/apt/lists/* \
     && ln -sf "$(command -v ncat)" /usr/local/bin/nc \
     && mkdir -p /opt/tak/work /opt/tak/logs /certs/files /logs /conf /work \
     && chmod 0777 /opt/tak /opt/tak/work /opt/tak/logs /certs /certs/files /logs /conf /work \
@@ -260,8 +262,11 @@ LABEL org.opencontainers.image.source="${SOURCE_REPO}" \
 # publish-cert-configmap.sh. The other TAK images do not need openssl.
 # gettext provides envsubst for the OIDC init container. The stock chart
 # cannot add that container, so this image is reused as the init image.
-RUN microdnf install -y openssl gettext \
-    && microdnf clean all
+# Exercise the trust fetch's timeout option contract in each native build.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssl gettext \
+    && rm -rf /var/lib/apt/lists/* \
+    && timeout --signal=TERM --kill-after=1s 5s /bin/sh -c :
 COPY --from=builder /src/src/takserver-core/scripts/certs /opt/tak/certs
 COPY publish-cert-configmap.sh /opt/tak/certs/publish-cert-configmap.sh
 # The Job may run as a non-root uid. makeRootCa.sh creates files/ here.
@@ -303,9 +308,10 @@ FROM ${RUNTIME_IMAGE} AS takserver-database-setup
 
 USER 0
 
-# UBI already provides curl via curl-minimal. The curl package conflicts with it.
-RUN microdnf install -y nmap-ncat \
-    && microdnf clean all \
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates curl ncat procps \
+    && rm -rf /var/lib/apt/lists/* \
     && ln -sf "$(command -v ncat)" /usr/local/bin/nc
 
 WORKDIR /
@@ -332,9 +338,10 @@ FROM ${RUNTIME_IMAGE} AS takserver-ignite
 
 USER 0
 
-# UBI already provides curl via curl-minimal. The curl package conflicts with it.
-RUN microdnf install -y unzip nmap-ncat \
-    && microdnf clean all \
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates curl ncat procps unzip \
+    && rm -rf /var/lib/apt/lists/* \
     && ln -sf "$(command -v ncat)" /usr/local/bin/nc
 
 ARG IGNITE_VERSION=2.17.0

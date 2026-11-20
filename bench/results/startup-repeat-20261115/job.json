@@ -1,0 +1,133 @@
+{
+  "conclusion": "success",
+  "head_sha": "254c30c4142dae05ee3e18b54dc7c991b924fda8",
+  "job_id": 132972283112,
+  "labels": [
+    "ubuntu-22.04"
+  ],
+  "run_attempt": 1,
+  "run_id": 43766367603,
+  "status": "completed",
+  "steps": [
+    {
+      "conclusion": "success",
+      "name": "Set up job",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Checkout exact experiment source",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Verify native architecture before setup or cluster work",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Install pinned client tools",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Set up test Python",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Install Docker Compose",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Use the pinned embedded Kubernetes client",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Refuse a remote daemon or existing cluster before mutation",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Prepare the disposable runner",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Acquire only the matching published application package",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Restore the slim Core baseline without the application",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Bind this job's disposable cluster and fit the runner",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Begin the cold application boundary",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Deploy and validate the normal application bundle",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Finish the cold observation",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Begin the warm application boundary",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Restart only the two measured application Deployments",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Finish and validate the warm pair",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Retain only typed startup evidence, including partial failures",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Post Install Docker Compose",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Post Set up test Python",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Post Install pinned client tools",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Post Checkout exact experiment source",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "name": "Complete job",
+      "status": "completed"
+    }
+  ]
+}

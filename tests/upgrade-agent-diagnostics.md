@@ -9,6 +9,14 @@ limit around the helper's own deadline. The shared Test upgrade steps do not
 invoke the install-only caller, so existing upgrade boundary capture is not
 duplicated. Capturing evidence cannot turn a failed validation into success.
 It retains the 30-second process-group deadline and three-second command limits.
+Each command also has a combined 1 MiB stdout/stderr ceiling. The bounded command
+helper drains both pipes before releasing either complete stream; a timeout or
+oversized response kills the owned process group and emits only a fixed omission.
+Partial prefixes never reach discovery parsing, redaction or publication. Completed
+nonzero exits retain their status and complete bounded error streams for redaction.
+Whole-stream redaction has the same byte ceiling, including the final combined
+sanitized log, and omits malformed UTF-8. These limits bound failure capture; they
+do not diagnose the original failed request or change readiness/admission behavior.
 CRI capture runs first so unavailable API calls cannot consume the entire budget.
 It reads at most two k3d nodes and two agent container attempts per node, newest
 first, including exited containers. Both API logs and CRI logs use source-side
@@ -58,16 +66,31 @@ K3s 1.37 distributions removed the wrapper.
 
 After all selected agents' primary logs, the helper may use any remaining
 30-second capture budget for at most two agent-to-API snapshots. A validated
-current `zarf/agent-hook-*` Pod identity selects its existing `server` container;
+captured `zarf/agent-hook-*` Pod identity selects its existing `server` container;
 `/zarf tools kubectl` reads only the `velero` Namespace UID using the container's
-normal in-cluster identity and network path. Both kubectl requests have a
-two-second request limit and the exec command has a three-second outer limit.
+normal in-cluster identity and network path. Live Pod reads immediately before
+and after the name-based exec must match the captured Pod UID, service account,
+node and named server container ID, restart count and running-start timestamp.
+Container ordering does not select the target. All identity reads and the exec
+share one three-second snapshot deadline; kubectl requests retain their existing
+two-second request limits. Private Pod JSON is limited to 64 KiB, and lookup
+stdout to 128 bytes; neither an oversized nor partial response is published.
+Global capture termination also stops the snapshot's owned command group and
+emits only an unattributed interruption record.
 The outer kubectl request includes exec establishment; elapsed time includes
-process startup and exec transport plus the inner lookup, not pure API GET
+identity observations, process startup and exec transport plus the inner lookup, not pure API GET
 latency.
-No token, kubeconfig, Secret, environment, or new diagnostic Pod is read or
-exported. The snapshot prints only the selected Pod namespace/name/UID/node/service
-account, elapsed milliseconds, exit status, outcome and a valid Namespace UID.
+No token, kubeconfig or Secret content is collected or exported, and no diagnostic
+Pod is created.
+Pod responses stay private; environment and other nonidentity fields are not
+exported. Only a stable before/after observation has `identityQualified: true`
+and an attributed `agent` plus a valid Namespace UID when lookup succeeds.
+A changed or unavailable identity leaves `identityQualified: false`, labels
+the earlier metadata `selectedAgent`, and omits agent attribution and Namespace
+UID even if the exec returned one. The bounded exec outcome remains separately
+available without its output. Public incarnation fields are fixed container IDs,
+restart counts and timestamps, alongside the selected Pod identity, elapsed
+milliseconds, exit status and outcome.
 Exec stderr and unsuccessful or malformed stdout are discarded wholesale.
 Unavailable execution, timeout and combined exec/lookup failure are distinct;
 a generic failure cannot establish whether exec or the nested API call failed.
@@ -75,8 +98,10 @@ a generic failure cannot establish whether exec or the nested API call failed.
 These are explicitly **postfailure snapshots**, not latency measurements or
 causal evidence for the earlier admission request. They cannot recover an
 AdmissionReview UID that official Zarf 0.88 never logged. Agent Pod metadata
-and the later exec are not atomic; a Pod replacement or expired exec route can
-make the snapshot unavailable. The unchanged global capture deadline may omit
+and exec are not atomic: stable API observations bracket the call but cannot
+guarantee instantaneous container identity while API status is stale. A detected
+Pod replacement, restart or expired exec route makes attribution unavailable.
+The unchanged global capture deadline may omit
 snapshots entirely; probes never precede or displace primary evidence. No
 admission bypass, retry, probe relaxation, audit configuration or global
 timeout change is introduced.

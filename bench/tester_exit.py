@@ -276,13 +276,12 @@ def reap(proc, timeout):
     try:
         stdout, _stderr = proc.communicate(timeout=timeout)
         return stdout or ""
-    except subprocess.TimeoutExpired as expired:
-        partial = expired.stdout or ""
+    except subprocess.TimeoutExpired:
+        # communicate retries return the complete captured output.
         kill_group(proc.pid, signal.SIGTERM)
         try:
             rest, _stderr = proc.communicate(timeout=5)
-        except subprocess.TimeoutExpired as again:
-            partial += again.stdout or ""
+        except subprocess.TimeoutExpired:
             kill_group(proc.pid, signal.SIGKILL)
             rest, _stderr = proc.communicate(timeout=5)
-        return partial + (rest or "")
+        return rest or ""

@@ -21,6 +21,7 @@ PostGIS 3.4 is not built for PostgreSQL 18. The PostgreSQL project's bookworm pa
 - A data directory that is already 18 starts unchanged. Any other major makes the container exit. An empty directory is a new cluster: the official entrypoint and `10_postgis.sh` create it.
 - Give the TAK Postgres startup probe and the CloudTAK Postgres startup probe ten minutes. `pg_upgrade` finishes before the server listens, and the liveness probe would otherwise kill the pod.
 - Rollback is a volume snapshot, or a `pg_dumpall` taken before the rollout, restored onto `15-3.4`. `--link` shares the table files, so the old directory is gone after a successful start and cannot be booted with PostgreSQL 15.
+- Persist an atomic migration journal beside `PGDATA`. Preparation can retry from the original directory; linking and extension-update interruptions require operator recovery. Only a journal marked complete after a clean shutdown permits cleanup and normal startup. An unjournaled leftover old directory is ambiguous and must also refuse startup. See [interrupted upgrades](../docs/data.md#interrupted-postgresql-upgrades).
 
 ## Consequences
 
@@ -28,3 +29,22 @@ PostGIS 3.4 is not built for PostgreSQL 18. The PostgreSQL project's bookworm pa
 - The upgrade test checks the row, its timestamp, the PVC, `server_version_num` of at least 180000, and PostGIS 3.6.
 - A database large enough that `pg_upgrade` exceeds ten minutes needs a higher `startupProbe.failureThreshold` before the rollout.
 - Renovate can keep updating the `postgres:18-bookworm` digest. A further major still needs a migration.
+
+
+## Registry relocation of the preserved PG15 baseline
+
+The original PG15 image is available from the current repository namespace as
+`ghcr.io/jonathanagustin/uds-takserver/postgis:15-3.4@sha256:ee12d6b71ca639a51ec83b7c12803376f99df5cfdcabe5f4b94268efefa45647`.
+The index digest matches both native upgrade-smoke jobs in successful workflow
+[42686365302](https://github.com/jonathanagustin/uds-takserver/actions/runs/42686365302),
+including their Bitnami-layout and CloudTAK-layout retained-row checks. The index
+contains linux/amd64 manifest
+`sha256:c968b46a5ab3fee0b3488289b54b621c90f11b1ed8335cbeb8dad7229de539b9`
+and linux/arm64 manifest
+`sha256:11dc2b307bd07b64b6475797397b612f268c72246df754132f7f6524c023ef13`.
+
+The old namespace no longer resolves in current hosted checks. The smoke test now
+uses the current namespace and the original index digest. This preserves the PG15
+baseline bytes and existing upgrade assertions; it does not rebuild PG15, replace
+it with a current PostgreSQL cluster, or waive the upgrade test. `OLD_IMAGE` remains
+an explicit test override.

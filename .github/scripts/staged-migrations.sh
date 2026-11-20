@@ -17,6 +17,15 @@ if [[ "${identity_method}" != manual ]]; then
   python3 tests/workload-identities/package_roundtrip.py preflight \
     --evidence "${RUNNER_TEMP:?}/staged-migrations/package-identity/journal.json"
 fi
+# Verify the same-run signed provider before any cluster or package deployment.
+case "${CORE_RESTORE_OWNER_TRIAL:-false}" in
+  true)
+    uv run --no-project --with pyyaml==6.0.3 --with zstandard==0.25.0 python -B \
+      tests/velero-ownership/source_provider.py --cli "$(readlink -f "$(command -v uds)")"
+    ;;
+  false) ;;
+  *) exit 1 ;;
+esac
 trial="${RUNNER_TEMP:?}/staged-migrations"
 [[ ! -e "${trial}" ]]
 mkdir -m 700 "${trial}"

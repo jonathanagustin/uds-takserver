@@ -9,14 +9,25 @@ name: Benchmark
 on:
   workflow_dispatch:
     inputs:
+      architecture:
+        description: Native architectures to measure in this manual run
+        type: choice
+        default: both
+        options: [both, amd64, arm64]
+      runner_profile:
+        description: Manual runner comparison; temporary preserves current defaults
+        type: choice
+        default: temporary
+        options: [temporary, ubuntu-24.04, ubuntu-26.04]
       study:
-        description: "Short sweep or opt-in baseline: 50 clients, 5min warmup +20min measured, 3 repeats"
+        description: "Short sweep, sustained baseline, or opt-in counterbalanced PostgreSQL comparison"
         default: short
         required: false
         type: choice
         options:
           - short
           - synthetic-baseline
+          - synthetic-postgis
       profile:
         description: "Profiles to measure; baseline avoids tuning rollouts"
         default: all
@@ -55,34 +66,50 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
-  benchmark:
-    name: benchmark (${{ matrix.arch }})
+  plan:
+    name: benchmark-plan
     if: >-
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark') && (github.event.action != 'labeled' || github.event.label.name == 'benchmark'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select native runners
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ARCHITECTURE: ${{ inputs.architecture }}
+          RUNNER_PROFILE: ${{ inputs.runner_profile }}
+          TEST_RUNNER: ${{ vars.TEST_RUNNER }}
+        run: python3 .github/scripts/benchmark-matrix.py
+
+  benchmark:
+    name: benchmark (${{ matrix.arch }})
+    needs: [plan]
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ${{ vars.TEST_RUNNER || 'ubuntu-22.04' }}
-          - arch: arm64
-            runner: ubuntu-22.04-arm
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 180
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && inputs.study == 'synthetic-postgis' && 360 || 180 }}
     permissions:
       actions: read
       contents: read
       packages: read
       id-token: write
+      pull-requests: read
     env:
       TEST_FLAVOR: upstream
       BENCH_STUDY: ${{ github.event.inputs.study || 'short' }}
       BENCH_JVM_START_METADATA: ${{ github.event_name == 'workflow_dispatch' && inputs.jvm_start_metadata == true && '1' || '0' }}
       BENCH_JVM_CONTEXT: ${{ github.event_name == 'workflow_dispatch' && inputs.jvm_start_metadata == true && 'k3d-uds' || '' }}
-      BENCH_PROFILE: ${{ github.event.inputs.study == 'synthetic-baseline' && 'baseline' || github.event.inputs.profile || 'all' }}
-      BENCH_CLIENTS: ${{ github.event.inputs.study == 'synthetic-baseline' && '50' || github.event.inputs.clients || '10' }}
+      BENCH_PROFILE: ${{ github.event.inputs.study == 'synthetic-postgis' && 'postgis' || github.event.inputs.study == 'synthetic-baseline' && 'baseline' || github.event.inputs.profile || 'all' }}
+      BENCH_CLIENTS: ${{ (github.event.inputs.study == 'synthetic-baseline' || github.event.inputs.study == 'synthetic-postgis') && '50' || github.event.inputs.clients || '10' }}
+      BENCH_NATIVE_ARCH: ${{ matrix.arch }}
       # Test's package job publishes the dev package for these inputs; pull
       # it instead of creating it (.github/scripts/dev-package.sh).
       DEV_PACKAGE_WAIT_SECONDS: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '900' || '0' }}
@@ -103,6 +130,15 @@ jobs:
       - name: Verify test Python before cluster work
         run: python3 -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version; print(sys.version)'
 
+      - name: Require the native runner for the PostgreSQL study
+        if: env.BENCH_STUDY == 'synthetic-postgis'
+        run: |
+          python3 - <<'PY'
+          import os, platform
+          expected = {'amd64': {'x86_64', 'amd64'}, 'arm64': {'aarch64', 'arm64'}}
+          assert platform.machine() in expected[os.environ['BENCH_NATIVE_ARCH']], 'native runner differs from study matrix'
+          PY
+
       - name: Install Docker Compose
         uses: docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a # v2.4.0
         with:
@@ -115,7 +151,7 @@ jobs:
           version: v0.41.0
 
       - name: Trim the runner
-        if: vars.TEST_RUNNER == '' || vars.TEST_RUNNER == 'ubuntu-22.04' || vars.TEST_RUNNER == 'ubuntu-24.04' || runner.arch == 'ARM64'
+        if: vars.TEST_RUNNER == '' || vars.TEST_RUNNER == 'ubuntu-22.04' || vars.TEST_RUNNER == 'ubuntu-24.04' || runner.arch == 'ARM64' || (github.event_name == 'workflow_dispatch' && (inputs.runner_profile == 'ubuntu-24.04' || inputs.runner_profile == 'ubuntu-26.04'))
         run: ./.github/scripts/trim-runner.sh
         env:
           TRIM_SKIP_ABOVE_GB: "60"
@@ -136,16 +172,16 @@ jobs:
         run: ./.github/scripts/pin-image-tags.sh
 
       - name: Refuse an existing cluster before the optional study
-        if: env.BENCH_STUDY == 'synthetic-baseline'
+        if: env.BENCH_STUDY == 'synthetic-baseline' || env.BENCH_STUDY == 'synthetic-postgis'
         timeout-minutes: 1
         run: python3 tests/ephemeral-cluster.py bootstrap --context k3d-uds
 
       - name: Install the current branch
         run: uds run test-install --set FLAVOR="${{ env.TEST_FLAVOR }}" --no-progress
-        timeout-minutes: 110
+        timeout-minutes: ${{ inputs.study == 'synthetic-postgis' && 90 || 110 }}
 
       - name: Bind the optional study to this job's disposable cluster
-        if: env.BENCH_STUDY == 'synthetic-baseline'
+        if: env.BENCH_STUDY == 'synthetic-baseline' || env.BENCH_STUDY == 'synthetic-postgis'
         timeout-minutes: 2
         run: python3 tests/ephemeral-cluster.py mark --context k3d-uds
 
@@ -164,6 +200,7 @@ jobs:
             -r bench/load-test-requirements.txt
 
       - name: Run the sweep
+        id: sweep
         env:
           TAK_LOAD_TESTER: ${{ runner.temp }}/tak-load/src/testing/load_test/tak_tester.py
         run: |
@@ -209,8 +246,18 @@ jobs:
           echo "ok=true" >> "${GITHUB_OUTPUT}"
           echo "dir=${dest}" >> "${GITHUB_OUTPUT}"
 
-      - name: Upload the debug logs
+      - name: Print sanitized logs
         if: failure() && !cancelled() && steps.sanitize.outputs.ok == 'true'
+        timeout-minutes: 3
+        shell: bash
+        run: ./.github/scripts/print-logs.sh "${{ steps.sanitize.outputs.dir }}/payload"
+
+      # Failed setup can leave the runner unable to upload, and the artifact
+      # action can exceed its step timeout. Finish pre-sweep failures after
+      # printing sanitized diagnostics. A started sweep still retains its
+      # debug artifact and any partial records through the existing path.
+      - name: Upload the debug logs
+        if: failure() && !cancelled() && steps.sanitize.outputs.ok == 'true' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure')
         timeout-minutes: 5
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -221,7 +268,7 @@ jobs:
           retention-days: 14
 
       - name: Upload the records
-        if: always()
+        if: always() && !cancelled() && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure')
         timeout-minutes: 2
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -229,6 +276,11 @@ jobs:
           path: bench/out
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Remove this job's candidate source registry
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        timeout-minutes: 1
+        run: python3 .github/scripts/candidate-consumer.py cleanup --state "${RUNNER_TEMP}/uds-candidate/state.json"
 
   summary:
     timeout-minutes: 10

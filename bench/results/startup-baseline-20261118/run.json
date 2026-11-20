@@ -1,0 +1,10 @@
+{
+  "conclusion": "success",
+  "event": "workflow_dispatch",
+  "head_sha": "d044a34b3278f388014e599f88253d0097c83633",
+  "id": 44398702032,
+  "path": ".github/workflows/startup.yaml",
+  "run_attempt": 1,
+  "status": "completed",
+  "workflow_id": 417819272
+}

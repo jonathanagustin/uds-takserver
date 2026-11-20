@@ -36,6 +36,32 @@ is_private_material() {
   esac
 }
 
+# OpenSSL 3.0's req defaults to 3DES for encrypted PEM keys. The Pepr
+# controller's OpenSSL 4 runtime rejects that cipher. Keep keys encrypted,
+# using explicit PKCS#8 PBES2/AES-256-CBC and PBKDF2-HMAC-SHA256 instead.
+normalize_generated_private_keys() {
+  local directory="$1" key temporary pass_variable code
+  for key in "${directory}"/*.key; do
+    [[ -f "${key}" ]] || continue
+    case "${key##*/}" in
+      ca-do-not-share.key | root-ca-do-not-share.key) pass_variable=CAPASS ;;
+      *) pass_variable=PASS ;;
+    esac
+    temporary="$(mktemp "${key}.pkcs8.XXXXXX")" || return
+    if openssl pkcs8 -topk8 -v2 aes-256-cbc -v2prf hmacWithSHA256 -iter 100000 \
+      -in "${key}" -passin "env:${pass_variable}" -passout "env:${pass_variable}" \
+      -out "${temporary}" 2>/dev/null; then
+      chmod 0600 "${temporary}"
+      mv -f "${temporary}" "${key}"
+    else
+      code=$?
+      rm -f "${temporary}"
+      echo "Generated private key normalization failed" >&2
+      return "${code}"
+    fi
+  done
+}
+
 if [[ "${PUBLISH_CERT_SOURCE_ONLY:-}" == "1" ]]; then
   return 0
 fi
@@ -138,6 +164,8 @@ for required in takserver.jks admin.pem admin.key user.pem ca.pem ca-do-not-shar
   fi
 done
 
+normalize_generated_private_keys files
+
 # makeCert.sh only writes a signing keystore for a CA certificate, and that
 # path asks an interactive question. Build the keystore the enrollment
 # endpoint reads from the root CA key the script already wrote.
@@ -227,7 +255,8 @@ if [[ "${code}" != "201" ]] && [[ "${code}" != "200" ]] && [[ "${code}" != "409"
 fi
 echo "Created ConfigMap cert-migration"
 
-# Every file the pods need, except the CA key. The inlined split script
+# Every file the pods need, except the CA PEM key and its upstream backup
+# alias. The inlined split script
 # does this again so an older image, which still put keystores in the
 # ConfigMap, ends up with the same Secret.
 secrets_api="https://kubernetes.default.svc/api/v1/namespaces/${ns}/secrets"
@@ -242,7 +271,7 @@ secrets_api="https://kubernetes.default.svc/api/v1/namespaces/${ns}/secrets"
   for file in files/*; do
     [[ -f "${file}" ]] || continue
     name="$(basename "${file}")"
-    if [[ "${name}" == "ca-do-not-share.key" ]]; then
+    if [[ "${name}" == "ca-do-not-share.key" || "${name}" == "root-ca-do-not-share.key" ]]; then
       continue
     fi
     b64="$(base64 -w 0 "${file}")"

@@ -11,6 +11,10 @@ import sys
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+if str(Path(__file__).resolve().parents[1]) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from bench import postgis_study
+
 
 VIEWS = (
     ("footprint_bytes", "throughput", False, True, "footprint vs throughput"),
@@ -48,7 +52,8 @@ def cohorts(records):
             key = ("incomplete", index)
             label = f"record {index + 1}: incomplete comparison metadata (not ranked against other records)"
         groups.setdefault(key, (label, []))[1].append(record)
-    return list(groups.values())
+    return [(label, postgis_study.qualify(rows) if (rows[0].get('study') or {}).get('protocol') == postgis_study.PROTOCOL else rows)
+            for label, rows in groups.values()]
 
 
 def point(record):
@@ -177,6 +182,9 @@ def study_lines(records):
     rows = [r for r in records if r.get('study')]
     if not rows:
         return []
+    postgis = [r for r in rows if r['study'].get('protocol') == postgis_study.PROTOCOL]
+    if postgis:
+        return postgis_study.report_lines(postgis) + study_lines([r for r in rows if r not in postgis])
     lines = ['### Synthetic baseline repeats', '',
              'One cluster per native architecture; these repeats share data/cache history and are not independent cluster replicates. Synthetic traffic is not production representative. Received messages include fan-out; offered self-SA updates and sent/received message rates have different semantics. Collection failures and workload-performance failures remain in the table and are excluded from the tuning front; low traffic or missing pongs can be genuine overload observations.', '',
              '| Architecture | Repeat | Valid | Offered self-SA/s | Observed self-SA/s | Observed stable clients | Sent messages/s | Received messages/s | Actual measured seconds |',

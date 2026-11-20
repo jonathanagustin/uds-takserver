@@ -41,7 +41,84 @@ def require_dependency_review(document):
         raise ValueError('a feature probe must not replace dependency review')
 
 
+def require_fork_scan_reporting(document):
+    """Optional conversation writes cannot replace retained scan evidence."""
+    triggers = document.get('on', document.get(True, {}))
+    if set(triggers) != {'pull_request'}:
+        raise ValueError('scan must use the unprivileged pull-request trigger')
+    job = document['jobs']['scan-and-compare']
+    if job.get('if') is not None or job.get('continue-on-error', False):
+        raise ValueError('the scan job must run normally and fail on errors')
+    steps = job['steps']
+    compare = next(step for step in steps if step.get('id') == 'compare-scans')
+    upload = next(step for step in steps if step.get('id') == 'upload-comparison-results')
+    summary = next(step for step in steps if step['name'] == 'Link comparison in job summary')
+    for step in (compare, upload, summary):
+        if step.get('if') is not None or step.get('continue-on-error', False):
+            raise ValueError('comparison and retention must use normal success semantics')
+    if upload['with'].get('path') != 'comment.md' or upload['with'].get('if-no-files-found') != 'error':
+        raise ValueError('a complete comparison artifact is required')
+    receipt = next(step for step in steps if step.get('name') == 'Upload exact comparison receipt')
+    if (receipt.get('if') is not None or receipt.get('continue-on-error', False)
+            or receipt['with'].get('name') != 'scan-comparison-receipt'
+            or receipt['with'].get('path') != '${{ runner.temp }}/strict-scan-comparison/receipt.json'
+            or receipt['with'].get('if-no-files-found') != 'error'
+            or not steps.index(compare) < steps.index(receipt) < steps.index(summary)):
+        raise ValueError('retain the exact comparison receipt before reporting')
+    if not steps.index(compare) < steps.index(upload) < steps.index(summary):
+        raise ValueError('retain the complete comparison before reporting')
+    comments = [step for step in steps if 'gh pr comment' in step.get('run', '')]
+    if len(comments) != 2:
+        raise ValueError('preserve both ordinary comment paths')
+    for step, large in zip(comments, ('false', 'true')):
+        expected = ("github.event.pull_request.head.repo.full_name == github.repository && "
+                    f"steps.compare-scans.outputs.artifact == '{large}'")
+        if ' '.join(step.get('if', '').split()) != expected or steps.index(step) < steps.index(summary):
+            raise ValueError('conversation writes require a same-repository PR after retention')
+
+
 class WorkflowPermissionTests(unittest.TestCase):
+    def test_fork_scans_retain_small_and_large_comparisons_before_optional_comments(self):
+        document = workflow('scan.yaml')
+        require_fork_scan_reporting(document)
+        job = document['jobs']['scan-and-compare']
+        self.assertEqual(write_scopes(job['permissions']), {'pull-requests'})
+        steps = job['steps']
+        summary = next(step for step in steps if step['name'] == 'Link comparison in job summary')
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'summary.md'
+            result = subprocess.run(['bash', '-eu', '-c', summary['run']],
+                env={**os.environ, 'GITHUB_STEP_SUMMARY': str(output),
+                     'ARTIFACT_URL': 'https://github.com/example/repo/actions/runs/1/artifacts/2'},
+                capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('[Download the complete comparison](https://github.com/example/repo/actions/runs/1/artifacts/2)',
+                          output.read_text())
+
+    def test_fork_scan_policy_rejects_missing_evidence_or_elevated_trigger(self):
+        original = workflow('scan.yaml')
+        for target, key, value in (
+            ('job', 'if', 'false'), ('job', 'continue-on-error', True),
+            ('compare-scans', 'continue-on-error', True),
+            ('Upload exact comparison receipt', 'if', 'false'),
+            ('Upload exact comparison receipt', 'continue-on-error', True),
+            ('upload-comparison-results', 'if', "steps.compare-scans.outputs.artifact == 'true'"),
+            ('Post markdown as comment', 'if', "steps.compare-scans.outputs.artifact == 'false'"),
+            ('Post comment about artifact', 'if', "steps.compare-scans.outputs.artifact == 'true'"),
+        ):
+            changed = copy.deepcopy(original)
+            job = changed['jobs']['scan-and-compare']
+            step = job if target == 'job' else next(
+                item for item in job['steps'] if item.get('id') == target or item['name'] == target)
+            step[key] = value
+            with self.subTest(target=target, key=key), self.assertRaises(ValueError):
+                require_fork_scan_reporting(changed)
+        changed = copy.deepcopy(original)
+        changed.pop(True, None)
+        changed['on'] = {'pull_request_target': {}}
+        with self.assertRaises(ValueError):
+            require_fork_scan_reporting(changed)
+
     def test_new_validation_jobs_do_not_inherit_write_or_oidc_access(self):
         for name in ('test.yaml', 'benchmark.yaml', 'full-core.yaml', 'dependency-review.yaml'):
             with self.subTest(workflow=name):
@@ -81,6 +158,7 @@ class WorkflowPermissionTests(unittest.TestCase):
             environment = {**os.environ, 'PATH': str(directory) + os.pathsep + os.defpath,
                            'GH_TOKEN': 'fixture-token', 'IMAGE_TAG': 'immutable-fixture',
                            'GITHUB_WORKFLOW': 'Container', 'BUILD_IF_MISSING': 'true',
+                           'CANDIDATE_PRODUCER': 'true',
                            'CHECK_ONCE': 'true', 'PERMISSION_TEST_CALLS': str(calls)}
             result = subprocess.run(['bash', str(ROOT / '.github/scripts/wait-for-tak-images.sh')],
                                     env=environment, cwd=ROOT, capture_output=True, text=True, timeout=15)

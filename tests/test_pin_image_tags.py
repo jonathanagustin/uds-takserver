@@ -3,6 +3,7 @@
 
 """Execute image pinning in a real checkout; never change the source checkout."""
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import tempfile
@@ -24,6 +25,7 @@ class ImageTagPinning(unittest.TestCase):
                 ["bash", ".github/container-and-chart/docker/build.sh", "--tag"], cwd=root, text=True,
             ).strip()
             subprocess.run(["bash", ".github/scripts/pin-image-tags.sh"], cwd=root, check=True,
+                           env={**os.environ, 'GITHUB_EVENT_NAME': 'unit-test'},
                            capture_output=True, text=True, timeout=30)
             package = yaml.safe_load((root / "zarf.yaml").read_text())
             variables = {variable["name"]: variable for variable in package["variables"]}

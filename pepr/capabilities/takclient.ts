@@ -6,7 +6,7 @@
 // that row before deleting its file user and Secret. The CRL is a backstop;
 // only legacy certificates still require a pod reload.
 
-import { randomBytes, X509Certificate } from "node:crypto";
+import { createHash, randomBytes, X509Certificate } from "node:crypto";
 import type { Cluster, SecretDoc } from "../cluster.ts";
 import {
   buildCrl,
@@ -37,6 +37,7 @@ export const NOT_AFTER = `${GROUP}/not-after`;
 export const FINGERPRINT = `${GROUP}/fingerprint`;
 export const ISSUER = `${GROUP}/issuer`;
 export const CALLSIGN = `${GROUP}/callsign`;
+export const CLIENT_NAME = `${GROUP}/takclient`;
 export const RETRY = `${GROUP}/finalize-retry`;
 export const RECONCILE_RETRY = `${GROUP}/reconcile-retry`;
 export const DEFAULT_DAYS = 30;
@@ -132,6 +133,13 @@ export function secretName(client: TakClientDoc): string {
   return client.metadata!.name!;
 }
 
+// Resource names may be 253 characters; label values may only be 63.
+// Hash the full long name, with an underscore so it cannot match a short
+// DNS-subdomain name. The Secret's name and annotation retain the exact name.
+export function clientLabelValue(name: string): string {
+  return name.length <= 63 ? name : `sha256_${createHash("sha256").update(name).digest("hex").slice(0, 56)}`;
+}
+
 function decode(value: string | undefined): string | undefined {
   return value === undefined ? undefined : Buffer.from(value, "base64").toString("utf8");
 }
@@ -142,7 +150,9 @@ function encode(value: string | Buffer): string {
 
 // The CA, its key, and its passphrase. undefined until the cert Job has
 // published all three.
-export async function readCa(cluster: Cluster): Promise<Ca | undefined> {
+export type CaUnavailable = "missing-certificate" | "missing-key" | "missing-passphrase" | "unreadable-material";
+
+export async function readCa(cluster: Cluster, unavailable?: (reason: CaUnavailable) => void): Promise<Ca | undefined> {
   const configMap = await cluster.getConfigMap(TAK_NAMESPACE, CERT_CONFIGMAP);
   const caKey = await cluster.getSecret(TAK_NAMESPACE, CA_KEY_SECRET);
   const keystore = await cluster.getSecret(TAK_NAMESPACE, KEYSTORE_SECRET);
@@ -150,13 +160,16 @@ export async function readCa(cluster: Cluster): Promise<Ca | undefined> {
   const keyPem = decode(caKey?.data?.["ca-do-not-share.key"]);
   const pass = decode(keystore?.data?.CAPASS);
   if (!caPem || !keyPem || pass === undefined) {
+    unavailable?.(!caPem ? "missing-certificate" : !keyPem ? "missing-key" : "missing-passphrase");
     return undefined;
   }
   try {
     return loadCa(caPem, keyPem, pass);
   } catch {
     // A CA in the middle of a rotation (cert-rotation test) or a key that
-    // does not open. Nothing is signed until both are readable.
+    // does not open. Nothing is signed until both are readable. Never log
+    // the crypto exception: it may contain material supplied to the parser.
+    unavailable?.("unreadable-material");
     return undefined;
   }
 }
@@ -539,7 +552,8 @@ async function reconcileCurrent(client: TakClientDoc, deps: Deps): Promise<boole
         [FINGERPRINT]: issued.fingerprint, [CALLSIGN]: callsign, [ISSUER]: "tak" };
       const data = secretData(callsign, issued, ca, streamHost(deps.domain), password);
       await cluster.applySecretWithAnnotations(CLIENT_NAMESPACE, name,
-        { "app.kubernetes.io/managed-by": "takserver-oidc", [`${GROUP}/takclient`]: name }, annotations, data);
+        { "app.kubernetes.io/managed-by": "takserver-oidc", [CLIENT_NAME]: clientLabelValue(name) },
+        { ...annotations, [CLIENT_NAME]: name }, data);
       await cluster.annotateTakClient(CLIENT_NAMESPACE, name, annotations);
     } else {
       await register(deps.tak, admin, callsign, spec.groups!, userPassword);

@@ -3,23 +3,31 @@
 """Private invariants and exact retained-application cleanup, never Core cleanup."""
 import base64
 import copy
+from datetime import datetime
 import hashlib
 import json
 from pathlib import PurePosixPath
 import re
 import shlex
 import ssl
+import subprocess
 import tempfile
+import time
 import urllib.parse
 import urllib.request
+import zlib
 from pathlib import Path
 import yaml
 
 APP_RELEASES={'takserver':{'takserver','uds-takserver-config'},'cloudtak':{'uds-cloudtak'}}
 GENERATED_SECRETS={'takserver-ca-key','takserver-certs','tak-health-client'}
-SOURCE_CLEANUP={(ns,'Secret',name) for ns,name in [('takserver',name) for name in GENERATED_SECRETS|{'takserver-keystore','takclient-enrollment'}]+[('cloudtak','cloudtak-tak-admin')]}|{('takserver','ConfigMap','cert-migration'),('takserver','ConfigMap','takserver-startup')}
+SOURCE_CLEANUP={(ns,'Secret',name) for ns,name in [('takserver',name) for name in GENERATED_SECRETS|{'takserver-keystore','takclient-enrollment','takserver-crl'}]+[('cloudtak','cloudtak-tak-admin')]}|{('takserver','ConfigMap','cert-migration'),('takserver','ConfigMap','takserver-startup'),('takserver','ConfigMap','ignite-extensions')}
 
 def cleanup_allowed(rec):
+    if (rec.get('namespace'),rec.get('kind'),rec.get('name'))==('takserver','Secret','takserver-crl'):
+        return isinstance(rec.get('emptyCrlDataSHA256'),str) and bool(re.fullmatch('[a-f0-9]{64}',rec['emptyCrlDataSHA256']))
+    if (rec.get('namespace'),rec.get('kind'),rec.get('name'))==('takserver','ConfigMap','ignite-extensions'):
+        return all(isinstance(rec.get(key),str) and bool(re.fullmatch('[a-f0-9]{64}',rec[key])) for key in ('imageBoundJarSHA256','imageSourceSHA256'))
     return rec['namespace'] in APP_RELEASES and (rec['kind']=='PersistentVolumeClaim' and 'parent' in rec or (rec['namespace'],rec['kind'],rec['name']) in SOURCE_CLEANUP)
 
 def require(value,message):
@@ -27,7 +35,7 @@ def require(value,message):
 
 def sha(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
-SOURCE_FILES=('pepr/capabilities/workload.ts','pepr/capabilities/cloudtak-admin.ts','pepr/capabilities/takclient-credentials.ts')
+SOURCE_FILES=('pepr/capabilities/workload.ts','pepr/capabilities/cloudtak-admin.ts','pepr/capabilities/takclient-credentials.ts','pepr/capabilities/takclient.ts','pepr/capabilities/takclient-pki.ts','pepr/capabilities/takclient-capability.ts','.github/container-and-chart/docker/Dockerfile','.github/container-and-chart/docker/publish-cert-configmap.sh')
 
 def source_files():
     return {name:hashlib.sha256((Path(__file__).resolve().parents[2]/name).read_bytes()).hexdigest() for name in SOURCE_FILES}
@@ -330,14 +338,17 @@ def capture(driver):
         for secret in driver.get('secrets',namespace=namespace)['items']:
             name=secret['metadata']['name']
             annotations=secret['metadata'].get('annotations',{})
-            extra=(namespace,name) in {('cloudtak','cloudtak-tak-admin'),('takserver','takclient-enrollment')}
+            extra=(namespace,name) in {('cloudtak','cloudtak-tak-admin'),('takserver','takclient-enrollment'),('takserver','takserver-crl')}
             if extra:generated_secret(driver,secret)
             if name in referenced or namespace=='takserver' and name in GENERATED_SECRETS|{'takserver-keystore'} or extra:
-                rec=resource_record(secret);rec['dataSHA256']=sha(secret.get('data',{}));rec['recreatedHook']=namespace=='takserver' and name=='takserver-keystore';records.append(rec)
+                rec=resource_record(secret);rec['dataSHA256']=sha(secret.get('data',{}));rec['recreatedHook']=namespace=='takserver' and name=='takserver-keystore'
+                if namespace=='takserver' and name=='takserver-crl':rec['emptyCrlDataSHA256']=rec['dataSHA256']
+                records.append(rec)
     for config in driver.get('configmaps')['items']:
         if config['metadata']['name']=='takserver-startup':startup_map(config)
-        if config['metadata']['name'] in ('cert-migration','takserver-startup'):
-            rec=resource_record(config);rec['dataSHA256']=sha({'data':config.get('data',{}),'binaryData':config.get('binaryData',{})});records.append(rec)
+        image_binding=ignite_binding(driver,config) if config['metadata']['name']=='ignite-extensions' else {}
+        if config['metadata']['name'] in ('cert-migration','takserver-startup','ignite-extensions'):
+            rec=resource_record(config);rec['dataSHA256']=sha({'data':config.get('data',{}),'binaryData':config.get('binaryData',{})});rec.update(image_binding);records.append(rec)
     require(any(x['name']=='takserver-keystore' for x in records) and any(x['name']=='cert-migration' for x in records),'source-generated credential state missing')
     return {'source':origin,'records':records}
 
@@ -359,22 +370,96 @@ def verify(driver,proof,remove_sentinels=False):
         else:
             value=current.get('data',{}) if rec['kind']=='Secret' else {'data':current.get('data',{}),'binaryData':current.get('binaryData',{})}
             require(sha(value)==rec['dataSHA256'],'application credential/certificate data changed')
+            if rec['kind']=='ConfigMap' and rec['name']=='ignite-extensions':
+                require(ignite_binding(driver,current)=={key:rec[key] for key in ('imageBoundJarSHA256','imageSourceSHA256')},'bound Ignite image source changed')
             observations.append({'kind':rec['kind'],'name':rec['name'],'namespace':rec['namespace'],'uid':meta['uid'],'dataSHA256':sha(value),'recreatedHook':rec.get('recreatedHook',False)})
 
 
     return observations
 
 def cleanup_snapshot(driver,proof):
+    if any(rec['namespace']=='takserver' and rec['name'] in GENERATED_SECRETS|{'takserver-crl'} for rec in proof['records']):no_live_clients(driver)
     verify(driver,proof,remove_sentinels=True);result=[]
     for rec in proof['records']:
         if cleanup_allowed(rec):
-            current=driver.get(rec['kind'],rec['name'],namespace=rec['namespace'])
+            current=(json.loads(driver.kube('get',rec['kind'],rec['name'],'-n',rec['namespace'],
+                '--show-managed-fields=true','-o','json')) if rec['kind']=='PersistentVolumeClaim' else
+                driver.get(rec['kind'],rec['name'],namespace=rec['namespace']))
             if rec['name']=='takserver-startup':startup_map(current)
-            if rec['name'] in ('cloudtak-tak-admin','takclient-enrollment'):generated_secret(driver,current,cleanup=True)
+            if rec['name'] in ('cloudtak-tak-admin','takclient-enrollment','takserver-crl'):generated_secret(driver,current,cleanup=True)
             item=resource_record(current);item['origin']=proof['source']
-            if rec['kind']=='PersistentVolumeClaim':item['parent']=claim_parent(driver,current)
+            if rec['namespace']=='takserver' and rec['name']=='takserver-crl':
+                require(sha(current.get('data',{}))==rec['emptyCrlDataSHA256'],'verified empty CRL data changed')
+                item['emptyCrlDataSHA256']=rec['emptyCrlDataSHA256']
+            if rec['kind']=='ConfigMap' and rec['name']=='ignite-extensions':
+                require(item['uid']==rec['uid'],'verified Ignite map replaced before cleanup snapshot')
+                require(ignite_jar(current)==rec['imageBoundJarSHA256'],'verified Ignite binary changed')
+                item.update({key:rec[key] for key in ('imageBoundJarSHA256','imageSourceSHA256')})
+            if rec['kind']=='PersistentVolumeClaim':
+                require(item['uid']==rec['uid'],'verified PVC replaced before cleanup snapshot')
+                item['parent']=claim_parent(driver,current)
+                require(item['parent']==rec['parent'],'verified PVC parent changed before cleanup snapshot')
+                barrier=pvc_usage_barrier(current)
+                if barrier is not None:item['pvcUsageBarrier']=barrier
+                try:item['pvcState']=pvc_state(current)
+                except Exception:pass  # Optional evidence cannot change cleanup authorization.
             result.append(item)
     return result
+
+CLEAN_INVENTORY_KINDS={'deployments':'Deployment','statefulsets':'StatefulSet','jobs':'Job','pods':'Pod',
+    'persistentvolumeclaims':'PersistentVolumeClaim','secrets':'Secret','configmaps':'ConfigMap','services':'Service',
+    'serviceaccounts':'ServiceAccount','roles':'Role','rolebindings':'RoleBinding','packages.uds.dev':'Package'}
+CLEAN_INVENTORY_LIMIT=16
+
+def validate_clean_inventory_failure(snapshot):
+    require(isinstance(snapshot,dict) and set(snapshot)=={'schema','namespace','kind','reason','totalCount',
+            'truncated','inventorySHA256','objects'} and type(snapshot['schema']) is int and snapshot['schema']==1,
+            'clean inventory schema differs')
+    ns,kind=snapshot['namespace'],snapshot['kind']
+    require(ns in (*APP_RELEASES,'pepr-system') and kind in CLEAN_INVENTORY_KINDS and
+            (ns!='pepr-system' or kind in ('deployments','secrets')),'clean inventory scope differs')
+    require(snapshot['reason'] in ('unexpected-objects','preserved-trust-changed') and
+            (snapshot['reason']!='preserved-trust-changed' or ns in APP_RELEASES and kind=='configmaps'),
+            'clean inventory reason differs')
+    total=snapshot['totalCount'];objects=snapshot['objects']
+    require(type(total) is int and 1<=total<=4096 and isinstance(objects,list) and
+            len(objects)==min(total,CLEAN_INVENTORY_LIMIT) and type(snapshot['truncated']) is bool and
+            snapshot['truncated']==(total>CLEAN_INVENTORY_LIMIT),'clean inventory count differs')
+    require(isinstance(snapshot['inventorySHA256'],str) and re.fullmatch('[a-f0-9]{64}',snapshot['inventorySHA256']),
+            'clean inventory digest differs')
+    names=[]
+    for obj in objects:
+        require(isinstance(obj,dict) and set(obj)=={'name','uid','resourceVersion','deleting','objectSHA256'},
+                'clean inventory object differs')
+        for key in ('name','uid','resourceVersion'):
+            require(isinstance(obj[key],str) and re.fullmatch('[A-Za-z0-9._-]{1,253}',obj[key]),
+                    'clean inventory identity differs')
+        require(type(obj['deleting']) is bool and isinstance(obj['objectSHA256'],str) and
+                re.fullmatch('[a-f0-9]{64}',obj['objectSHA256']),'clean inventory object state differs')
+        if snapshot['reason']=='preserved-trust-changed':
+            require(obj['name'] in ('kube-root-ca.crt','istio-ca-root-cert','istio-ca-crl','uds-trust-bundle'),
+                    'clean inventory trust name differs')
+        names.append(obj['name'])
+    require(names==sorted(set(names)),'clean inventory ordering or duplicate differs')
+    if not snapshot['truncated']:require(sha(objects)==snapshot['inventorySHA256'],'clean inventory digest mismatch')
+    require(len(json.dumps(snapshot).encode())<=SOURCE_FAILURE_LIMIT,'clean inventory byte bound')
+    return snapshot
+
+def clean_inventory_failure(namespace,kind,objects,reason='unexpected-objects'):
+    require(kind in CLEAN_INVENTORY_KINDS and isinstance(objects,list) and 1<=len(objects)<=4096,
+            'clean inventory query bound differs')
+    records=[]
+    for obj in objects:
+        meta=obj['metadata']
+        require(obj.get('kind')==CLEAN_INVENTORY_KINDS[kind] and meta.get('namespace')==namespace,
+                'clean inventory query scope differs')
+        records.append({'name':meta['name'],'uid':meta['uid'],'resourceVersion':meta['resourceVersion'],
+            'deleting':bool(meta.get('deletionTimestamp')),'objectSHA256':sha(obj)})
+    records.sort(key=lambda item:item['name'])
+    require(len({item['name'] for item in records})==len(records),'duplicate clean inventory query object')
+    return validate_clean_inventory_failure({'schema':1,'namespace':namespace,'kind':kind,'reason':reason,
+        'totalCount':len(records),'truncated':len(records)>CLEAN_INVENTORY_LIMIT,
+        'inventorySHA256':sha(records),'objects':records[:CLEAN_INVENTORY_LIMIT]})
 
 def validate_consumer_failure(snapshot):
     require(isinstance(snapshot,dict) and set(snapshot)=={'schema','consumers'} and
@@ -423,15 +508,277 @@ def consumers_gone(driver):
         require(all(not driver.get(kind,namespace=namespace)['items'] for kind in ('pods','deployments','statefulsets')),'application still has consumers')
     return {'consumersGone':True}
 
+CLEANUP_IDENTITY_FIELDS=('kind','name','namespace','uid','resourceVersion','metadataSHA256')
+
+# Fixed API field names only: unknown status keys/values are represented by one
+# aggregate digest. Presence is hashed too, so missing and explicit null differ.
+PVC_STATUS_FIELDS=('phase','accessModes','capacity','conditions','allocatedResources',
+                   'resizeStatus','allocatedResourceStatuses',
+                   'currentVolumeAttributesClassName','modifyVolumeStatus')
+PVC_STATUS_DIGEST_KEYS=set(PVC_STATUS_FIELDS)|{'other'}
+PVC_CONDITION_TYPES={'Resizing','FileSystemResizePending','ControllerResizeError',
+                     'NodeResizeError','ModifyVolumeError','ModifyingVolume','Unused'}
+PVC_CONDITION_STATUSES={'True','False','Unknown','Other'}
+PVC_CONDITION_FIELD_GROUPS={'type':('type',),'status':('status',),
+    'detail':('reason','message'),'timestamps':('lastProbeTime','lastTransitionTime')}
+PVC_CONDITION_DIGEST_KEYS=set(PVC_CONDITION_FIELD_GROUPS)|{'other'}
+# Field-manager strings are hints, not authenticated controller identities.
+PVC_MANAGER_CODES={'k3s':'K3s','kube-controller-manager':'KubeController','kubelet':'Kubelet',
+    'velero':'Velero','pepr':'Pepr','zarf':'Zarf','local-path-provisioner':'LocalPath',
+    'kubectl-patch':'KubectlPatch','kubectl-edit':'KubectlEdit','kubectl-client-side-apply':'KubectlApply'}
+
+def validate_condition_owners(value):
+    require(isinstance(value,dict) and set(value)=={'count','codes','unknownCount','sha256'},'PVC managed owner schema differs')
+    require(type(value['count']) is int and 0<=value['count']<=32 and type(value['unknownCount']) is int and
+            0<=value['unknownCount']<=value['count'],'PVC managed owner bound differs')
+    codes=value['codes']
+    require(isinstance(codes,list) and all(isinstance(code,str) and code in set(PVC_MANAGER_CODES.values())|{'Other'} for code in codes) and
+            codes==sorted(set(codes)) and len(codes)<=value['count'] and bool(codes)==bool(value['count']) and
+            ('Other' in codes)==bool(value['unknownCount']),'PVC managed owner code differs')
+    require(isinstance(value['sha256'],str) and re.fullmatch('[0-9a-f]{64}',value['sha256']),'PVC managed owner digest differs')
+    return value
+
+def condition_owners(meta):
+    entries=meta['managedFields']
+    require(isinstance(entries,list) and len(entries)<=32 and all(isinstance(entry,dict) for entry in entries) and
+            len(json.dumps(entries).encode())<=64*1024,'PVC managed field input bound differs')
+    relevant=[];codes=set();unknown=0
+    for entry in entries:
+        fields=entry.get('fieldsV1')
+        status=fields.get('f:status') if isinstance(fields,dict) else None
+        if entry.get('fieldsType')!='FieldsV1' or not isinstance(status,dict) or not isinstance(status.get('f:conditions'),dict):continue
+        manager=entry.get('manager');code=PVC_MANAGER_CODES.get(manager,'Other') if isinstance(manager,str) else 'Other'
+        codes.add(code);unknown+=code=='Other'
+        relevant.append({'manager':manager,'operation':entry.get('operation'),'subresource':entry.get('subresource'),
+                         'conditions':status['f:conditions']})
+    # No raw manager, condition key, operation, timestamp or value is emitted.
+    return validate_condition_owners({'count':len(relevant),'codes':sorted(codes),'unknownCount':unknown,'sha256':sha(relevant)})
+
+def validate_condition_facts(value):
+    require(isinstance(value,dict) and {'shape','count','knownTypes','otherTypeCount'}<=set(value) and
+            set(value)<={'shape','count','knownTypes','otherTypeCount','fieldsSHA256','managedOwners'},'PVC condition facts schema differs')
+    require(value['shape'] in ('absent','null','list','other') and type(value['count']) is int and
+            0<=value['count']<=32 and type(value['otherTypeCount']) is int and
+            0<=value['otherTypeCount']<=value['count'],'PVC condition facts bound differs')
+    known=value['knownTypes']
+    require(isinstance(known,dict) and set(known)<=PVC_CONDITION_TYPES,'PVC condition type differs')
+    for statuses in known.values():
+        require(isinstance(statuses,list) and 1<=len(statuses)<=32 and
+                all(isinstance(status,str) and status in PVC_CONDITION_STATUSES for status in statuses) and
+                statuses==sorted(statuses),'PVC condition status differs')
+    require(sum(map(len,known.values()))+value['otherTypeCount']==value['count'],'PVC condition count differs')
+    require(value['shape']=='list' or value['count']==0,'PVC condition shape differs')
+    if 'fieldsSHA256' in value:
+        fields=value['fieldsSHA256']
+        require(value['shape']=='list' and isinstance(fields,dict) and
+                set(fields)==PVC_CONDITION_DIGEST_KEYS,'PVC condition field schema differs')
+        require(all(isinstance(digest,str) and re.fullmatch('[0-9a-f]{64}',digest)
+                    for digest in fields.values()),'PVC condition field digest differs')
+    if 'managedOwners' in value:validate_condition_owners(value['managedOwners'])
+    return value
+
+def condition_facts(status):
+    value=status.get('conditions')
+    shape='absent' if 'conditions' not in status else 'null' if value is None else 'list' if isinstance(value,list) else 'other'
+    result={'shape':shape,'count':0,'knownTypes':{},'otherTypeCount':0}
+    if shape=='list':
+        require(len(value)<=32 and all(isinstance(item,dict) for item in value),'PVC condition input bound differs')
+        result['count']=len(value)
+        for item in value:
+            kind=item.get('type')
+            if not isinstance(kind,str) or kind not in PVC_CONDITION_TYPES:
+                result['otherTypeCount']+=1
+                continue
+            state=item.get('status')
+            if not isinstance(state,str) or state not in PVC_CONDITION_STATUSES:state='Other'
+            result['knownTypes'].setdefault(kind,[]).append(state)
+        for statuses in result['knownTypes'].values():statuses.sort()
+        # Fixed group names and digests only; arbitrary condition values/keys
+        # never leave the input object. Preserve missing/null and list ordering.
+        result['fieldsSHA256']={group:sha([{key:{'present':key in item,'value':item.get(key)}
+            for key in keys} for item in value]) for group,keys in PVC_CONDITION_FIELD_GROUPS.items()}
+        known_fields={key for keys in PVC_CONDITION_FIELD_GROUPS.values() for key in keys}
+        result['fieldsSHA256']['other']=sha([{key:entry for key,entry in item.items()
+            if key not in known_fields} for item in value])
+    return validate_condition_facts(result)
+
+def validate_pvc_state(value):
+    require(isinstance(value,dict) and set(value) in ({'specSHA256','statusSHA256','finalizersSHA256','pvcProtection','otherFinalizerCount'},
+            {'specSHA256','statusSHA256','finalizersSHA256','pvcProtection','otherFinalizerCount','statusFieldsSHA256'},
+            {'specSHA256','statusSHA256','finalizersSHA256','pvcProtection','otherFinalizerCount','statusFieldsSHA256','conditionFacts'}),'PVC state schema differs')
+    for key in ('specSHA256','statusSHA256','finalizersSHA256'):
+        require(isinstance(value[key],str) and re.fullmatch('[0-9a-f]{64}',value[key]),'PVC state digest differs')
+    require(type(value['pvcProtection']) is bool and type(value['otherFinalizerCount']) is int and
+            0<=value['otherFinalizerCount']<=32,'PVC finalizer facts differ')
+    if 'statusFieldsSHA256' in value:
+        fields=value['statusFieldsSHA256']
+        require(isinstance(fields,dict) and set(fields)==PVC_STATUS_DIGEST_KEYS,'PVC status field schema differs')
+        require(all(isinstance(digest,str) and re.fullmatch('[0-9a-f]{64}',digest)
+                    for digest in fields.values()),'PVC status field digest differs')
+    if 'conditionFacts' in value:validate_condition_facts(value['conditionFacts'])
+    return value
+
+def pvc_state(obj):
+    require(obj.get('kind')=='PersistentVolumeClaim' and obj['metadata'].get('namespace') in APP_RELEASES,'PVC diagnostic scope differs')
+    finalizers=obj['metadata'].get('finalizers',[])
+    require(isinstance(finalizers,list) and len(finalizers)<=32 and all(isinstance(value,str) and
+            re.fullmatch('[A-Za-z0-9./_-]{1,253}',value) for value in finalizers),'PVC finalizer input differs')
+    require(len(json.dumps({'spec':obj.get('spec',{}),'status':obj.get('status',{})}).encode())<=64*1024,'PVC diagnostic input bound')
+    status=obj.get('status',{})
+    require(isinstance(status,dict),'PVC status input differs')
+    fields={key:sha({'present':key in status,'value':status.get(key)}) for key in PVC_STATUS_FIELDS}
+    fields['other']=sha({key:value for key,value in status.items() if key not in PVC_STATUS_FIELDS})
+    state={'statusFieldsSHA256':fields,'specSHA256':sha(obj.get('spec',{})),'statusSHA256':sha(obj.get('status',{})),
+        'finalizersSHA256':sha(sorted(finalizers)),'pvcProtection':'kubernetes.io/pvc-protection' in finalizers,
+        'otherFinalizerCount':sum(value!='kubernetes.io/pvc-protection' for value in finalizers)}
+    try:state['conditionFacts']=condition_facts(status)
+    except ValueError:pass  # Optional detail cannot suppress the existing fingerprints.
+    if 'conditionFacts' in state and 'managedFields' in obj['metadata']:
+        try:state['conditionFacts']['managedOwners']=condition_owners(obj['metadata'])
+        except Exception:pass  # Optional hint failure never suppresses existing fingerprints.
+    return validate_pvc_state(state)
+
+def validate_cleanup_drift(snapshot):
+    require(isinstance(snapshot,dict) and set(snapshot) in ({'schema','expected','observed','changedFields'}, {'schema','expected','observed','changedFields','pvcState'}) and
+            type(snapshot['schema']) is int and snapshot['schema']==1,'cleanup drift schema differs')
+    for key in ('expected','observed'):
+        rec=snapshot[key]
+        require(isinstance(rec,dict) and set(rec)==set(CLEANUP_IDENTITY_FIELDS),'cleanup drift record differs')
+        require(rec['namespace'] in APP_RELEASES and (rec['kind']=='PersistentVolumeClaim' or
+                (rec['namespace'],rec['kind'],rec['name']) in SOURCE_CLEANUP),'cleanup drift scope differs')
+        for field in ('name','uid','resourceVersion'):
+            require(isinstance(rec[field],str) and re.fullmatch('[A-Za-z0-9._-]{1,253}',rec[field]),'cleanup drift identity differs')
+        require(isinstance(rec['metadataSHA256'],str) and re.fullmatch('[0-9a-f]{64}',rec['metadataSHA256']),'cleanup drift digest differs')
+    changed=[key for key in CLEANUP_IDENTITY_FIELDS if snapshot['expected'][key]!=snapshot['observed'][key]]
+    require(changed and snapshot['changedFields']==changed,'cleanup drift fields differ')
+    if 'pvcState' in snapshot:
+        require(snapshot['expected']['kind']==snapshot['observed']['kind']=='PersistentVolumeClaim' and
+                isinstance(snapshot['pvcState'],dict) and set(snapshot['pvcState'])=={'expected','observed'},'PVC state envelope differs')
+        for value in snapshot['pvcState'].values():validate_pvc_state(value)
+    require(len(json.dumps(snapshot).encode())<=4096,'cleanup drift byte bound')
+    return snapshot
+
+def capture_cleanup_drift(driver,rec,current):
+    expected={key:rec[key] for key in CLEANUP_IDENTITY_FIELDS}
+    try:observed=resource_record(current)
+    except Exception:
+        driver._retained_cleanup_drift=None;return
+    # Record only identities and a metadata digest, never object bodies or values.
+    # Capture failure must not mask the deletion refusal or authorize a retry.
+    try:
+        snapshot={'schema':1,'expected':expected,'observed':observed,
+            'changedFields':[key for key in CLEANUP_IDENTITY_FIELDS if expected[key]!=observed[key]]}
+        if rec['kind']=='PersistentVolumeClaim' and 'pvcState' in rec:
+            try:
+                baseline=copy.deepcopy(validate_pvc_state(rec['pvcState']));current_state=pvc_state(current)
+                snapshot['pvcState']={'expected':baseline,'observed':current_state}
+                if len(json.dumps(snapshot).encode())>4096:
+                    for state in snapshot['pvcState'].values():state.get('conditionFacts',{}).pop('fieldsSHA256',None)
+                if len(json.dumps(snapshot).encode())>4096:
+                    for state in snapshot['pvcState'].values():state.get('conditionFacts',{}).pop('managedOwners',None)
+                if len(json.dumps(snapshot).encode())>4096:
+                    for state in snapshot['pvcState'].values():state.pop('conditionFacts',None)
+            except Exception:pass  # Keep the basic identity diagnostic if extra capture fails.
+        driver._retained_cleanup_drift=validate_cleanup_drift(snapshot)
+    except Exception:driver._retained_cleanup_drift=None
+
+# The controller's published in-use -> unused transition is an expected phase
+# boundary. This separate proof is authorization state, not optional diagnostics.
+# It binds every PVC field except RV/managedFields and the one exact known
+# condition. No manager string grants permission; deletion still binds UID + RV.
+def pvc_usage_condition(obj,state):
+    status=obj.get('status',{})
+    conditions=status.get('conditions')
+    if obj.get('kind')!='PersistentVolumeClaim' or status.get('phase')!='Bound' or not isinstance(conditions,list) or len(conditions)!=1:return False
+    value=conditions[0]
+    required={'type','status','reason','message','lastTransitionTime'}
+    if not isinstance(value,dict) or not required<=set(value) or not set(value)<=required|{'lastProbeTime'}:return False
+    reason,message=(('PodUsingPVC','A pod is currently referencing this PVC') if state=='False' else
+                    ('NoPodsUsingPVC','No pods are currently referencing this PVC'))
+    if state not in ('False','True') or any(value.get(key)!=expected for key,expected in
+        (('type','Unused'),('status',state),('reason',reason),('message',message))):return False
+    for key in ('lastTransitionTime','lastProbeTime'):
+        stamp=value.get(key)
+        if key=='lastProbeTime' and stamp is None:continue
+        if not isinstance(stamp,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z',stamp):return False
+        try:datetime.fromisoformat(stamp.replace('Z','+00:00'))
+        except ValueError:return False
+    return True
+
+def pvc_usage_invariant(obj):
+    value=copy.deepcopy(obj)
+    value['metadata'].pop('resourceVersion',None)
+    value['metadata'].pop('managedFields',None)
+    value['status'].pop('conditions',None)
+    return sha(value)
+
+def pvc_usage_barrier(obj):
+    if not pvc_usage_condition(obj,'False'):return None
+    return {'schema':1,'transition':'UnusedFalseToTrue','invariantSHA256':pvc_usage_invariant(obj)}
+
+def validate_pvc_usage_barrier(value):
+    require(isinstance(value,dict) and set(value)=={'schema','transition','invariantSHA256'} and
+            type(value['schema']) is int and value['schema']==1 and value['transition']=='UnusedFalseToTrue' and
+            isinstance(value['invariantSHA256'],str) and re.fullmatch('[0-9a-f]{64}',value['invariantSHA256']),
+            'PVC cleanup barrier differs')
+    return value
+
+def quiescent_pvc_record(rec,current):
+    barrier=validate_pvc_usage_barrier(rec['pvcUsageBarrier'])
+    require(rec['kind']=='PersistentVolumeClaim','PVC cleanup barrier scope differs')
+    observed=resource_record(current)
+    require(all(observed[key]==rec[key] for key in CLEANUP_IDENTITY_FIELDS if key!='resourceVersion'),
+            'retained PVC identity/metadata changed before quiescence')
+    require(pvc_usage_invariant(current)==barrier['invariantSHA256'],
+            'retained PVC invariant changed before quiescence')
+    if pvc_usage_condition(current,'False'):return None
+    require(pvc_usage_condition(current,'True'),'retained PVC usage transition differs')
+    require(observed['resourceVersion']!=rec['resourceVersion'],'PVC usage transition has unchanged resource version')
+    result=copy.deepcopy(rec);result.update(observed);result.pop('pvcUsageBarrier')
+    result.pop('pvcState',None)
+    try:result['pvcState']=pvc_state(current)
+    except Exception:pass  # Optional evidence cannot change cleanup authorization.
+    return result
+
+def quiescent_cleanup_record(driver,rec):
+    if 'pvcUsageBarrier' not in rec:return rec
+    require(cleanup_allowed(rec) and rec['kind']=='PersistentVolumeClaim','PVC cleanup barrier scope differs')
+    require_origin(rec);validate_pvc_usage_barrier(rec['pvcUsageBarrier'])
+    deadline=time.monotonic()+60
+    while True:
+        driver.guard();driver.core_unchanged();consumers_gone(driver)
+        if not driver.kube('get','namespace',rec['namespace'],'--ignore-not-found','-o','json').strip():return rec
+        text=driver.kube('get',rec['kind'],rec['name'],'-n',rec['namespace'],'--ignore-not-found',
+                         '--show-managed-fields=true','-o','json')
+        if not text.strip():return rec
+        current=json.loads(text)
+        try:result=quiescent_pvc_record(rec,current)
+        except ValueError:
+            capture_cleanup_drift(driver,rec,current)
+            raise
+        if result is not None:return result
+        require(time.monotonic()<deadline,'retained PVC usage condition did not settle')
+        time.sleep(min(1,max(0,deadline-time.monotonic())))
+
 def conditional_delete(driver,rec):
     require(cleanup_allowed(rec),'cleanup outside exact retained application scope')
     require_origin(rec)
     driver.guard();driver.core_unchanged()
     consumers_gone(driver)
+    if rec['namespace']=='takserver' and rec['name'] in GENERATED_SECRETS|{'takserver-crl'}:no_live_clients(driver)
     if not driver.kube('get','namespace',rec['namespace'],'--ignore-not-found','-o','json').strip():return
-    output=driver.kube('get',rec['kind'],rec['name'],'-n',rec['namespace'],'--ignore-not-found','-o','json')
+    output=driver.kube('get',rec['kind'],rec['name'],'-n',rec['namespace'],'--ignore-not-found',
+        *(['--show-managed-fields=true'] if rec['kind']=='PersistentVolumeClaim' else []),'-o','json')
     if not output.strip():return
-    current=json.loads(output);require(resource_record(current)=={k:rec[k] for k in ('kind','name','namespace','uid','resourceVersion','metadataSHA256')},'retained resource identity/metadata changed')
+    current=json.loads(output)
+    expected={key:rec[key] for key in CLEANUP_IDENTITY_FIELDS};observed=resource_record(current)
+    if observed!=expected:
+        capture_cleanup_drift(driver,rec,current)
+        raise ValueError('retained resource identity/metadata changed')
+    if (rec['namespace'],rec['kind'],rec['name'])==('takserver','Secret','takserver-crl'):
+        require(sha(current.get('data',{}))==rec['emptyCrlDataSHA256'],'verified empty CRL data changed')
+    if (rec['namespace'],rec['kind'],rec['name'])==('takserver','ConfigMap','ignite-extensions'):
+        require(ignite_jar(current)==rec['imageBoundJarSHA256'],'verified Ignite binary changed')
     if rec['kind']=='PersistentVolumeClaim':
         volume=driver.get('persistentvolume',rec['parent']['volumeName'],namespace='default')
         require(volume['metadata']['uid']==rec['parent']['volumeUID'] and volume['spec']['claimRef']['uid']==rec['uid'] and volume['spec']['claimRef']['namespace']==rec['namespace'] and volume['spec']['claimRef']['name']==rec['name'],'retained PVC volume ownership changed')
@@ -534,6 +881,13 @@ def startup_map(obj):
 
 def generated_secret(driver,obj,cleanup=False):
     meta=obj['metadata'];name=meta['name'];namespace=meta['namespace']
+    if namespace=='takserver' and name=='takserver-crl':
+        if cleanup:no_live_clients(driver)
+        config=driver.get('configmap','cert-migration')
+        binary=config.get('binaryData',{})
+        ca=(base64.b64decode(binary['ca.pem'],validate=True).decode() if 'ca.pem' in binary else config.get('data',{}).get('ca.pem'))
+        empty_crl(obj,ca)
+        return True
     if namespace=='cloudtak' and name=='cloudtak-tak-admin':
         require(meta.get('labels',{}).get('app.kubernetes.io/part-of')=='cloudtak','admin copy source label differs')
         config=driver.get('configmap','cert-migration');keystore=driver.get('secret','takserver-keystore')
@@ -551,6 +905,104 @@ def generated_secret(driver,obj,cleanup=False):
     return False
 
 
+def ignite_jar(obj):
+    """The literal publisher payload, bound separately to the application image."""
+    meta=obj.get('metadata',{})
+    require(obj.get('apiVersion')=='v1' and obj.get('kind')=='ConfigMap' and
+            meta.get('namespace')=='takserver' and meta.get('name')=='ignite-extensions' and
+            not meta.get('deletionTimestamp') and not meta.get('ownerReferences') and
+            not obj.get('data') and set(obj.get('binaryData',{}))=={'ignite-extensions.jar'},
+            'Ignite map differs from literal publisher payload')
+    raw=base64.b64decode(obj['binaryData']['ignite-extensions.jar'],validate=True)
+    require(0<len(raw)<=1024*1024,'Ignite binary size differs')
+    return hashlib.sha256(raw).hexdigest()
+
+
+def zarf_image_reference(registry,image):
+    """Zarf v0.89.0 transform for fully-qualified TAK tag/digest references."""
+    authority=r'[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?'
+    require(isinstance(registry,str) and re.fullmatch(authority,registry),'unsupported Zarf registry authority')
+    require(isinstance(image,str) and len(image)<=1024 and image.count('@')<=1,'unsupported source image')
+    name_tag,_,digest=image.partition('@')
+    slash=name_tag.rfind('/');colon=name_tag.rfind(':')
+    name,tag=(name_tag[:colon],name_tag[colon+1:]) if colon>slash else (name_tag,'latest')
+    host,separator,path=name.partition('/')
+    require(separator and re.fullmatch(authority,host) and ('.' in host or ':' in host or host=='localhost') and
+            host not in ('docker.io','index.docker.io') and
+            re.fullmatch(r'[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*',path) and
+            re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}',tag) and
+            (not digest or re.fullmatch(r'sha256:[a-f0-9]{64}',digest)), 'unsupported source image')
+    if registry.startswith(host):return image
+    if digest:return registry+'/'+path+'@'+digest
+    return registry+'/'+path+':'+tag+'-zarf-'+str(zlib.crc32(name.encode()))
+
+
+def zarf_image_binding(driver,pod,main,pod_image):
+    # hooks/pods.go records the original image and marks its mutation. The
+    # registry credential is generated from the same retained Zarf authority.
+    key='zarf.dev/'+('original-image-'+main['name'])[:63].rstrip('-')
+    meta=pod['metadata']
+    require(meta.get('labels',{}).get('zarf-agent')=='patched' and
+            meta.get('annotations',{}).get(key)==main['image'] and
+            isinstance(pod_image,str) and '/' in pod_image,'Pod image has no exact Zarf source marker')
+    source=driver.get('secret','private-registry',namespace='zarf')
+    source_hash=registry_secret_digest(source,'zarf')
+    raw=base64.b64decode(source['data']['.dockerconfigjson'],validate=True)
+    require(len(raw)<=64*1024,'Zarf registry credential bound differs')
+    def unique(pairs):
+        value={}
+        for k,v in pairs:
+            require(k not in value,'duplicate Zarf registry field');value[k]=v
+        return value
+    config=json.loads(raw,object_pairs_hook=unique);auths=config.get('auths')
+    registry=pod_image.split('/',1)[0]
+    require(set(config)=={'auths'} and isinstance(auths,dict) and 1<=len(auths)<=64 and
+            registry in auths and pod_image==zarf_image_reference(registry,main['image']),
+            'Pod image differs from the bound Zarf registry transform')
+    return source_hash
+
+
+def ignite_image(driver):
+    """Resolve one Ready config container through the frozen Deployment UID."""
+    deployment=driver.get('deployment','takserver-config',namespace='takserver')
+    meta=deployment['metadata'];uid=driver.state['deploymentUIDs']['takserver-config']
+    require(meta.get('uid')==uid and not meta.get('deletionTimestamp'),'Ignite source Deployment changed')
+    containers=deployment['spec']['template']['spec']['containers']
+    require(containers and containers[0].get('name') and containers[0].get('image'),'Ignite source container missing')
+    main=containers[0]
+    replicasets={rs['metadata']['uid'] for rs in driver.get('replicasets',namespace='takserver')['items']
+        if not rs['metadata'].get('deletionTimestamp') and
+        any(o.get('kind')=='Deployment' and o.get('uid')==uid and o.get('controller') is True for o in rs['metadata'].get('ownerReferences',[]))}
+    candidates=[]
+    for pod in driver.get('pods',namespace='takserver')['items']:
+        owners=[o for o in pod['metadata'].get('ownerReferences',[]) if o.get('controller') is True]
+        if len(owners)!=1 or owners[0].get('kind')!='ReplicaSet' or owners[0].get('uid') not in replicasets:continue
+        if pod['metadata'].get('deletionTimestamp') or pod.get('status',{}).get('phase')!='Running':continue
+        if not any(c.get('type')=='Ready' and c.get('status')=='True' for c in pod['status'].get('conditions',[])):continue
+        matches=[c for c in pod['spec']['containers'] if c['name']==main['name']]
+        states=[c for c in pod['status'].get('containerStatuses',[]) if c['name']==main['name'] and c.get('ready') is True and c.get('state',{}).get('running')]
+        if len(matches)!=1 or len(states)!=1:continue
+        pod_image=matches[0].get('image')
+        registry_source=(zarf_image_binding(driver,pod,main,pod_image) if pod_image!=main['image'] else None)
+        require(not any(m.get('mountPath','').rstrip('/') in ('','/ignite-extensions.jar') for m in matches[0].get('volumeMounts',[])),'Ignite source file is volume-mounted')
+        image_id=states[0].get('imageID','')
+        require(bool(re.search(r'(?:^|@|://)sha256:[a-f0-9]{64}$',image_id)),'Ignite image has no immutable runtime identity')
+        candidates.append({'pod':pod['metadata']['name'],'podUID':pod['metadata']['uid'],'ownerUID':owners[0]['uid'],
+            'container':main['name'],'deploymentUID':uid,'image':main['image'],'imageID':image_id,
+            'podImage':pod_image,'registrySourceSHA256':registry_source})
+    require(len(candidates)==1,'Ignite source config Pod is not uniquely Ready')
+    return candidates[0]
+
+
+def ignite_binding(driver,obj):
+    jar=ignite_jar(obj);before=ignite_image(driver)
+    result=driver.exec(before['pod'],before['container'],['sha256sum','--','/ignite-extensions.jar'],namespace='takserver')
+    require(result.returncode==0 and not result.stderr.strip() and
+            result.stdout.strip()==jar+'  /ignite-extensions.jar','Ignite map differs from bound config image binary')
+    require(ignite_image(driver)==before,'Ignite source changed during binary observation')
+    return {'imageBoundJarSHA256':jar,'imageSourceSHA256':sha({k:before[k] for k in ('deploymentUID','image','imageID','container','podImage','registrySourceSHA256')})}
+
+
 def trust_binding(driver,obj):
     """Bind public trust data to retained Core authority and exact source metadata."""
     meta=obj['metadata'];namespace=meta['namespace'];name=meta['name']
@@ -558,9 +1010,10 @@ def trust_binding(driver,obj):
     if name=='kube-root-ca.crt':
         source_namespace,source_name,key,source_key='kube-system',name,'ca.crt','ca.crt'
         source_owner='kubernetes-root-ca-publisher'
-    elif name=='istio-ca-root-cert':
+    elif name in ('istio-ca-root-cert','istio-ca-crl'):
         require(meta.get('labels',{}).get('istio.io/config')=='true','Istio trust source marker missing')
-        source_namespace,source_name,key,source_key='istio-system',name,'root-cert.pem','root-cert.pem'
+        key='ca-crl.pem' if name=='istio-ca-crl' else 'root-cert.pem'
+        source_namespace,source_name,source_key='istio-system',name,key
         source_owner='istio-namespace-controller'
     elif name=='uds-trust-bundle':
         labels=meta.get('labels',{});require(labels.get('uds/package')==namespace and labels.get('uds/ca-bundle')=='true','UDS bundle source labels differ')
@@ -571,7 +1024,7 @@ def trust_binding(driver,obj):
         source_owner='uds-core-ca-bundle-controller'
     else:raise ValueError('unknown trust map')
     source=driver.get('configmap',source_name,namespace=source_namespace)
-    require(set(obj.get('data',{}))=={key} and obj['data'][key] and obj['data'][key]==source.get('data',{}).get(source_key),'trust map is not the bound Core authority data')
+    require(set(obj.get('data',{}))=={key} and isinstance(obj['data'][key],str) and (bool(obj['data'][key]) or name=='istio-ca-crl') and source_key in source.get('data',{}) and obj['data'][key]==source['data'][source_key],'trust map is not the bound Core authority data')
     rec=resource_record(obj)
     rec.update(dataSHA256=sha(obj['data']),sourceOwner=source_owner,sourceNamespace=source_namespace,sourceName=source_name,sourceUID=source['metadata']['uid'],sourceDataSHA256=sha(source.get('data',{})))
     return rec
@@ -582,7 +1035,7 @@ def capture_trust(driver):
     for namespace in APP_RELEASES:
         if not driver.kube('get','namespace',namespace,'--ignore-not-found','-o','json').strip():continue
         for obj in driver.get('configmaps',namespace=namespace)['items']:
-            if obj['metadata']['name'] in ('kube-root-ca.crt','istio-ca-root-cert','uds-trust-bundle'):result.append(trust_binding(driver,obj))
+            if obj['metadata']['name'] in ('kube-root-ca.crt','istio-ca-root-cert','istio-ca-crl','uds-trust-bundle'):result.append(trust_binding(driver,obj))
     return result
 
 
@@ -592,4 +1045,103 @@ def preserved_trust(driver,obj,bindings):
     rec=matches[0];require({k:v for k,v in resource_record(obj).items() if k!='resourceVersion'}=={k:rec[k] for k in ('kind','name','namespace','uid','metadataSHA256')} and sha(obj.get('data',{}))==rec['dataSHA256'],'bound trust map changed before clean-state observation')
     source=driver.get('configmap',rec['sourceName'],namespace=rec['sourceNamespace'])
     require(source['metadata']['uid']==rec['sourceUID'] and sha(source.get('data',{}))==rec['sourceDataSHA256'],'retained Core trust authority changed')
+    return True
+
+
+# Zarf v0.89.0 (embedded by UDS CLI v0.41.0) generates these namespace
+# copies in src/internal/packager/helm/post-render.go using
+# src/pkg/cluster/secrets.go:GenerateRegistryPullCreds. Never delete them.
+def registry_secret_digest(obj,namespace):
+    meta=obj.get('metadata',{})
+    require(obj.get('apiVersion')=='v1' and obj.get('kind')=='Secret' and
+            meta.get('namespace')==namespace and meta.get('name')=='private-registry' and
+            meta.get('uid') and not meta.get('deletionTimestamp') and
+            meta.get('labels',{}).get('app.kubernetes.io/managed-by')=='zarf' and
+            obj.get('type')=='kubernetes.io/dockerconfigjson' and
+            set(obj.get('data',{}))=={'.dockerconfigjson'} and not obj.get('stringData'),
+            'registry credential is not the bound Zarf source shape')
+    # Hash the whole object except API observation bookkeeping, including any
+    # otherwise unfamiliar fields. No payload or credentials enter public proofs.
+    value=copy.deepcopy(obj)
+    for key in ('resourceVersion','managedFields'):value['metadata'].pop(key,None)
+    return sha(value)
+
+
+def registry_binding(driver,obj):
+    namespace=obj.get('metadata',{}).get('namespace')
+    require(namespace in APP_RELEASES,'registry copy outside application')
+    target_hash=registry_secret_digest(obj,namespace)
+    source=driver.get('secret','private-registry',namespace='zarf')
+    source_hash=registry_secret_digest(source,'zarf')
+    require(obj['data']==source['data'],'registry copy differs from retained Zarf credentials')
+    return {'namespace':namespace,'name':'private-registry','objectSHA256':target_hash,
+            'sourceObjectSHA256':source_hash}
+
+
+def capture_registry(driver):
+    result=[]
+    for namespace in APP_RELEASES:
+        if not driver.kube('get','namespace',namespace,'--ignore-not-found','-o','json').strip():continue
+        for obj in driver.get('secrets',namespace=namespace)['items']:
+            if obj['metadata']['name']=='private-registry':result.append(registry_binding(driver,obj))
+    return result
+
+
+def preserved_registry(driver,obj,bindings):
+    namespace=obj.get('metadata',{}).get('namespace')
+    matches=[r for r in bindings if r['namespace']==namespace and r['name']==obj['metadata']['name']]
+    require(len(matches)==1,'registry copy has no bound Zarf authority')
+    rec=registry_binding(driver,obj)
+    require(rec==matches[0],'bound registry copy or retained Zarf authority changed')
+    return True
+
+
+def no_live_clients(driver):
+    try:clients=driver.get('takclients.tak.jonathanagustin.github.io',namespace='takclients')['items']
+    except ValueError:
+        # The Pepr chart owns the CRD as a template, so uninstall may already
+        # have removed the API. A failed list alone never establishes absence.
+        require(not driver.kube('get','customresourcedefinition','takclients.tak.jonathanagustin.github.io',
+                                '--ignore-not-found','-o','json').strip(),'TakClient inventory unavailable')
+        return
+    require(isinstance(clients,list) and not clients,
+            'active clients prevent application CA and CRL retirement')
+
+
+def empty_crl(obj,ca):
+    """Authorize only an empty source-format CRL signed by the bound app CA."""
+    meta=obj.get('metadata',{});data=obj.get('data',{})
+    require(obj.get('apiVersion')=='v1' and obj.get('kind')=='Secret' and obj.get('type')=='Opaque' and meta.get('namespace')=='takserver' and
+            meta.get('name')=='takserver-crl' and not meta.get('deletionTimestamp') and
+            meta.get('labels',{}).get('app.kubernetes.io/part-of')=='takserver' and
+            meta.get('labels',{}).get('uds.dev/pod-reload')=='false' and
+            set(data)=={'ca.crl','revoked.json','number','ca-fingerprint','reload-at'} and
+            not obj.get('stringData') and isinstance(ca,str) and 0<len(ca)<=65536,
+            'CRL is not the empty source-generated checkpoint')
+    require(all(isinstance(value,str) and len(value)<=131072 for value in data.values()),'CRL data bound differs')
+    try:decoded={key:base64.b64decode(value,validate=True) for key,value in data.items()}
+    except (ValueError,TypeError):raise ValueError('CRL encoding differs') from None
+    require(decoded['revoked.json']==b'[]' and decoded['reload-at']==b'' and
+            re.fullmatch(rb'[1-9][0-9]{0,19}',decoded['number']) and
+            0<len(decoded['ca.crl'])<=65536,'CRL contains revocation or pending reload state')
+    try:
+        fingerprint=hashlib.sha256(ssl.PEM_cert_to_DER_cert(ca)).hexdigest().upper()
+    except (ValueError,TypeError):raise ValueError('CRL CA material differs') from None
+    require(decoded['ca-fingerprint']==':'.join(fingerprint[i:i+2] for i in range(0,64,2)).encode(),
+            'CRL issuer does not match application CA')
+    with tempfile.TemporaryDirectory(prefix='owned-crl-check-') as directory:
+        ca_path,crl_path=Path(directory)/'ca.pem',Path(directory)/'ca.crl'
+        for path,value in ((ca_path,ca.encode()),(crl_path,decoded['ca.crl'])):
+            path.write_bytes(value);path.chmod(0o600)
+        try:
+            verified=subprocess.run(['openssl','crl','-in',str(crl_path),'-CAfile',str(ca_path),'-verify','-noout'],
+                                    stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
+            inspected=subprocess.run(['openssl','crl','-in',str(crl_path),'-noout','-text','-crlnumber'],
+                                     stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=10)
+        except (OSError,subprocess.TimeoutExpired):raise ValueError('CRL verification unavailable') from None
+    number=re.search(rb'^crlNumber=0x([0-9A-Fa-f]+)$',inspected.stdout,re.MULTILINE)
+    require(verified.returncode==0 and inspected.returncode==0 and
+            re.search(rb'^No Revoked Certificates\.$',inspected.stdout,re.MULTILINE) and
+            b'Revoked Certificates:' not in inspected.stdout and number and
+            int(number[1],16)==int(decoded['number']),'CRL signature, entries or number differs')
     return True

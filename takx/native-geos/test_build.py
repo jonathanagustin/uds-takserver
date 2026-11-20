@@ -5,6 +5,8 @@ import io
 import json
 import os
 from pathlib import Path
+import platform
+import shutil
 import tarfile
 import tempfile
 import unittest
@@ -20,7 +22,7 @@ class OfflineGuards(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
 
     def test_exact_archive_license_tools_and_patch_selection(self):
         original = json.loads((HERE / 'inputs.lock.json').read_text())
@@ -90,12 +92,16 @@ class OfflineGuards(unittest.TestCase):
         injected = {'CFLAGS': '-DNDEBUG', 'LDFLAGS': '-lgeos', 'LD_PRELOAD': '/foreign',
                     'CPATH': '/foreign', 'CMAKE_TOOLCHAIN_FILE': '/foreign', 'GEOS_LIB': '/foreign',
                     'MAKEFLAGS': '-j20', 'GNUMAKEFLAGS': '-j20', 'AR': '/foreign', 'RANLIB': '/foreign', 'MAKEFILES': '/foreign', 'CONFIG_SITE': '/foreign',
-                    'BASH_ENV': '/foreign', 'BASH_FUNC_injected%%': '() { false; }'}
+                    'BASH_ENV': '/foreign', 'BASH_FUNC_injected%%': '() { false; }',
+                    'pgac_cv_type_long_int_64': 'yes', 'pgac_cv_type_int64_t_64': 'yes',
+                    'ac_cv_env_CFLAGS_value': '-DFOREIGN', 'CPP': '/foreign', 'CXXCPP': '/foreign',
+                    'CONFIG_HEADERS': '/foreign', 'LIBS': '-lforeign'}
         with patch.dict(os.environ, injected):
             env = BUILD.environment('/trusted/gcc')
         for name in set(injected) - {'CFLAGS', 'CONFIG_SITE'}:
             self.assertNotIn(name, env)
-        self.assertEqual(env['CFLAGS'], '-O2 -fPIC')
+        self.assertEqual(env['CFLAGS'], '-O2 -fPIC -std=gnu89')
+        self.assertEqual(env['CXXFLAGS'], '-O2 -fPIC -std=c++11')
         self.assertEqual(env['CONFIG_SITE'], '/dev/null')
         self.assertEqual(env['CC'], '/trusted/gcc')
 
@@ -123,6 +129,131 @@ class OfflineGuards(unittest.TestCase):
         with self.assertRaises(ValueError): BUILD.outputs(self.root)
 
 
+class IntegerFeatureGuards(unittest.TestCase):
+    def test_only_active_true_definitions_count(self):
+        observed = BUILD.active_integer_features(b'#define HAVE_LONG_INT_64 1\n#define HAVE_LONG_LONG_INT_64 1\n')
+        self.assertEqual(observed, {'HAVE_INT64_T_64': False, 'HAVE_LONG_INT_64': True,
+                                    'HAVE_LONG_LONG_INT_64': True})
+        for raw in (b'/* #undef HAVE_LONG_INT_64 */\n', b'',
+                    b'#define HAVE_LONG_INT_64 0\n', b'#define HAVE_LONG_INT_64\n',
+                    b'#define HAVE_LONG_INT_64 1\n#define HAVE_LONG_INT_64 1\n',
+                    b'#define HAVE_LONG_INT_64 1\n#define INT64_IS_REALLY32 1\n'):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                BUILD.active_integer_features(raw)
+
+    def test_new_probe_is_recipe_bound_and_geometry_source_unchanged(self):
+        self.assertEqual(BUILD.recipe()['GeosInt64.cpp'], BUILD.native.digest(HERE / 'GeosInt64.cpp'))
+        self.assertEqual(BUILD.native.digest(HERE / 'GeosGeometry.c'),
+                         '7e6d624a2a989c7b3369f42d7d1752aa407d939c076c849465dfba7833639c65')
+
+
+@unittest.skipUnless(platform.system() == 'Linux' and shutil.which('c++'),
+                     'working Linux C++ compiler needed for executable integer-control fixtures')
+class ExecutableIntegerControls(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.output = Path(self.tmp.name).resolve()
+        self.build, self.source = self.output / 'build', self.output / 'source'
+        self.build.mkdir(); self.source.mkdir()
+        self.cxx = shutil.which('c++')
+        self.env = BUILD.environment(self.cxx, self.cxx)
+        for name in BUILD.CONFIGURATION_FILES:
+            path = self.build / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('configuration fixture\n')
+        self.defines = '#define HAVE_LONG_INT_64 1\n#define HAVE_LONG_LONG_INT_64 1\n'
+        (self.build / 'include/config.h').write_text(self.defines)
+        self.platform = self.build / 'include/geos/platform.h'
+        self.platform.write_text(self.defines + '''
+#if defined(HAVE_INT64_T_64)
+#include <stdint.h>
+typedef int64_t int64;
+#elif defined(HAVE_LONG_LONG_INT_64)
+typedef long long int int64;
+#else
+typedef long int int64;
+#ifndef HAVE_LONG_INT_64
+#define INT64_IS_REALLY32 1
+#endif
+#endif
+''')
+        shutil.copyfile(HERE / 'GeosInt64.cpp', self.output / 'GeosInt64.cpp')
+
+    def run_command(self, args, name, timeout=30, capture=False):
+        return BUILD.native.run(list(map(str, args)), self.output, name, timeout=timeout,
+                                capture=capture, env=self.env)
+
+    def qualify(self, phase='before', expected=None, runner=None):
+        return BUILD.integer_configuration(self.build, self.source, self.output, self.cxx,
+                                           runner or self.run_command, phase, expected)
+
+    def test_real_signed_64bit_probe_and_unchanged_configuration_replay(self):
+        before = self.qualify()
+        self.assertEqual(before['selected_feature'], 'HAVE_LONG_LONG_INT_64')
+        self.assertEqual(before['active_features']['HAVE_INT64_T_64'], False)
+        self.assertEqual(set(before['files']), set(BUILD.CONFIGURATION_FILES))
+        self.assertEqual(set(before['probe_files']), {'GeosInt64.cpp', 'int64-probe'})
+        self.assertEqual(self.qualify('after', before), before)
+
+    def test_missing_generated_header_and_symlink_are_refused_before_compiler(self):
+        header = self.build / 'include/config.h'
+        header.unlink()
+        for linked in (False, True):
+            if linked:
+                header.symlink_to(self.platform)
+            with self.subTest(linked=linked), self.assertRaisesRegex(ValueError, 'nonregular'):
+                self.qualify(runner=lambda *args, **kwargs: self.fail('compiler must not run'))
+
+    def test_conflicting_header_choices_are_refused_before_probe_compile(self):
+        (self.build / 'include/config.h').write_text('#define HAVE_LONG_INT_64 1\n')
+        with self.assertRaisesRegex(ValueError, 'disagree'):
+            self.qualify()
+        self.assertFalse((self.output / 'int64-probe').exists())
+
+    def test_inactive_textual_features_and_active_fallback_are_refused(self):
+        self.platform.write_text('#if 0\n' + self.defines + '#endif\n#define INT64_IS_REALLY32 1\n')
+        with self.assertRaisesRegex(ValueError, 'active integer feature'):
+            self.qualify()
+        self.assertFalse((self.output / 'int64-probe').exists())
+
+    def test_false_64bit_declaration_cannot_pass_real_width_or_signedness_control(self):
+        for index, ctype in enumerate(('int', 'unsigned long long')):
+            self.platform.write_text(self.defines + 'typedef ' + ctype + ' int64;\n')
+            with self.subTest(ctype=ctype), self.assertRaisesRegex(ValueError, 'command failed'):
+                self.qualify(str(index))
+            (self.output / 'int64-probe-compile.log').unlink()
+
+    def test_stale_configuration_and_probe_artifacts_refused_before_reexecution(self):
+        before = self.qualify()
+        for root, name in ((self.build, 'config.log'), (self.build, 'include/config.h'),
+                           (self.output, 'GeosInt64.cpp'), (self.output, 'int64-probe')):
+            path = root / name
+            original = path.read_bytes()
+            path.write_bytes(original + b'changed')
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'stale|source differs'):
+                self.qualify('after', before, runner=lambda *args, **kwargs: self.fail('stale control must not execute'))
+            path.write_bytes(original)
+
+    def test_mutation_during_qualification_and_false_stdout_are_refused(self):
+        def changed(args, name, timeout=30, capture=False):
+            data = self.run_command(args, name, timeout, capture)
+            if name.endswith('-arithmetic'):
+                (self.build / 'config.log').write_text('changed while checking\n')
+            return data
+        with self.assertRaisesRegex(ValueError, 'changed during qualification'):
+            self.qualify(runner=changed)
+        before = BUILD.regular_files(self.build, BUILD.CONFIGURATION_FILES)
+        self.assertEqual(before['config.log']['bytes'], len('changed while checking\n'))
+        (self.output / 'int64-probe-compile.log').unlink()
+        def false_output(args, name, timeout=30, capture=False):
+            if name.endswith('-arithmetic'):
+                return b'int64_bytes=4\n'
+            return self.run_command(args, name, timeout, capture)
+        with self.assertRaisesRegex(ValueError, 'arithmetic control failed'):
+            self.qualify('false-output', runner=false_output)
+
+
 @unittest.skipUnless(os.environ.get('TAKX_NATIVE_GEOS_PROOF'), 'opt-in fresh historical GEOS proof required')
 class ActualComponentProof(unittest.TestCase):
     def test_fresh_entrypoint_identity_and_real_coordinate_consumer(self):
@@ -136,6 +267,12 @@ class ActualComponentProof(unittest.TestCase):
         for tool in receipt['tools'].values():
             self.assertEqual(tool['sha256'], BUILD.native.digest(Path(tool['path'])))
         with tempfile.TemporaryDirectory() as directory:
+            def run(args, name, timeout=30, capture=False):
+                return BUILD.native.run(list(map(str, args)), Path(directory), name, timeout=timeout,
+                                        capture=capture,
+                                        env=BUILD.environment(receipt['tools']['cc']['path'], receipt['tools']['cxx']['path']))
+            BUILD.integer_configuration(root / 'build', root / 'source/geos-3.4.3', root,
+                                        receipt['tools']['cxx']['path'], run, 'verification', receipt['integer_configuration'])
             result = BUILD.native.run([str(root / 'consumer')], Path(directory), 'positive',
                                       timeout=10, capture=True,
                                       env=BUILD.environment(receipt['tools']['cc']['path'])).decode()

@@ -339,3 +339,250 @@ and retained schemas. They contain no exception messages, resource names, values
 or paths. A rejected channel never authorizes private bytes; exactly one eligible
 channel is still required. These codes diagnose evidence delivery and do not
 explain or relax the retained-Core assertion.
+
+When a public diagnostic recipient is supplied and staged acceptance fails, the
+workflow seals and attempts the narrow first-failure ciphertext upload before
+public/passive artifact uploads. A stalled public upload therefore cannot prevent
+those earlier steps from being attempted. Encryption remains optional and its
+failure does not skip public evidence or change acceptance. Runner loss can still
+prevent evidence delivery; ordering is not an availability guarantee.
+
+Retained cleanup identity drift remains a hard refusal. A failure at the
+conditional delete comparison captures an encrypted `cleanup-resource-drift`
+snapshot containing only the expected/observed kind, namespace, name, UID,
+resourceVersion, metadata SHA-256, and the exact changed field names. Object
+bodies, metadata values, and secret data are excluded. This uses the existing
+source-bound first-private-failure channel; capture failure preserves the
+original refusal. It neither refreshes the deletion preconditions nor proves
+that changed metadata is safe.
+
+For retained PVC version drift, the optional encrypted snapshot also records
+before/after spec, status and sorted-finalizer SHA-256 digests. It includes only
+the fixed PVC-protection presence flag and other-finalizer count, never raw
+spec/status/finalizer values. The baseline is taken alongside the pre-removal
+cleanup identity; the observation comes from the exact object read that refused
+conditional deletion. This distinguishes possible state changes without
+assuming that finalizers caused them. Invalid or unavailable extra state falls
+back to the existing basic identity diagnostic. None of these fingerprints
+refreshes resourceVersion, changes deletion preconditions or authorizes cleanup.
+
+The optional PVC status detail uses a fixed map of SHA-256 digests for phase,
+access modes, capacity, conditions, allocated resources, resize status, allocated
+resource statuses, current volume attributes class and modify-volume status.
+Each digest includes field presence; unknown fields contribute only to a single
+`other` digest. Neither unknown field names nor any status values are emitted.
+Legacy aggregate-only snapshots remain valid. These encrypted diagnostics do
+not authorize deletion after resource-version drift or establish its controller.
+
+When PVC status drift is confined to `conditions`, the optional encrypted
+descriptor also reports absent/null/list/other shape, a count capped at 32,
+known Kubernetes PVC condition types and fixed True/False/Unknown/Other statuses.
+The six original types follow Kubernetes API v0.35.3 constants; the built-in
+`Unused` type is added from v0.37.1. Unknown types are counted without emitting
+their names. Reasons, messages, timestamps and arbitrary
+condition values are never emitted. Invalid or oversized detail falls back to
+the existing fingerprints without changing the retained baseline. The snapshot
+keeps its 4 KiB bound and resource-version drift still forbids deletion.
+
+For a bounded condition list, optional `fieldsSHA256` groups digest type, status,
+reason/message detail, probe/transition timestamps and all other fields. Only
+these five fixed group names and digests are emitted, including for unknown
+condition types. Presence and list ordering remain significant. This can narrow
+a changed condition fingerprint without exposing raw keys or values; it does
+not establish controller causality. If the snapshot exceeds 4 KiB, these extra
+digests are dropped first, then condition facts if needed, preserving existing
+fingerprints and the immutable baseline. Legacy condition facts remain valid.
+
+PVC cleanup observations request `--show-managed-fields=true` in the same API
+read, retaining UID/resourceVersion binding without a second-read race. Optional
+encrypted `managedOwners` classifies only fixed field-manager strings for
+entries explicitly owning `status.conditions`; unknown manager names and field
+keys remain behind an aggregate digest. The entry count is capped at 32 and the
+input at 64 KiB. Field-manager codes are ownership hints, not authenticated
+controller identities or permission to delete. Missing/malformed hints leave
+existing fingerprints intact. Under the 4 KiB snapshot cap, optional condition
+digests drop first, then manager hints, then condition facts. The retained
+baseline and exact resource-version deletion refusal remain unchanged.
+
+### PVC usage boundary before conditional cleanup
+
+Kubernetes 1.37 enables `PersistentVolumeClaimUnusedSinceTime` by default. Its
+[PVC protection controller](https://github.com/kubernetes/kubernetes/blob/v1.37.1/pkg/controller/volume/pvcprotection/pvc_protection_controller.go)
+updates the built-in `Unused` condition when the last non-terminal Pod stops
+referencing a claim. Core 1.16.0 declares K3s 1.37.1 as its default. A cleanup
+snapshot taken before package removal can therefore become stale even though
+the PVC UID, spec and finalizers remain unchanged. Protected digests from the
+previous failure match this published condition transition; manager hints alone
+do not establish writer identity.
+
+The pre-removal data/sentinel verification remains in place. PVC UID and PV/claim
+parent identity are checked again when recording cleanup authorization. Only an
+exact published in-use condition can create a separate usage barrier. It hashes
+the complete PVC except resourceVersion, non-authoritative managedFields and that
+one recognized condition. This proof is separate from optional diagnostics.
+
+After package removal and the existing consumer-absence checks, the helper waits
+up to 60 seconds for the exact published unused condition. Identity, ownership,
+spec, finalizers, every other status field and all other object fields must still
+match the original proof. Unknown conditions, extra fields, changed metadata or
+data-plane identity, malformed timestamps and timeouts fail closed. Field-manager
+strings cannot authorize this transition. The helper consumes the barrier and
+creates one final cleanup record; it does not mutate the original snapshot.
+
+The delete path still compares the complete cleanup identity including the final
+resourceVersion, rechecks consumer/PV ownership, and sends both UID and
+resourceVersion as Kubernetes DELETE preconditions. Changes after the final
+snapshot still refuse deletion. There is no refresh or retry after a deletion
+refusal. Claims without the exact recognized in-use condition retain the original
+strict snapshot behavior.
+
+An isolated, owned K3s 1.37.1 server reproduces the transition on removal of a
+Pending Pod. The actual snapshot reducer accepts only the expected transition;
+the old-version DELETE is rejected and the final UID/version DELETE succeeds.
+The owned container is removed afterward. Receipt SHA-256:
+`c1261ad78b2bb7325225e22b1816dc876a4258ec8fd68571aba36cb9c1352e4d`.
+This is scoped controller/API evidence. A fresh-strict package trial remains
+required before claiming full migration acceptance.
+
+### Last rejected clean-install inventory
+
+After the exact retained-object deletions, fresh strict still requires three
+stable clean-application-state probes. Run 43751141729 on source
+`a5c0cc414a4de737423d81ff62900c5aad69d435` completed all nine conditional retained
+deletions, then failed this final convergence gate. Published proof/callsite hashes
+were verified; no encrypted inventory existed, so the leftover kind and identity
+remain unknown. This is not fresh-strict acceptance and does not authorize ARM.
+
+A convergence timeout can now preserve the last rejected clean-state probe as
+`cleanup-clean-inventory` in the existing encrypted first-private-failure channel.
+The snapshot fixes namespace/resource scope, rejection reason, count and a digest
+of the full projected inventory. It carries at most sixteen sorted identities,
+resource versions, deletion flags and complete-object digests, with explicit
+truncation. No object bodies, secret values, arbitrary labels, annotations or
+error messages are copied. Preserved trust-map drift uses the same bounded shape
+and a fixed reason. The existing default-account, unrelated Core/Pepr and verified
+trust-map exemptions stay unchanged.
+
+This optional diagnostic never authorizes deletion or a fresh install. The
+original refusal propagates even if capture fails. A successful subsequent probe
+clears the prior snapshot; query/guard failures do not invent inventory, and no
+later re-query replaces the last rejected observation. Source/run/attempt hashes,
+closed schema validation, private mode0600, sealed encryption input and the
+first-failure rule apply before ciphertext publication. No unchanged pilot retry
+is justified by the earlier failure alone.
+
+### Preserve the bound Zarf registry credential
+
+The authenticated AMD failure in run `43766370150` (source
+`254c30c4142dae05ee3e18b54dc7c991b924fda8`) left two non-deleting Secrets:
+`private-registry` and `takserver-crl`. This identifies the rejected inventory;
+it does not authorize deleting either Secret or establish fresh-strict acceptance.
+
+UDS CLI 0.41.0 embeds Zarf 0.89.0. Its
+[namespace post-renderer](https://github.com/zarf-dev/zarf/blob/6da2a6d7867f355af281e5a33a9d849174c4c2d2/src/internal/packager/helm/post-render.go)
+installs the registry pull credential using
+[GenerateRegistryPullCreds](https://github.com/zarf-dev/zarf/blob/6da2a6d7867f355af281e5a33a9d849174c4c2d2/src/pkg/cluster/secrets.go).
+The clean-state check preserves this infrastructure credential only after binding
+its exact data to the `zarf/private-registry` Secret before package removal. Both
+must have the Zarf managed-by label, Docker config Secret type and sole
+`.dockerconfigjson` data key. Missing or unequal source credentials refuse the
+trial before uninstall; there is no fallback exemption by name or label.
+
+The private state records hashes of both complete objects, including their UIDs,
+excluding only resourceVersion and managedFields. Every clean-state observation
+checks both objects against those original bindings. Replacement, deletion,
+metadata or payload changes refuse the trial. These credentials never enter the
+application deletion allowlist or public proof. Other Secrets, including
+`takserver-crl`, continue to prevent clean-state acceptance. CRL handling requires
+separate evidence and a decision about retaining revocation state; this registry
+change alone does not justify another staged package trial.
+
+### Retire only an empty application CRL
+
+The controller's `onCaMaterial`/`ensureCrl` path creates `takserver-crl` even
+before any TakClient exists. Fresh strict may retire this empty bookkeeping
+Secret with the application CA, using the same unchanged source-origin,
+UID/resourceVersion and conditional API deletion checks as other retained
+application objects. The CRL producer, PKI helper and controller source hashes
+are included in the bound origin.
+
+The capture and pre-uninstall cleanup snapshot require the exact five-key
+source payload and labels, an empty `revoked.json`, no pending reload, a positive
+CRL number and an issuer fingerprint matching `cert-migration`'s CA. OpenSSL
+must verify the actual CRL signature against that CA, report no revoked
+certificates and agree on the CRL number. A JSON claim of empty revocation state
+cannot mask a signed CRL containing revoked serials. Nonempty history, unknown
+payload, signature mismatch or unavailable verification refuses the trial.
+
+Live TakClients prevent the cleanup snapshot and each CA/CRL conditional delete.
+After chart uninstall removes the TakClient API, an explicit successful CRD
+not-found observation is required; a failed client list alone is insufficient.
+The existing consumer, source and exact deletion guards still apply. No keys or
+CRL bodies enter public proofs. This scoped cleanup is not permission to discard
+revocation history in an existing deployment, and offline tests do not establish
+a successful fresh-strict package run.
+
+
+### Bind the remaining ConfigMaps to their actual source
+
+The AMD64 fresh-strict trial `43783535244` rejected two ConfigMaps after Secret
+cleanup: `ignite-extensions` and `istio-ca-crl`. The encrypted inventory names were
+matched to reviewed public producer sources before this change. This identifies
+the failed inventory; it does not establish a successful fresh-strict round trip.
+
+`docker/publish-cert-configmap.sh` publishes the application JAR as the sole
+`binaryData` key of `ignite-extensions`. The image Dockerfile also copies that JAR
+to `/ignite-extensions.jar`. Before removal, the retained-state capture compares
+the decoded ConfigMap JAR hash to a read-only `sha256sum` in the config container.
+It resolves a uniquely Ready Pod through the stored config Deployment UID and its
+ReplicaSet owner, requires the matching container image and immutable runtime
+image ID, rejects a mount over the source file, and checks that the Pod/container
+identity stays fixed during observation. Verification repeats the binding after
+rollout; the image identity must remain unchanged. Cleanup requires the captured
+binary and image-source digests, unchanged UID and payload, no remaining consumers,
+and the existing origin, metadata, resourceVersion and API deletion preconditions.
+A name alone never authorizes deletion.
+
+Istio's namespace controller owns `istio-ca-crl`; it must remain. At Istio commit
+`e2f3a7949a358af7dd901a6f9ccd6ecdd7270271`,
+`pilot/pkg/serviceregistry/kube/controller/namespacecontroller.go` distributes the CA watcher's CRL
+with the `istio.io/config=true` marker and `ca-crl.pem` key. Capture binds the
+application copy to the exact data and UID of `istio-system/istio-ca-crl`, then
+clean-state observation rechecks both the copy and retained authority. An empty
+CRL value is permitted only when that exact authority is also empty. Missing
+keys, added payload, changed authority or changed metadata still reject the trial.
+Neither this map nor any other Core resource is added to application cleanup.
+
+
+### Bind Zarf's Pod image rewrite
+
+Pilot `43798298987` stopped at the Ignite guard requiring one uniquely Ready
+config Pod. Its public source frames and proof hashes verify, but it contains no
+private Pod snapshot, so it does not establish which candidate predicate failed.
+The failed run is retained and is not rerun unchanged.
+
+A separate source-backed control demonstrates a valid case rejected by the old
+guard: Zarf v0.89.0's `src/internal/agent/hooks/pods.go` rewrites each Pod image,
+sets `zarf-agent=patched`, and records the original image in the container-specific
+`zarf.dev/original-image-*` annotation. The Deployment image remains the source
+reference. `src/pkg/transform/image.go` replaces the registry, retaining digest
+references or appending the original image-name CRC32 to a tag.
+
+The guard now accepts that exact rewrite only with its original-image annotation
+and mutation label, the expected transformed image, and a registry host present
+in the retained `zarf/private-registry` credential. The credential's whole-object
+digest is captured in the image-source binding and rechecked during observation
+and later verification. The supported source references are fully qualified TAK
+registry names with tags (including the default latest) or SHA256 digests; unknown
+forms reject.
+No credentials, image references or Pod names enter public proofs. The immutable
+runtime image ID, Deployment/ReplicaSet/Ready Pod chain, actual JAR checksum,
+source-file mount refusal and pre/post observation checks remain required.
+
+Upstream-published CRC suffix controls pass. A deterministic fixture reproduces
+the old unique-Pod rejection and accepts only the exact bound rewrite with the
+new guard. That review's SHA256 is
+`437c5bd9746e6c9d854ece9b287b75f7954f543c02b34817b306a19a5e4e18ca`.
+This validates the documented source-managed case, not a reconstruction of the
+failed run's unpublished Pod fields. A new source-bound package pilot is still
+required for fresh-strict acceptance.
