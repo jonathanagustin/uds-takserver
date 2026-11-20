@@ -44,7 +44,7 @@ jobs:
         run: |
           mkdir -p /tmp/trailer-src
           curl -fsSL "$VEO_CLIP_URL" -o /tmp/trailer-src/veo-clip.mp4
-          curl -fsSL "https://github.com/jonathanagustin/uds-takserver/releases/download/v0.12.0/uds-takserver-ui-preview.mp4" -o /tmp/trailer-src/ui-preview.mp4
+          curl -fsSL "https://github.com/jonathanagustin/uds-takserver/releases/download/v1.2.0/uds-takserver-ui-preview.mp4" -o /tmp/trailer-src/ui-preview.mp4
           if [ -n "$MUSIC_TRACK_URL" ]; then
             curl -fsSL "$MUSIC_TRACK_URL" -o /tmp/trailer-src/music-track.mp3
           fi
