@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.19.0](https://github.com/jonathanagustin/uds-takserver/compare/v0.18.2...v0.19.0) (2026-11-20)
+
+
+### Features
+
+* **ci:** qualify opt-in GEOS registry roundtrips ([#744](https://github.com/jonathanagustin/uds-takserver/issues/744)) ([d10aaae](https://github.com/jonathanagustin/uds-takserver/commit/d10aaae3974fb4934f16e8f157548bd0ad528132))
+* **demo:** add civilian hero trailer publisher ([#755](https://github.com/jonathanagustin/uds-takserver/issues/755)) ([57a0e6f](https://github.com/jonathanagustin/uds-takserver/commit/57a0e6f151c3e1e8bdebe905a549967881f216f5))
+
+
+### Bug Fixes
+
+* allow TAK workloads to start when sso.enabled is false ([#751](https://github.com/jonathanagustin/uds-takserver/issues/751)) ([b46808c](https://github.com/jonathanagustin/uds-takserver/commit/b46808c115897c44026298174bdb5a3e48e11ef9))
+* **ci:** finish startup setup failures without uploads ([#745](https://github.com/jonathanagustin/uds-takserver/issues/745)) ([0a2479e](https://github.com/jonathanagustin/uds-takserver/commit/0a2479e472cf138a1efbbd750e957b37725ea806))
+* **ci:** point upgrade pull errors to the current attempt ([#747](https://github.com/jonathanagustin/uds-takserver/issues/747)) ([9007c4e](https://github.com/jonathanagustin/uds-takserver/commit/9007c4e7a7462d9471e8033c412a663315a6fb3a))
+* **ci:** validate fork images through verified native candidates ([#696](https://github.com/jonathanagustin/uds-takserver/issues/696)) ([4116cde](https://github.com/jonathanagustin/uds-takserver/commit/4116cde3202c7927bc0dd126d8c2d07ad5b163be))
+* encode unsigned CRL integers, complete CoreDNS rollouts, and pin db-dump image ([#750](https://github.com/jonathanagustin/uds-takserver/issues/750)) ([cf4e269](https://github.com/jonathanagustin/uds-takserver/commit/cf4e269170418621f7b8af7fc88b946368674dbf))
+
+
+### Miscellaneous
+
+* remove withdrawn GHSA-fc5q-39xc-vjpf exceptions ([#748](https://github.com/jonathanagustin/uds-takserver/issues/748)) ([e717375](https://github.com/jonathanagustin/uds-takserver/commit/e7173756e55377b3abe46f7a42df63e5187e2df7))
+
 ## [0.18.2](https://github.com/jonathanagustin/uds-takserver/compare/v0.18.1...v0.18.2) (2026-11-18)
 
 
