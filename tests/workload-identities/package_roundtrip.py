@@ -676,7 +676,7 @@ class PackageTrial(D.Driver):
                 if kind=='configmaps':
                     retained=[]
                     for obj in objects:
-                        if obj['metadata']['name'] in ('kube-root-ca.crt','istio-ca-root-cert','uds-trust-bundle'):
+                        if obj['metadata']['name'] in ('kube-root-ca.crt','istio-ca-root-cert','istio-ca-crl','uds-trust-bundle'):
                             try:R.preserved_trust(self,obj,self.state['preservedTrustMaps'])
                             except ValueError:
                                 try:self._clean_application_inventory_failure=R.clean_inventory_failure(ns,kind,[obj],'preserved-trust-changed')

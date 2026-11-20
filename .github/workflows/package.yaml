@@ -14,6 +14,7 @@ on:
       - "docs/**"
       - "adr/**"
       - "docs-site/**"
+      - "dev/**"
       - "assets/**"
       - "atak/**"
       - "bench/**"
@@ -60,6 +61,7 @@ on:
       - ".github/workflows/mirror-checkpoint.yaml"
       - ".github/workflows/migrate-packages.yaml"
       - ".github/workflows/native-cache.yaml"
+      - ".github/workflows/native-cache-pr.yaml"
       - ".github/scripts/migrate-ghcr.py"
       - ".github/workflows/test-aks.yaml"
       - ".github/workflows/test-eks.yaml"
@@ -154,6 +156,9 @@ jobs:
       actions: read
       contents: read
       packages: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -252,3 +257,8 @@ jobs:
       - name: Publish the package under its input key
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         run: ./.github/scripts/dev-package.sh publish
+
+      - name: Remove this job's candidate source registry
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        timeout-minutes: 1
+        run: python3 .github/scripts/candidate-consumer.py cleanup --state "${RUNNER_TEMP}/uds-candidate/state.json"

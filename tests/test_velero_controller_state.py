@@ -13,6 +13,7 @@ import unittest
 import yaml
 ROOT=Path(__file__).resolve().parents[1]
 HELPER=ROOT/'.github/scripts/velero-controller-state.py'
+RESTORE_SCRIPTS=('tests/backup-restore.sh','tests/backup-restore-controller-trial.sh')
 spec=importlib.util.spec_from_file_location('controller_state',HELPER)
 M=importlib.util.module_from_spec(spec);spec.loader.exec_module(M)
 
@@ -35,9 +36,6 @@ def write(folder,values):
 
 class ControllerState(unittest.TestCase):
     def test_server_schema_rejection_stops_before_namespace_deletion(self):
-        script=(ROOT/'tests/backup-restore.sh').read_text()
-        start=script.index('# Fail against the actual API schema')
-        end=script.index('# A PodVolumeRestore holds',start)
         setup='''set -euo pipefail
 say() { :; }
 k() {
@@ -46,15 +44,20 @@ k() {
 }
 '''
         with tempfile.TemporaryDirectory() as directory:
-            for rejected in (False,True):
-                calls=Path(directory)/'calls';calls.write_text('')
-                result=subprocess.run(['bash','-c',setup+script[start:end]],capture_output=True,text=True,
-                    env={**os.environ,'work':directory,'CALLS':str(calls),'SCHEMA_RESULT':str(int(rejected))})
-                self.assertEqual(result.returncode,int(rejected))
-                commands=calls.read_text().splitlines()
-                self.assertIn('--dry-run=server --validate=strict',commands[0])
-                self.assertEqual(any(line.startswith('delete namespace') for line in commands),not rejected)
-                self.assertEqual(len(commands),1 if rejected else 3)
+            for name in RESTORE_SCRIPTS:
+                script=(ROOT/name).read_text()
+                start=script.index('# Fail against the actual API schema')
+                end=script.index('# A PodVolumeRestore holds',start)
+                for rejected in (False,True):
+                    with self.subTest(script=name,rejected=rejected):
+                        calls=Path(directory)/'calls';calls.write_text('')
+                        result=subprocess.run(['bash','-c',setup+script[start:end]],capture_output=True,text=True,
+                            env={**os.environ,'work':directory,'CALLS':str(calls),'SCHEMA_RESULT':str(int(rejected))})
+                        self.assertEqual(result.returncode,int(rejected))
+                        commands=calls.read_text().splitlines()
+                        self.assertIn('--dry-run=server --validate=strict',commands[0])
+                        self.assertEqual(any(line.startswith('delete namespace') for line in commands),not rejected)
+                        self.assertEqual(len(commands),1 if rejected else 3)
 
     def test_regenerated_uids_and_metadata_allowed_but_current_owner_required(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -119,19 +122,23 @@ k() {
                     self.assertFalse(any(c in name for c in '*?['));excluded.add((ns,rule['kinds'][0],name))
         self.assertEqual(excluded,{(ns,'configmaps',name) for ns in ('takserver','cloudtak') for name in M.CONFIGMAPS}|
                          {('cloudtak','virtualservices.networking.istio.io',M.VIRTUAL_SERVICE)})
-        script=(ROOT/'tests/backup-restore.sh').read_text()
-        self.assertLess(script.index('controller-state.py" snapshot'),script.index('k delete namespace takserver cloudtak'))
-        self.assertLess(script.index('controller-state.py" verify'),script.index('apps_up=0'))
-        self.assertIn('    name: ${controller_policy}',script)
-        self.assertLess(script.index('k create --dry-run=server --validate=strict'),script.index('k delete namespace takserver cloudtak'))
-        self.assertIn('v["immutable"]=True',script)
-        self.assertNotIn('existingResourcePolicy:',script)
-        # Each ownership-trial stage has its own restore name. Reusing a run-only
-        # immutable ConfigMap would fail the second acceptance in the same run.
-        self.assertIn('controller_policy="${restore_name}-policy"',script)
-        driver=(ROOT/'tests/velero-ownership/drive.py').read_text()
-        self.assertIn("'tests/velero-controller-restore-policy.yaml'",driver)
-        self.assertIn("'.github/scripts/velero-controller-state.py'",driver)
+        for name in RESTORE_SCRIPTS:
+            with self.subTest(script=name):
+                script=(ROOT/name).read_text()
+                self.assertLess(script.index('controller-state.py" snapshot'),script.index('k delete namespace takserver cloudtak'))
+                self.assertLess(script.index('controller-state.py" verify'),script.index('apps_up=0'))
+                self.assertIn('    name: ${controller_policy}',script)
+                self.assertLess(script.index('k create --dry-run=server --validate=strict'),script.index('k delete namespace takserver cloudtak'))
+                self.assertIn('v["immutable"]=True',script)
+                self.assertNotIn('existingResourcePolicy:',script)
+                # Each ownership-trial stage has its own restore name. Reusing a run-only
+                # immutable ConfigMap would fail the second acceptance in the same run.
+                self.assertIn('controller_policy="${restore_name}-policy"',script)
+        for name in ('tests/velero-ownership/drive.py','tests/velero-ownership/source_provider.py'):
+            with self.subTest(driver=name):
+                driver=(ROOT/name).read_text()
+                self.assertIn("'tests/velero-controller-restore-policy.yaml'",driver)
+                self.assertIn("'.github/scripts/velero-controller-state.py'",driver)
 
 
 if __name__=='__main__':unittest.main()

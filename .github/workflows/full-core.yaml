@@ -88,6 +88,7 @@ jobs:
       contents: read
       packages: read
       id-token: write
+      pull-requests: read
     env:
       TEST_FLAVOR: upstream
       # Test's package job publishes the dev package for these inputs; pull
@@ -345,6 +346,11 @@ jobs:
           name: debug-log-full-core-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.uniq.outputs.suffix }}
           path: ${{ steps.sanitize.outputs.dir }}/payload/tmp
           if-no-files-found: ignore
+
+      - name: Remove this job's candidate source registry
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        timeout-minutes: 1
+        run: python3 .github/scripts/candidate-consumer.py cleanup --state "${RUNNER_TEMP}/uds-candidate/state.json"
 
   # The one check to require: success when Full Core passed or was not needed.
   # A cancelled validation skips this job. always() would run and fail it,

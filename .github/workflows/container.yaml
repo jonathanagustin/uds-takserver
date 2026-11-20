@@ -15,7 +15,11 @@ on:
       - .github/container-and-chart/**
       - .github/workflows/container.yaml
       - .github/scripts/merge-image-manifests.sh
+      - .github/scripts/copa-patch.sh
+      - .github/scripts/copa-evidence.py
+      - tests/test_copa_evidence.py
       - .github/actions/attest-images/**
+      - .github/scripts/candidate-*.py
       - .gitmodules
       - upstream/takserver
   push:
@@ -27,7 +31,11 @@ on:
       - .github/container-and-chart/**
       - .github/workflows/container.yaml
       - .github/scripts/merge-image-manifests.sh
+      - .github/scripts/copa-patch.sh
+      - .github/scripts/copa-evidence.py
+      - tests/test_copa_evidence.py
       - .github/actions/attest-images/**
+      - .github/scripts/candidate-*.py
       - .gitmodules
       - upstream/takserver
 
@@ -43,7 +51,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 env:
-  PUSH_IMAGES: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.push) }}
+  PUSH_IMAGES: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'workflow_dispatch' && inputs.push) }}
   IMAGE_REPO: ghcr.io/jonathanagustin/uds-takserver
 
 jobs:
@@ -81,6 +89,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CHECK_ONCE: "true"
+          CANDIDATE_PRODUCER: "true"
         run: |
           set -euo pipefail
           tag="$(./.github/container-and-chart/docker/build.sh --tag)"
@@ -92,6 +101,19 @@ jobs:
           fi
           echo "build=true" >> "${GITHUB_OUTPUT}"
           echo "${tag} is not published yet. Building it."
+
+      - name: Record exact immutable cache reuse for the fork
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && steps.image.outputs.build == 'false'
+        run: python3 .github/scripts/candidate-consumer.py cache-decision
+
+      - name: Upload the fork cache decision
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && steps.image.outputs.build == 'false'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-cache-takserver-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/uds-candidate/cache-decision/
+          if-no-files-found: error
+          retention-days: 7
 
   # Each architecture compiles on its own native runner. QEMU emulation of
   # the Gradle and Node build is many times slower than a native compile.
@@ -159,9 +181,20 @@ jobs:
         env:
           IMAGE_TAG: ${{ needs.plan.outputs.tag }}-${{ matrix.arch }}
           PUSHED_REFS: ${{ runner.temp }}/pushed-refs.txt
+          COPA_EVIDENCE_DIR: ${{ runner.temp }}/copa-evidence
         run: ./.github/container-and-chart/docker/build.sh
 
+      - name: Retain only bounded Copa RPM scan evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: copa-rpm-evidence-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/copa-evidence/*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Attest the pushed images
+        if: env.PUSH_IMAGES == 'true'
         uses: ./.github/actions/attest-images
         with:
           refs-file: ${{ runner.temp }}/pushed-refs.txt
@@ -173,7 +206,7 @@ jobs:
         run: ./.github/scripts/scan-local-images.sh
 
       - name: Generate SBOMs from the local images
-        if: env.PUSH_IMAGES == 'true'
+        if: env.PUSH_IMAGES == 'true' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
         env:
           IMAGE_TAG: ${{ needs.plan.outputs.tag }}-${{ matrix.arch }}
           SYFT_IMAGE: anchore/syft:v1.56.0@sha256:697ae864af1299cfa43c54b161cea3dd65c6d54de82e3dba66ea3dccb3acc313
@@ -192,12 +225,28 @@ jobs:
           done
 
       - name: Upload SBOMs
-        if: env.PUSH_IMAGES == 'true'
+        if: env.PUSH_IMAGES == 'true' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: takserver-sbom-${{ matrix.arch }}
           path: build/sbom/**
           if-no-files-found: error
+
+      - name: Preserve the scanned native fork candidates
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          IMAGE_TAG: ${{ needs.plan.outputs.tag }}-${{ matrix.arch }}
+        run: python3 .github/scripts/candidate-artifacts.py export --group takserver --architecture "${{ matrix.arch }}" --source-tag "${IMAGE_TAG}" --directory "${{ runner.temp }}/candidate"
+
+      - name: Upload the six native fork candidates
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-takserver-${{ matrix.arch }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 1
 
   # Join the two per-architecture tags into one multi-arch index. On main
   # this also writes the plain tag that zarf.yaml and releases reference,
@@ -215,6 +264,7 @@ jobs:
       always() && needs.plan.result == 'success'
       && (needs.build.result == 'success' || (needs.plan.outputs.build == 'false' && github.ref == 'refs/heads/main'))
       && (github.event_name != 'workflow_dispatch' || inputs.push)
+      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout

@@ -169,7 +169,7 @@ jobs:
           set -euo pipefail
           uds zarf tools yq -i '.metadata.version = strenv(RELEASE_VERSION)' zarf.yaml
           uds zarf package create . --flavor upstream --architecture "${ARCH}" \
-            --confirm --no-progress --features values=true \
+            --confirm --features values=true \
             --set DOMAIN=uds.dev --set TAK_IMAGE_TAG=5.7-RELEASE-14
 
       # Keyless: Fulcio issues a short-lived certificate for this workflow's
@@ -302,8 +302,8 @@ jobs:
           gh release upload "${RELEASE_TAG}" "${RUNNER_TEMP}/${BUNDLE_NAME}" "${RUNNER_TEMP}/${INTOTO_NAME}" \
             --clobber --repo "${GITHUB_REPOSITORY}"
 
-      # Check the attestation the way the README tells users to, against
-      # the registry copy and this workflow as the signer.
+      # Read the registry copy explicitly; the CLI otherwise queries the
+      # GitHub attestation API. Scope certificate identity to this repository.
       - name: Verify the provenance
         env:
           GH_TOKEN: ${{ github.token }}
@@ -312,7 +312,7 @@ jobs:
         run: |
           set -euo pipefail
           gh attestation verify "oci://${SUBJECT}" \
-            --owner "${GITHUB_REPOSITORY_OWNER}" \
+            --bundle-from-oci --repo "${GITHUB_REPOSITORY}" \
             --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yaml"
       - name: Prepare checked application release binding
         env:

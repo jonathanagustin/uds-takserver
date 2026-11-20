@@ -18,11 +18,22 @@ architecture default, or a 200-client load.
 
 It runs on amd64 and arm64 runners. The weekly run uses client count 10. To run more, set the workflow input `clients` to a comma-separated list such as `10,50,200`, or to `all` for every count a config lists.
 
+Manual runs accept `architecture=both` (the default), `amd64`, or `arm64`,
+and `runner_profile=temporary` (the default), `ubuntu-24.04`, or `ubuntu-26.04`.
+The temporary profile retains the AMD64 `TEST_RUNNER` override or Ubuntu 22,
+and Ubuntu 22 ARM64. An explicit runner profile selects that Ubuntu version
+for the requested native architectures, including its `-arm` label.
+Scheduled and labeled runs retain both architectures and the temporary profile;
+manual inputs cannot change those runs. A single-architecture run supplies no
+measurement for the omitted architecture. This enables controlled runner
+qualification for issue #103; it does not establish acceptance of newer runners
+or change the default runner labels.
+
 Manual runs also accept `profile`: `all` (the default) keeps the full sweep;
 `baseline` measures only the unchanged install, without tuning rollouts.
 With `clients=10,50`, baseline produces two points per architecture instead of
 fourteen across the seven enabled profiles. Installation and its tests still
-run on both architectures. Scheduled and labeled runs keep the full sweep.
+run on each selected architecture. Scheduled and labeled runs keep the full sweep.
 This option does not establish 50-client headroom or relax the gate on 200 clients.
 The 60-second window includes clients starting one second apart. Requested
 clients and observed connection events do not establish sustained concurrency.
@@ -67,6 +78,96 @@ The report compares configs on three views: footprint against throughput, footpr
 The markdown report includes the observed CPU, working set, throughput, latency, startup phases, Postgres counters and record caveats. Missing timings stay "not measured"; negative or non-finite timings are shown as invalid and never treated as durations. The source records are unchanged. A startup-phase row describes the pod present when that config was collected. A Postgres-only rollout can reuse an earlier TAK pod, so repeated rows are not independent cold and warm TAK startup measurements.
 
 A setting is copied into the package only after a report puts it on the front. The nightly records are one 10-client run per config. Do not treat any config, or either [values profile](profiles.md), as a sizing result yet.
+
+## Collect an exploratory PostgreSQL comparison
+
+The manual Benchmark choice `study=synthetic-postgis` runs the existing
+`baseline`, `postgis-buffers` and `postgis-wal` configurations on one native
+runner per selected architecture. It fixes the client count at 50 and ignores the
+short-sweep `profile` and `clients` selections. The scheduled run, default
+short sweep and `synthetic-baseline` retain their existing behavior. This
+option prepares the controlled measurements for issues #49 and #51; no
+PostgreSQL experiment or tuning result is supplied by adding it.
+
+After reviewing and merging the protocol, a maintainer can dispatch
+`benchmark.yaml` on `main` with this body:
+
+```json
+{"ref":"main","inputs":{"study":"synthetic-postgis","jvm_start_metadata":false}}
+```
+
+When both architectures are selected, their native jobs use the same source and tester. Each retains its own run,
+attempt, context, cluster, node-container and marker identity. The disposable
+cluster guard refuses an existing `uds` cluster before installation and checks
+the same proof before every session. Each session's file and metadata identify
+its configuration, repeat, ordinal position and sequence number. Existing
+session files cause refusal before work begins.
+
+Each repeat rotates configuration order:
+
+| Repeat | First session | Second session | Third session |
+| --- | --- | --- | --- |
+| 1 | baseline | buffers | WAL |
+| 2 | buffers | WAL | baseline |
+| 3 | WAL | baseline | buffers |
+
+Before every session, including baseline, the harness resets `ALTER SYSTEM`
+overrides, applies that point's five settings and restarts PostgreSQL. The
+postmaster must change while the database system identifier and database OID
+remain stable. The normalized settings, durability, database identity and
+resource limits are read back before load and at the measured boundaries.
+Across sessions, the retained complete container inventory must keep loaded
+images and memory limits unchanged. Application Pod/container identities and restart
+counts remain fixed; only PostgreSQL changes incarnation intentionally.
+Expected source defaults are PostgreSQL 18.6/PostGIS 3.6.4 with buffers 128MB,
+work memory 4MB, effective cache 4GB, maximum WAL 1GB and checkpoint timeout
+5min; a different runtime requires reviewing the protocol before acceptance.
+
+The two candidate presets already exist. Buffers keeps 128MB shared buffers
+and 4MB work memory, changes the planner's cache hint to 384MB, and limits WAL
+to 256MB with a 5min checkpoint timeout. WAL uses 64MB shared buffers, 4MB
+work memory, a 256MB cache hint, 128MB maximum WAL and a 15min timeout. These
+are exploratory planning/checkpoint hypotheses. The retained baseline's full
+cache-hit ratio and zero temporary files do not establish a cache or work-memory
+bottleneck. A longer timeout and smaller maximum WAL can have competing
+effects on checkpoint frequency.
+
+Neither preset raises shared buffers or work memory above the recorded
+baseline, but this does not establish a worst-case memory bound: work memory
+can be used by multiple operations, and other PostgreSQL allocations remain.
+The database must keep its actual 512Mi memory and 500m CPU limits, with
+`fsync`, `full_page_writes` and `synchronous_commit` all on. The existing
+readiness, restart, OOM and container-sample checks remain required. The
+CloudTAK `postgis-memory` preset and other resource/JVM configurations are
+excluded. No production configuration, database image or durability setting
+is changed by the protocol source.
+
+Each session holds 50 observed clients through at least 300s of steady warmup
+and 1200s measured, with the existing ramp, workload-fidelity, counter-delta,
+sample and SQL-bracket checks. Nine sessions require 225 steady workload
+minutes per architecture, plus ramp and setup. This manual mode alone has a
+360min job ceiling, a 90min install deadline, and a 120s PostgreSQL rollout
+wait with a 130s child-process deadline. The first invalid session stops that
+architecture without an automatic retry; its raw record remains available.
+
+Database contents, host/filesystem caches and the application processes are
+shared across the nine sessions. A PostgreSQL restart resets its process and
+buffer-pool state, while database contents and operating-system caches persist.
+The protocol records database size and system/postmaster identity; it does
+not restore a common data snapshot. Rotating each configuration through each
+ordinal position balances order while retaining possible carryover effects.
+These are repeated client sessions in a shared history. They do not establish
+independent cluster replication, individual parameter causality, production
+capacity or an architecture ranking.
+
+The report groups medians/ranges by architecture and configuration. A complete
+architecture block needs all nine distinct accepted source-bound sessions;
+partial or identity-invalid blocks remain inspectable and cannot enter the
+front. Earlier baseline-only and short-window records keep their report format
+and separate cohorts. Retain the raw files, original failures, artifact ZIP and
+file hashes, source and run/attempt metadata when curating results. No preset
+is adopted automatically; keeping the defaults is an allowed outcome. Upgrade
+and backup/restore qualification remain separate requirements.
 
 ## Collect one startup pair without load
 
@@ -136,6 +237,11 @@ were cold. Class counts are
 observed after startup, not class-loading durations. A valid pair alone does
 not justify class data sharing, probe tuning, or a performance improvement;
 repeated measurements and observer-overhead checks remain necessary.
+
+The [repeat-series protocol](startup-series.md) describes how to retain and
+validate three to five original pairs per selected architecture, including
+failed and missing observations. Its offline checks do not run a study or
+qualify class-loading duration, instrumentation overhead or tuning benefits.
 
 ## Check capacity before a larger load
 

@@ -1,0 +1,1 @@
+{"accepted": true, "cold_sha256": "b959b53bec8e5d0ea3eb9fc75e28415abe24e8207d150a24b12f110276ab6da0", "schema": 1, "scope": "one independent cold/warm application pair; no CDS, probe or class-loading-duration claim", "warm_sha256": "91db1cd220df74849194bd301cf787abcfed851c1a70e8ce8e93970b16268b89"}

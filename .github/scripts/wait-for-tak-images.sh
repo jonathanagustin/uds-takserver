@@ -13,6 +13,13 @@
 # source. Set IMAGE_TAG to check another tag, such as the plain release tag.
 set -euo pipefail
 
+if [[ "${GITHUB_EVENT_NAME:-}" = "pull_request" && "${CANDIDATE_PRODUCER:-false}" != "true" ]]; then
+  fork="$(python3 .github/scripts/candidate-consumer.py is-fork)"
+  if [[ "${fork}" = "true" ]]; then
+    exec python3 .github/scripts/candidate-consumer.py ready --group takserver
+  fi
+fi
+
 if [[ -n "${IMAGE_TAG:-}" ]]; then
   tag="${IMAGE_TAG}"
   keyed="false"

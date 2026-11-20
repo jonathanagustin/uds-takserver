@@ -1,5 +1,7 @@
 # CI agent availability barrier
 
+The definition uses `zarf.dev/v1beta1`, supported by pinned UDS CLI 0.41.0 / Zarf 0.89.0 and Zarf 1.x. The HTTPS probe runs in `onDeploy.onSuccess` after the bounded before-waits and file copy. Local archive checks do not establish success against a restored cluster.
+
 The upgrade test deploys this gate once after restoring the old checkpoint and
 again between the released Core package and the application. It retains the
 bounded Deployment/ready-Endpoints/port metadata waits, then performs a live

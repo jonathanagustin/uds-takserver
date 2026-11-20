@@ -521,3 +521,68 @@ The existing consumer, source and exact deletion guards still apply. No keys or
 CRL bodies enter public proofs. This scoped cleanup is not permission to discard
 revocation history in an existing deployment, and offline tests do not establish
 a successful fresh-strict package run.
+
+
+### Bind the remaining ConfigMaps to their actual source
+
+The AMD64 fresh-strict trial `43783535244` rejected two ConfigMaps after Secret
+cleanup: `ignite-extensions` and `istio-ca-crl`. The encrypted inventory names were
+matched to reviewed public producer sources before this change. This identifies
+the failed inventory; it does not establish a successful fresh-strict round trip.
+
+`docker/publish-cert-configmap.sh` publishes the application JAR as the sole
+`binaryData` key of `ignite-extensions`. The image Dockerfile also copies that JAR
+to `/ignite-extensions.jar`. Before removal, the retained-state capture compares
+the decoded ConfigMap JAR hash to a read-only `sha256sum` in the config container.
+It resolves a uniquely Ready Pod through the stored config Deployment UID and its
+ReplicaSet owner, requires the matching container image and immutable runtime
+image ID, rejects a mount over the source file, and checks that the Pod/container
+identity stays fixed during observation. Verification repeats the binding after
+rollout; the image identity must remain unchanged. Cleanup requires the captured
+binary and image-source digests, unchanged UID and payload, no remaining consumers,
+and the existing origin, metadata, resourceVersion and API deletion preconditions.
+A name alone never authorizes deletion.
+
+Istio's namespace controller owns `istio-ca-crl`; it must remain. At Istio commit
+`e2f3a7949a358af7dd901a6f9ccd6ecdd7270271`,
+`pilot/pkg/serviceregistry/kube/controller/namespacecontroller.go` distributes the CA watcher's CRL
+with the `istio.io/config=true` marker and `ca-crl.pem` key. Capture binds the
+application copy to the exact data and UID of `istio-system/istio-ca-crl`, then
+clean-state observation rechecks both the copy and retained authority. An empty
+CRL value is permitted only when that exact authority is also empty. Missing
+keys, added payload, changed authority or changed metadata still reject the trial.
+Neither this map nor any other Core resource is added to application cleanup.
+
+
+### Bind Zarf's Pod image rewrite
+
+Pilot `43798298987` stopped at the Ignite guard requiring one uniquely Ready
+config Pod. Its public source frames and proof hashes verify, but it contains no
+private Pod snapshot, so it does not establish which candidate predicate failed.
+The failed run is retained and is not rerun unchanged.
+
+A separate source-backed control demonstrates a valid case rejected by the old
+guard: Zarf v0.89.0's `src/internal/agent/hooks/pods.go` rewrites each Pod image,
+sets `zarf-agent=patched`, and records the original image in the container-specific
+`zarf.dev/original-image-*` annotation. The Deployment image remains the source
+reference. `src/pkg/transform/image.go` replaces the registry, retaining digest
+references or appending the original image-name CRC32 to a tag.
+
+The guard now accepts that exact rewrite only with its original-image annotation
+and mutation label, the expected transformed image, and a registry host present
+in the retained `zarf/private-registry` credential. The credential's whole-object
+digest is captured in the image-source binding and rechecked during observation
+and later verification. The supported source references are fully qualified TAK
+registry names with tags (including the default latest) or SHA256 digests; unknown
+forms reject.
+No credentials, image references or Pod names enter public proofs. The immutable
+runtime image ID, Deployment/ReplicaSet/Ready Pod chain, actual JAR checksum,
+source-file mount refusal and pre/post observation checks remain required.
+
+Upstream-published CRC suffix controls pass. A deterministic fixture reproduces
+the old unique-Pod rejection and accepts only the exact bound rewrite with the
+new guard. That review's SHA256 is
+`437c5bd9746e6c9d854ece9b287b75f7954f543c02b34817b306a19a5e4e18ca`.
+This validates the documented source-managed case, not a reconstruction of the
+failed run's unpublished Pod fields. A new source-bound package pilot is still
+required for fresh-strict acceptance.

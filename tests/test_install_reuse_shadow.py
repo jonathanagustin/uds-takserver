@@ -409,6 +409,70 @@ class PolicyTests(unittest.TestCase):
         self.api.artifact.side_effect = lambda artifact_id: b'other'
         self.assertIn('artifact-receipt-bytes-mismatch', self.result()['blockers'])
 
+    def artifact_change(self, change):
+        """Change remote metadata only after the first run checks have passed."""
+        raw = json.dumps(self.receipt).encode()
+
+        def download(artifact_id):
+            change()
+            return raw
+
+        self.api.artifact.side_effect = download
+        return self.result()
+
+    def test_selected_rerun_during_artifact_download_requires_fresh(self):
+        for status, conclusion in (('queued', None), ('in_progress', None),
+                                   ('completed', 'failure'), ('completed', 'success')):
+            with self.subTest(status=status, conclusion=conclusion):
+                original = copy.deepcopy(self.run)
+                result = self.artifact_change(lambda: self.run.update(
+                    run_attempt=3, status=status, conclusion=conclusion))
+                self.assertFalse(result['evidence_qualified'])
+                self.assertNotIn('evidence', result)
+                self.assertIn('run-identity-attempt-or-result-mismatch', result['blockers'])
+                self.run.clear()
+                self.run.update(original)
+
+    def test_newer_run_during_artifact_download_requires_fresh(self):
+        for status, conclusion in (('queued', None), ('completed', 'failure'),
+                                   ('completed', 'cancelled'), ('completed', 'success')):
+            with self.subTest(status=status, conclusion=conclusion):
+                result = self.artifact_change(lambda: self.runs.append(
+                    {**self.run, 'id': 101, 'status': status, 'conclusion': conclusion}))
+                self.assertFalse(result['evidence_qualified'])
+                self.assertIn('not-latest-applicable-run', result['blockers'])
+                self.runs.pop()
+
+    def test_older_run_rerun_during_artifact_download_requires_fresh(self):
+        older = {**self.run, 'id': 99, 'run_attempt': 1}
+        self.runs.append(older)
+        result = self.artifact_change(lambda: older.update(
+            run_attempt=2, status='completed', conclusion='failure'))
+        self.assertFalse(result['evidence_qualified'])
+        self.assertIn('other-applicable-run-unsettled-or-rerun-order-unproven', result['blockers'])
+
+    def test_final_run_listing_failure_requires_fresh(self):
+        def unavailable(path, key):
+            raise SHADOW.Unavailable('command-failed')
+
+        result = self.artifact_change(lambda: setattr(self.api.pages, 'side_effect', unavailable))
+        self.assertFalse(result['evidence_qualified'])
+        self.assertIn('command-failed', result['blockers'])
+
+    def test_final_run_read_failure_requires_fresh(self):
+        result = self.artifact_change(lambda: setattr(
+            self.api.get, 'side_effect', SHADOW.Unavailable('command-failed')))
+        self.assertFalse(result['evidence_qualified'])
+        self.assertIn('command-failed', result['blockers'])
+
+    def test_unchanged_evidence_is_rechecked_after_artifact_download(self):
+        result = self.result()
+        self.assertTrue(result['evidence_qualified'])
+        self.assertEqual(self.api.get.call_args_list[-1], mock.call('actions/runs/100'))
+        self.assertEqual(self.api.pages.call_args_list[-1], mock.call(
+            f'actions/workflows/20/runs?event=pull_request&head_sha={self.head}', 'workflow_runs'))
+        self.assertEqual(self.api.get.call_args_list.count(mock.call('actions/runs/100')), 2)
+
 
 class TransportTests(unittest.TestCase):
     def test_all_pages_including_expected_total_and_unique_ids(self):

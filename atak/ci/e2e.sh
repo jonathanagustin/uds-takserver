@@ -34,7 +34,7 @@ echo "== Zarf package (KubeVirt, VM, viewer)"
 if [[ -n "${ATAK_PACKAGE:-}" ]]; then
   echo "package: ${ATAK_PACKAGE}" | tee "${OUT}/package.txt"
   start=$(date +%s)
-  uds zarf package deploy "${ATAK_PACKAGE}" --set DOMAIN="${DOMAIN}" --confirm
+  uds zarf package deploy "${ATAK_PACKAGE}" --set-variables DOMAIN="${DOMAIN}" --confirm
   echo "deploy (pull from OCI): $(( $(date +%s) - start ))s" | tee -a "${OUT}/package.txt"
 else
   start=$(date +%s)
@@ -44,7 +44,7 @@ else
   du -h "${pkg_dir}"/*.tar.zst | tee "${OUT}/package.txt"
   echo "create: $(( $(date +%s) - start ))s" | tee -a "${OUT}/package.txt"
   start=$(date +%s)
-  uds zarf package deploy "${pkg_dir}"/zarf-package-atak-device-amd64-*.tar.zst --set DOMAIN="${DOMAIN}" --confirm
+  uds zarf package deploy "${pkg_dir}"/zarf-package-atak-device-amd64-*.tar.zst --set-variables DOMAIN="${DOMAIN}" --confirm
   echo "deploy: $(( $(date +%s) - start ))s" | tee -a "${OUT}/package.txt"
 fi
 # The driver is a test tool, not part of the package. k3d can report a

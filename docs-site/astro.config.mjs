@@ -37,6 +37,7 @@ const sidebarTemplate = [
   {
     label: 'Reference',
     items: [
+      { label: 'Package reference', slug: 'reference' },
       { label: 'TAK Server', slug: 'configuration' },
       { label: 'CloudTAK', slug: 'cloudtak' },
       { label: 'ATAK test device', slug: 'atak-device' },

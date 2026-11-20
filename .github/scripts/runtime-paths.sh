@@ -25,6 +25,7 @@ ignore_globs() {
 docs/**
 adr/**
 docs-site/**
+dev/**
 assets/**
 atak/**
 bench/**
@@ -71,6 +72,7 @@ compliance/README.md
 .github/workflows/mirror-checkpoint.yaml
 .github/workflows/migrate-packages.yaml
 .github/workflows/native-cache.yaml
+.github/workflows/native-cache-pr.yaml
 .github/scripts/migrate-ghcr.py
 .github/workflows/test-aks.yaml
 .github/workflows/test-eks.yaml

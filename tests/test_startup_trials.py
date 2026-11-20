@@ -3,11 +3,13 @@
 """Offline startup cohort fixtures only; no cluster, JVM, or timing experiment."""
 import copy
 import contextlib
+import hashlib
 import io
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -256,7 +258,7 @@ class StartupTrials(unittest.TestCase):
     def test_private_cli_outputs_are_first_write_only(self):
         cold, warm = pair()
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory); root.chmod(0o700)
+            root = Path(directory).resolve(); root.chmod(0o700)
             (root/'cold').write_text(json.dumps(cold)); (root/'warm').write_text(json.dumps(warm))
             argv = ['startup', 'pair', '--cold', str(root/'cold'), '--warm', str(root/'warm'), '--output', str(root/'pair')]
             with patch('sys.argv', argv): self.assertEqual(trial.main(), 0)
@@ -366,9 +368,155 @@ class StartupTrials(unittest.TestCase):
 
 class StartupWorkflow(unittest.TestCase):
     def setUp(self):
-        self.document = yaml.safe_load((Path(__file__).resolve().parents[1]/'.github/workflows/startup.yaml').read_text())
+        self.workflow = (Path(__file__).resolve().parents[1]/'.github/workflows/startup.yaml').read_bytes()
+        self.document = yaml.safe_load(self.workflow)
         self.job = self.document['jobs']['startup']
         self.steps = self.job['steps']
+
+    @contextlib.contextmanager
+    def package_binding_fixture(self, arch='amd64'):
+        step = next(step for step in self.steps if step['name']=='Acquire only the matching published application package')
+        script = step['run'].split("python3 - <<'PY'\n", 1)[1].split('\nPY', 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'.github/workflows').mkdir(parents=True)
+            (root/'.github/workflows/startup.yaml').write_bytes(self.workflow)
+            (root/'evidence').mkdir()
+            (root/'bin').mkdir()
+            # Own every helper: the host's git/python launchers need not work.
+            helper = f'#!{sys.executable}\n' + '''import json, os, sys
+from pathlib import Path
+tool = Path(sys.argv[0]).name
+with open('commands.jsonl', 'a') as stream:
+    stream.write(json.dumps([tool, *sys.argv[1:]]) + '\\n')
+if tool == 'git' and sys.argv[1:] == ['rev-parse', 'HEAD']:
+    sys.stdout.write(os.environ['TEST_HEAD'] + '\\n')
+elif tool == 'bash' and sys.argv[1:] == ['.github/scripts/dev-package.sh', 'key']:
+    sys.stdout.write(os.environ['TEST_PACKAGE_KEY'] + '\\n')
+elif tool == 'uds' and sys.argv[1:] == ['zarf', 'package', 'inspect', 'digest',
+        'zarf-package-takserver-' + os.environ['STARTUP_ARCH'] + '-dev-upstream.tar.zst']:
+    archive = Path(sys.argv[-1])
+    mutation = os.environ.get('TEST_INSPECTOR_MUTATION')
+    if mutation:
+        before = archive.stat()
+        original = archive.read_bytes()
+        if mutation == 'replace':
+            replacement = archive.with_suffix('.replacement')
+            replacement.write_bytes(original)
+            os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+            replacement.replace(archive)
+        elif mutation == 'rewrite':
+            archive.write_bytes(b'x' * len(original))
+            os.utime(archive, ns=(before.st_atime_ns, before.st_mtime_ns))
+        elif mutation == 'append':
+            with archive.open('ab') as stream:
+                stream.write(b'changed')
+        elif mutation == 'symlink':
+            target = archive.with_suffix('.target')
+            archive.rename(target)
+            archive.symlink_to(target)
+        else:
+            raise SystemExit('Unexpected fixture mutation')
+    sys.stdout.write(os.environ['TEST_MANIFEST_OUTPUT'])
+    sys.exit(int(os.environ['TEST_MANIFEST_STATUS']))
+else:
+    raise SystemExit('Unexpected package binding helper command')
+'''
+            for name in ('git', 'bash', 'uds'):
+                tool = root/'bin'/name
+                tool.write_text(helper)
+                tool.chmod(0o700)
+            env = {**os.environ, 'PATH': str(root/'bin'), 'EVIDENCE': str(root/'evidence'),
+                   'GITHUB_STEP_SUMMARY': str(root/'summary.md'),
+                   'GITHUB_SHA': 'a'*40, 'TEST_HEAD': 'a'*40, 'STARTUP_ARCH': arch,
+                   'TEST_PACKAGE_KEY': arch+'-0123456789abcdef',
+                   'TEST_MANIFEST_OUTPUT': 'sha256:'+('b' if arch=='amd64' else 'c')*64+'\n',
+                   'TEST_MANIFEST_STATUS': '0'}
+            # Observe the real call's options as well as its executable/arguments.
+            check_options = '''import subprocess as _commands
+_original_check_output = _commands.check_output
+def _binding_check_output(command, **kwargs):
+    if command[0] == 'uds':
+        assert kwargs == {'text': True, 'timeout': 120}, 'Unbounded package digest inspection'
+    return _original_check_output(command, **kwargs)
+_commands.check_output = _binding_check_output
+'''
+            def run(**overrides):
+                return subprocess.run([sys.executable, '-B', '-c', check_options+script], cwd=root,
+                    env={**env, **overrides}, capture_output=True, text=True, timeout=10)
+            yield root, root/f'zarf-package-takserver-{arch}-dev-upstream.tar.zst', run
+
+    def test_actual_package_binding_hashes_acquired_bytes_and_canonical_contents(self):
+        bindings = []
+        for arch, payload in (('amd64', b'first acquired wrapper\x00'),
+                ('amd64', b'different wrapper\xff'), ('arm64', b'native arm wrapper')):
+            with self.subTest(arch=arch), self.package_binding_fixture(arch) as (root, archive, run):
+                archive.write_bytes(payload)
+                result = run()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                value = json.loads((root/'evidence/bindings.json').read_text())
+                self.assertEqual(value, {
+                    'source': hashlib.sha256(('a'*40).encode()).hexdigest(),
+                    'package': hashlib.sha256((arch+'-0123456789abcdef').encode()).hexdigest(),
+                    'package_archive': hashlib.sha256(payload).hexdigest(),
+                    'package_manifest': ('b' if arch=='amd64' else 'c')*64,
+                    'workflow': hashlib.sha256(self.workflow).hexdigest()})
+                self.assertEqual([json.loads(line) for line in (root/'commands.jsonl').read_text().splitlines()], [
+                    ['git', 'rev-parse', 'HEAD'], ['bash', '.github/scripts/dev-package.sh', 'key'],
+                    ['uds', 'zarf', 'package', 'inspect', 'digest', archive.name]])
+                self.assertEqual({path.name for path in (root/'evidence').iterdir()}, {'bindings.json'})
+                summary = (root/'summary.md').read_text()
+                self.assertIn('(not a startup result)', summary)
+                self.assertEqual(json.loads(summary.split('```json\n')[1].split('\n```')[0]), value)
+                bindings.append(value)
+        self.assertNotEqual(bindings[0]['package_archive'], bindings[1]['package_archive'])
+        self.assertEqual(bindings[0]['package'], bindings[1]['package'])
+        self.assertEqual(bindings[0]['package_manifest'], bindings[1]['package_manifest'])
+
+    def test_actual_package_binding_rejects_invalid_files_architecture_and_source(self):
+        for kind in ('missing', 'symlink', 'empty', 'oversized', 'directory', 'architecture', 'source'):
+            with self.subTest(kind=kind), self.package_binding_fixture() as (root, archive, run):
+                overrides = {}
+                if kind == 'symlink':
+                    (root/'payload').write_bytes(b'valid bytes behind a symlink')
+                    archive.symlink_to(root/'payload')
+                elif kind == 'empty':
+                    archive.touch()
+                elif kind == 'oversized':
+                    with archive.open('wb') as stream:
+                        stream.truncate(8 * 1024**3 + 1)
+                elif kind == 'directory':
+                    archive.mkdir()
+                elif kind in ('architecture', 'source'):
+                    archive.write_bytes(b'valid acquired bytes')
+                    overrides = {'STARTUP_ARCH': 'PRIVATE_ARCH'} if kind == 'architecture' else {'TEST_HEAD': 'c'*40}
+                result = run(**overrides)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((root/'evidence/bindings.json').exists())
+                self.assertNotIn('PRIVATE', result.stdout+result.stderr)
+                calls = [json.loads(line) for line in (root/'commands.jsonl').read_text().splitlines()]
+                self.assertFalse(any(call[0]=='uds' for call in calls))
+
+    def test_actual_package_binding_rejects_malformed_or_failed_manifest_inspection(self):
+        for output, status in (('', '0'), ('b'*64, '0'), ('sha256:'+'B'*64, '0'),
+                ('sha256:'+'b'*63, '0'), ('sha256:'+'b'*64+'\nextra line\n', '0'),
+                ('sha256:'+'b'*64+'\nsha256:'+'c'*64+'\n', '0'), ('sha256:'+'b'*64+'\n', '23')):
+            with self.subTest(output=output, status=status), self.package_binding_fixture() as (root, archive, run):
+                archive.write_bytes(b'acquired wrapper')
+                result = run(TEST_MANIFEST_OUTPUT=output, TEST_MANIFEST_STATUS=status)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((root/'evidence/bindings.json').exists())
+                calls = [json.loads(line) for line in (root/'commands.jsonl').read_text().splitlines()]
+                self.assertEqual(calls[-1], ['uds', 'zarf', 'package', 'inspect', 'digest', archive.name])
+
+    def test_actual_package_binding_rejects_inspector_replacement_or_mutation(self):
+        for mutation in ('replace', 'rewrite', 'append', 'symlink'):
+            with self.subTest(mutation=mutation), self.package_binding_fixture() as (root, archive, run):
+                archive.write_bytes(b'acquired wrapper')
+                result = run(TEST_INSPECTOR_MUTATION=mutation)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Startup package archive changed', result.stderr)
+                self.assertFalse((root/'evidence/bindings.json').exists())
 
     def test_only_manual_main_and_selected_bounded_read_only_runners_can_run(self):
         self.assertEqual(set(self.document.get('on', self.document.get(True))), {'workflow_dispatch'})
@@ -395,8 +543,10 @@ class StartupWorkflow(unittest.TestCase):
                 ('PRIVATE_SELECTION', 'ubuntu-22.04', None), ('both', 'PRIVATE\nrunner', None)]:
             with self.subTest(selected=selected, runner=runner), tempfile.TemporaryDirectory() as directory:
                 output = Path(directory)/'output'; output.touch()
+                (Path(directory)/'python3').symlink_to(sys.executable)
                 result = subprocess.run(['bash', '-e', '-c', script], capture_output=True, text=True,
-                    env={**os.environ, 'ARCHITECTURE': selected, 'AMD64_RUNNER': runner, 'GITHUB_OUTPUT': str(output)})
+                    env={**os.environ, 'PATH': directory+os.pathsep+os.environ['PATH'],
+                         'ARCHITECTURE': selected, 'AMD64_RUNNER': runner, 'GITHUB_OUTPUT': str(output)})
                 if expected is None:
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(output.read_text(), '')
@@ -429,6 +579,7 @@ class StartupWorkflow(unittest.TestCase):
         index = lambda needle: next(i for i, script in enumerate(scripts) if needle in script)
         self.assertLess(index('ephemeral-cluster.py bootstrap'), index('trim-runner.sh'))
         self.assertLess(index('dev-package.sh prebuilt'), index('uds run deploy-slim-core'))
+        self.assertLess(index("/'bindings.json').write_text"), index('uds run deploy-slim-core'))
         self.assertLess(index('uds run deploy-slim-core'), index('startup_trials begin'))
         self.assertLess(index('startup_trials begin'), index('uds run create-deploy-test-bundle'))
         joined = '\n'.join(scripts)
@@ -444,6 +595,9 @@ class StartupWorkflow(unittest.TestCase):
         positions = [joined.index(needle) for needle in needles]
         self.assertEqual(positions, sorted(positions))
         self.assertEqual(joined.count('rollout restart'), 1)
+        self.assertEqual(joined.count('startup_trials begin'), 2)
+        self.assertEqual(joined.count('--bindings "$EVIDENCE/bindings.json"'), 2)
+        self.assertEqual(joined.count('startup_trials pair'), 1)
         self.assertIn("'--for=delete', *names, '--timeout=60s'", joined)
         self.assertIn("value['snapshot']['identities'][app]['pod_name']", joined)
         self.assertIn('sha = os.environ[\'GITHUB_SHA\']', joined)
@@ -454,7 +608,10 @@ class StartupWorkflow(unittest.TestCase):
         self.assertEqual(len(uploads), 1)
         self.assertIn('${{ matrix.arch }}', uploads[0]['with']['name'])
         self.assertIn('${{ matrix.arch }}', self.job['env']['COHORT'])
-        self.assertEqual(uploads[0]['if'], "always() && steps.checkout.outcome == 'success'")
+        self.assertEqual(uploads[0]['if'], "always() && steps.checkout.outcome == 'success' && "
+                         "(steps.cold.outcome == 'success' || steps.cold.outcome == 'failure')")
+        self.assertEqual(next(step['name'] for step in self.steps if step.get('id') == 'cold'),
+                         'Begin the cold application boundary')
         paths = uploads[0]['with']['path'].splitlines()
         self.assertEqual({Path(path).name for path in paths}, {'bindings.json', 'cold-begin.json', 'cold.json', 'warm-begin.json', 'warm.json', 'pair.json'})
         self.assertTrue(all(path.startswith('${{ runner.temp }}/startup-pair/') and '*' not in path for path in paths))

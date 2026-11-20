@@ -117,6 +117,10 @@ check_match ".github/workflows/mutation.yaml" ignore
 check_match ".github/workflows/ui-reel.yaml" ignore
 check_match ".github/workflows/native-cache.yaml" ignore
 check_decide false ".github/workflows/native-cache.yaml"
+check_match ".github/workflows/native-cache-pr.yaml" ignore
+check_decide false ".github/workflows/native-cache-pr.yaml"
+check_decide true $'.github/workflows/native-cache-pr.yaml\ncharts/takserver/values.yaml'
+check_match ".github/workflows/native-cache-pr-extra.yaml" relevant
 check_match ".github/workflows/native-cache-extra.yaml" relevant
 check_decide true $'.github/workflows/native-cache.yaml\ncharts/takserver/values.yaml'
 # Mutation tooling is isolated from the Pepr package used by cluster jobs.
@@ -272,6 +276,9 @@ check_match ".github/workflows/full-core.yaml" ignore
 check_match ".github/workflows/scan.yaml" ignore
 check_match ".github/test-infra/aws/eks/main.tf" ignore
 check_match "atak/vm/Dockerfile" ignore
+check_match "dev/Dockerfile" ignore
+check_match "dev/run" ignore
+check_decide false $'dev/Dockerfile\ndev/run\ndev/check\ndev/requirements.txt\ndev/install-tools\ndev/smoke'
 check_match "upstream/atak-civ" ignore
 check_match "takx/build-commoncommo.sh" ignore
 check_match "takx/patches/desktop.patch" ignore

@@ -1,5 +1,82 @@
 # Changelog
 
+## [0.18.2](https://github.com/jonathanagustin/uds-takserver/compare/v0.18.1...v0.18.2) (2026-11-18)
+
+
+### Bug Fixes
+
+* bound gateway certificate fetch during trust initialization ([#603](https://github.com/jonathanagustin/uds-takserver/issues/603)) ([d044a34](https://github.com/jonathanagustin/uds-takserver/commit/d044a34b3278f388014e599f88253d0097c83633))
+* **ci:** accept the verified Docker S3 distribution host ([#741](https://github.com/jonathanagustin/uds-takserver/issues/741)) ([bbf3ec7](https://github.com/jonathanagustin/uds-takserver/commit/bbf3ec74cfa80d78b2dadfe520b7935b8fc43c54))
+* **ci:** reject changed archives during install receipt collection ([#742](https://github.com/jonathanagustin/uds-takserver/issues/742)) ([19ee469](https://github.com/jonathanagustin/uds-takserver/commit/19ee469d9feed28416b48a9bed890a1e8b913703))
+* tolerate disappearing GEOS build directories during monitoring ([#737](https://github.com/jonathanagustin/uds-takserver/issues/737)) ([2431356](https://github.com/jonathanagustin/uds-takserver/commit/24313568dd700d23963fcb52264a2eb49f582d1c))
+
+## [0.18.1](https://github.com/jonathanagustin/uds-takserver/compare/v0.18.0...v0.18.1) (2026-11-18)
+
+
+### Bug Fixes
+
+* **ci:** finish benchmark setup failures before artifact uploads ([#729](https://github.com/jonathanagustin/uds-takserver/issues/729)) ([3f2c42e](https://github.com/jonathanagustin/uds-takserver/commit/3f2c42e7252e28df9e2aeed890d10e5101b71c51))
+
+## [0.18.0](https://github.com/jonathanagustin/uds-takserver/compare/v0.17.0...v0.18.0) (2026-11-18)
+
+
+### Features
+
+* **bench:** prepare a counterbalanced PostgreSQL comparison ([#669](https://github.com/jonathanagustin/uds-takserver/issues/669)) ([9ee9d65](https://github.com/jonathanagustin/uds-takserver/commit/9ee9d65ba996d5eed52b2b291b54259fa99f6675))
+* **bench:** validate bounded native startup repeat series ([#695](https://github.com/jonathanagustin/uds-takserver/issues/695)) ([b412dfd](https://github.com/jonathanagustin/uds-takserver/commit/b412dfde4d2cebbd1d4b0c9691e90cdb5f9a2b99))
+* **dev:** provide a containerized shell and Helm check toolchain ([#700](https://github.com/jonathanagustin/uds-takserver/issues/700)) ([743ca35](https://github.com/jonathanagustin/uds-takserver/commit/743ca35750cdc5bfbaad3f7246458b56ecb558dc))
+
+
+### Bug Fixes
+
+* bound agent diagnostics and qualify snapshot identities ([#691](https://github.com/jonathanagustin/uds-takserver/issues/691)) ([c1a8209](https://github.com/jonathanagustin/uds-takserver/commit/c1a8209afc4192da1e4e6397450cb2946046fbe8))
+* bound public release-binding serialization and staging ([#702](https://github.com/jonathanagustin/uds-takserver/issues/702)) ([d2a1719](https://github.com/jonathanagustin/uds-takserver/commit/d2a1719fd30f5c699aff6f1376d02709bc21b9e6))
+* **ci:** compare complete image inventories with authenticated releases ([#715](https://github.com/jonathanagustin/uds-takserver/issues/715)) ([b762a33](https://github.com/jonathanagustin/uds-takserver/commit/b762a339e9bb9af510f63a562ce220a74cca317c))
+* **ci:** preserve baseline pull failures without republish advice ([#716](https://github.com/jonathanagustin/uds-takserver/issues/716)) ([e890dbe](https://github.com/jonathanagustin/uds-takserver/commit/e890dbec5db8a4782e03f748abbfe3bcaff6d1be))
+* **ci:** recheck receipt run history after artifact download ([#651](https://github.com/jonathanagustin/uds-takserver/issues/651)) ([73b8e34](https://github.com/jonathanagustin/uds-takserver/commit/73b8e34ed8f2165609b986c2fed97969b7f7ef45))
+* **ci:** remove package flags unsupported by Zarf 1.x ([#711](https://github.com/jonathanagustin/uds-takserver/issues/711)) ([9dd188e](https://github.com/jonathanagustin/uds-takserver/commit/9dd188edcff8258a24eeff909a7ab8def1f77238))
+* **cloudtak:** keep bake arguments nonempty on Bash 3.2 ([#709](https://github.com/jonathanagustin/uds-takserver/issues/709)) ([490d3c2](https://github.com/jonathanagustin/uds-takserver/commit/490d3c2010004a63c3685f23dc0cf18d4293d8a3))
+* **demo:** isolate publisher controls and retain scene review ([#690](https://github.com/jonathanagustin/uds-takserver/issues/690)) ([f626fa7](https://github.com/jonathanagustin/uds-takserver/commit/f626fa75e5b9ddf682446a03349daa3f9da5987d))
+* **deps:** update minimatch override to 11.0.9 ([#717](https://github.com/jonathanagustin/uds-takserver/issues/717)) ([787ed2f](https://github.com/jonathanagustin/uds-takserver/commit/787ed2fadf567e6db36b77f627da85807ee96416))
+* **deps:** update NATS to 2.15.3 and test the packaged version ([#714](https://github.com/jonathanagustin/uds-takserver/issues/714)) ([8b48d1d](https://github.com/jonathanagustin/uds-takserver/commit/8b48d1dad4459bb6435dcfc0388656ed2c1b75ba))
+* journal PostgreSQL upgrades and recover interrupted preparation ([#707](https://github.com/jonathanagustin/uds-takserver/issues/707)) ([753bd3e](https://github.com/jonathanagustin/uds-takserver/commit/753bd3eba709710aaeae4bc22085ac055e2f0d2f))
+* make registry, caption and TLS fixture contracts explicit ([#704](https://github.com/jonathanagustin/uds-takserver/issues/704)) ([41ccc6c](https://github.com/jonathanagustin/uds-takserver/commit/41ccc6c7b6e3f759a0c9ca9a173c937028470dbb))
+* preserve load tester output after timeout ([#722](https://github.com/jonathanagustin/uds-takserver/issues/722)) ([394165e](https://github.com/jonathanagustin/uds-takserver/commit/394165e54d66793e0e0ae347cddd4ea74d7be60f))
+* reconcile persisted CloudTAK connection settings and credentials ([#705](https://github.com/jonathanagustin/uds-takserver/issues/705)) ([c3e6acf](https://github.com/jonathanagustin/uds-takserver/commit/c3e6acfd24d232ea39e9ed931c81b032101adc96))
+* **release:** verify package provenance from OCI ([#693](https://github.com/jonathanagustin/uds-takserver/issues/693)) ([1c2d2a5](https://github.com/jonathanagustin/uds-takserver/commit/1c2d2a57e4766ba862c0e4e104845929b8f37402))
+* remove owned CoreDNS rewrites when disabled ([#708](https://github.com/jonathanagustin/uds-takserver/issues/708)) ([ca0a9f8](https://github.com/jonathanagustin/uds-takserver/commit/ca0a9f8b66da2e274202debb0fc06b9fc953b001))
+* renew invalid web certificates and reload the TAK API ([#706](https://github.com/jonathanagustin/uds-takserver/issues/706)) ([335fade](https://github.com/jonathanagustin/uds-takserver/commit/335fade42943e328769c61d1aef2fc4b481e0abe))
+* scope QUIC test sockets to their resolved peer ([#699](https://github.com/jonathanagustin/uds-takserver/issues/699)) ([41b76f1](https://github.com/jonathanagustin/uds-takserver/commit/41b76f1a0b290224ff029edbb2e8590d0ba4c4a4))
+* **takclient:** publish credentials for long resource names ([#698](https://github.com/jonathanagustin/uds-takserver/issues/698)) ([5d5fae2](https://github.com/jonathanagustin/uds-takserver/commit/5d5fae20adab6822d90c8cd835cadea299270b80))
+
+
+### Miscellaneous
+
+* record temporary dependency review ([#724](https://github.com/jonathanagustin/uds-takserver/issues/724)) ([094e38a](https://github.com/jonathanagustin/uds-takserver/commit/094e38a261b9e35c06e47ca2acedf1531c301868))
+
+## [0.17.0](https://github.com/jonathanagustin/uds-takserver/compare/v0.16.7...v0.17.0) (2026-11-17)
+
+
+### Features
+
+* build public vehicle CoT metadata library ([#586](https://github.com/jonathanagustin/uds-takserver/issues/586)) ([9a57499](https://github.com/jonathanagustin/uds-takserver/commit/9a574990c5b5f742f255284503e583a072315785))
+* qualify signed Core source candidates on native ARM runners ([#623](https://github.com/jonathanagustin/uds-takserver/issues/623)) ([36266a9](https://github.com/jonathanagustin/uds-takserver/commit/36266a94e9a9c01dfbc7b1d62e29337a34ad2b14))
+* reuse verified Draco components in read-only PR builds ([#621](https://github.com/jonathanagustin/uds-takserver/issues/621)) ([d934830](https://github.com/jonathanagustin/uds-takserver/commit/d9348304397a810b162c0da2a3ecd27bfa561f40))
+
+
+### Bug Fixes
+
+* bind cleanup ConfigMaps to their source authorities ([#610](https://github.com/jonathanagustin/uds-takserver/issues/610)) ([38b7fd2](https://github.com/jonathanagustin/uds-takserver/commit/38b7fd2d667b0ff2ab6a8d62918b5a8b2b1529a4))
+* bind Zarf-rewritten config images to registry authority ([#611](https://github.com/jonathanagustin/uds-takserver/issues/611)) ([57873f4](https://github.com/jonathanagustin/uds-takserver/commit/57873f45a2d042d7bfda98138fe7c5dfc94319a8))
+* bound full identity journals separately from phase proofs ([#624](https://github.com/jonathanagustin/uds-takserver/issues/624)) ([3c5d656](https://github.com/jonathanagustin/uds-takserver/commit/3c5d656251bd910c00b74f6ac47c780aa2767f01))
+* check elevation JNI construction and callback boundaries ([#591](https://github.com/jonathanagustin/uds-takserver/issues/591)) ([1759ccd](https://github.com/jonathanagustin/uds-takserver/commit/1759ccd18e4e8372c4276e231000d6395c46698d))
+* check feature-renderer JNI callbacks and pointer ownership ([#595](https://github.com/jonathanagustin/uds-takserver/issues/595)) ([e2a6069](https://github.com/jonathanagustin/uds-takserver/commit/e2a60690d09950e3623be0779bd0cf224681e221))
+* create private Core signing identity file with supported API ([#615](https://github.com/jonathanagustin/uds-takserver/issues/615)) ([f6df6ec](https://github.com/jonathanagustin/uds-takserver/commit/f6df6ec2d92bbd3332293ea1b64fbc287bb65cf8))
+* preserve Core CRD schema during fresh Velero chart installation ([#620](https://github.com/jonathanagustin/uds-takserver/issues/620)) ([910563c](https://github.com/jonathanagustin/uds-takserver/commit/910563cfc367436c6593a136841ec9602a5b7488))
+* preserve package keys across Bash versions and hash failures ([#628](https://github.com/jonathanagustin/uds-takserver/issues/628)) ([fa5236a](https://github.com/jonathanagustin/uds-takserver/commit/fa5236a6f40dea927f52a5cc619a23ab7213777d))
+* reconcile baseline Core CRD metadata through its signed package ([#618](https://github.com/jonathanagustin/uds-takserver/issues/618)) ([7768eb6](https://github.com/jonathanagustin/uds-takserver/commit/7768eb65b665e9f02997110b8ef3a274b4865c94))
+* refresh extracted admin certificates after reinstall ([#614](https://github.com/jonathanagustin/uds-takserver/issues/614)) ([1484964](https://github.com/jonathanagustin/uds-takserver/commit/1484964bb3e2dfe53d4de45d614e17bd51baf0e9))
+
 ## [0.16.7](https://github.com/jonathanagustin/uds-takserver/compare/v0.16.6...v0.16.7) (2026-11-14)
 
 

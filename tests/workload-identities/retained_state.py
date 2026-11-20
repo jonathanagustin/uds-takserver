@@ -15,16 +15,19 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
+import zlib
 from pathlib import Path
 import yaml
 
 APP_RELEASES={'takserver':{'takserver','uds-takserver-config'},'cloudtak':{'uds-cloudtak'}}
 GENERATED_SECRETS={'takserver-ca-key','takserver-certs','tak-health-client'}
-SOURCE_CLEANUP={(ns,'Secret',name) for ns,name in [('takserver',name) for name in GENERATED_SECRETS|{'takserver-keystore','takclient-enrollment','takserver-crl'}]+[('cloudtak','cloudtak-tak-admin')]}|{('takserver','ConfigMap','cert-migration'),('takserver','ConfigMap','takserver-startup')}
+SOURCE_CLEANUP={(ns,'Secret',name) for ns,name in [('takserver',name) for name in GENERATED_SECRETS|{'takserver-keystore','takclient-enrollment','takserver-crl'}]+[('cloudtak','cloudtak-tak-admin')]}|{('takserver','ConfigMap','cert-migration'),('takserver','ConfigMap','takserver-startup'),('takserver','ConfigMap','ignite-extensions')}
 
 def cleanup_allowed(rec):
     if (rec.get('namespace'),rec.get('kind'),rec.get('name'))==('takserver','Secret','takserver-crl'):
         return isinstance(rec.get('emptyCrlDataSHA256'),str) and bool(re.fullmatch('[a-f0-9]{64}',rec['emptyCrlDataSHA256']))
+    if (rec.get('namespace'),rec.get('kind'),rec.get('name'))==('takserver','ConfigMap','ignite-extensions'):
+        return all(isinstance(rec.get(key),str) and bool(re.fullmatch('[a-f0-9]{64}',rec[key])) for key in ('imageBoundJarSHA256','imageSourceSHA256'))
     return rec['namespace'] in APP_RELEASES and (rec['kind']=='PersistentVolumeClaim' and 'parent' in rec or (rec['namespace'],rec['kind'],rec['name']) in SOURCE_CLEANUP)
 
 def require(value,message):
@@ -32,7 +35,7 @@ def require(value,message):
 
 def sha(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
-SOURCE_FILES=('pepr/capabilities/workload.ts','pepr/capabilities/cloudtak-admin.ts','pepr/capabilities/takclient-credentials.ts','pepr/capabilities/takclient.ts','pepr/capabilities/takclient-pki.ts','pepr/capabilities/takclient-capability.ts')
+SOURCE_FILES=('pepr/capabilities/workload.ts','pepr/capabilities/cloudtak-admin.ts','pepr/capabilities/takclient-credentials.ts','pepr/capabilities/takclient.ts','pepr/capabilities/takclient-pki.ts','pepr/capabilities/takclient-capability.ts','.github/container-and-chart/docker/Dockerfile','.github/container-and-chart/docker/publish-cert-configmap.sh')
 
 def source_files():
     return {name:hashlib.sha256((Path(__file__).resolve().parents[2]/name).read_bytes()).hexdigest() for name in SOURCE_FILES}
@@ -343,8 +346,9 @@ def capture(driver):
                 records.append(rec)
     for config in driver.get('configmaps')['items']:
         if config['metadata']['name']=='takserver-startup':startup_map(config)
-        if config['metadata']['name'] in ('cert-migration','takserver-startup'):
-            rec=resource_record(config);rec['dataSHA256']=sha({'data':config.get('data',{}),'binaryData':config.get('binaryData',{})});records.append(rec)
+        image_binding=ignite_binding(driver,config) if config['metadata']['name']=='ignite-extensions' else {}
+        if config['metadata']['name'] in ('cert-migration','takserver-startup','ignite-extensions'):
+            rec=resource_record(config);rec['dataSHA256']=sha({'data':config.get('data',{}),'binaryData':config.get('binaryData',{})});rec.update(image_binding);records.append(rec)
     require(any(x['name']=='takserver-keystore' for x in records) and any(x['name']=='cert-migration' for x in records),'source-generated credential state missing')
     return {'source':origin,'records':records}
 
@@ -366,6 +370,8 @@ def verify(driver,proof,remove_sentinels=False):
         else:
             value=current.get('data',{}) if rec['kind']=='Secret' else {'data':current.get('data',{}),'binaryData':current.get('binaryData',{})}
             require(sha(value)==rec['dataSHA256'],'application credential/certificate data changed')
+            if rec['kind']=='ConfigMap' and rec['name']=='ignite-extensions':
+                require(ignite_binding(driver,current)=={key:rec[key] for key in ('imageBoundJarSHA256','imageSourceSHA256')},'bound Ignite image source changed')
             observations.append({'kind':rec['kind'],'name':rec['name'],'namespace':rec['namespace'],'uid':meta['uid'],'dataSHA256':sha(value),'recreatedHook':rec.get('recreatedHook',False)})
 
 
@@ -385,6 +391,10 @@ def cleanup_snapshot(driver,proof):
             if rec['namespace']=='takserver' and rec['name']=='takserver-crl':
                 require(sha(current.get('data',{}))==rec['emptyCrlDataSHA256'],'verified empty CRL data changed')
                 item['emptyCrlDataSHA256']=rec['emptyCrlDataSHA256']
+            if rec['kind']=='ConfigMap' and rec['name']=='ignite-extensions':
+                require(item['uid']==rec['uid'],'verified Ignite map replaced before cleanup snapshot')
+                require(ignite_jar(current)==rec['imageBoundJarSHA256'],'verified Ignite binary changed')
+                item.update({key:rec[key] for key in ('imageBoundJarSHA256','imageSourceSHA256')})
             if rec['kind']=='PersistentVolumeClaim':
                 require(item['uid']==rec['uid'],'verified PVC replaced before cleanup snapshot')
                 item['parent']=claim_parent(driver,current)
@@ -427,7 +437,7 @@ def validate_clean_inventory_failure(snapshot):
         require(type(obj['deleting']) is bool and isinstance(obj['objectSHA256'],str) and
                 re.fullmatch('[a-f0-9]{64}',obj['objectSHA256']),'clean inventory object state differs')
         if snapshot['reason']=='preserved-trust-changed':
-            require(obj['name'] in ('kube-root-ca.crt','istio-ca-root-cert','uds-trust-bundle'),
+            require(obj['name'] in ('kube-root-ca.crt','istio-ca-root-cert','istio-ca-crl','uds-trust-bundle'),
                     'clean inventory trust name differs')
         names.append(obj['name'])
     require(names==sorted(set(names)),'clean inventory ordering or duplicate differs')
@@ -767,6 +777,8 @@ def conditional_delete(driver,rec):
         raise ValueError('retained resource identity/metadata changed')
     if (rec['namespace'],rec['kind'],rec['name'])==('takserver','Secret','takserver-crl'):
         require(sha(current.get('data',{}))==rec['emptyCrlDataSHA256'],'verified empty CRL data changed')
+    if (rec['namespace'],rec['kind'],rec['name'])==('takserver','ConfigMap','ignite-extensions'):
+        require(ignite_jar(current)==rec['imageBoundJarSHA256'],'verified Ignite binary changed')
     if rec['kind']=='PersistentVolumeClaim':
         volume=driver.get('persistentvolume',rec['parent']['volumeName'],namespace='default')
         require(volume['metadata']['uid']==rec['parent']['volumeUID'] and volume['spec']['claimRef']['uid']==rec['uid'] and volume['spec']['claimRef']['namespace']==rec['namespace'] and volume['spec']['claimRef']['name']==rec['name'],'retained PVC volume ownership changed')
@@ -893,6 +905,104 @@ def generated_secret(driver,obj,cleanup=False):
     return False
 
 
+def ignite_jar(obj):
+    """The literal publisher payload, bound separately to the application image."""
+    meta=obj.get('metadata',{})
+    require(obj.get('apiVersion')=='v1' and obj.get('kind')=='ConfigMap' and
+            meta.get('namespace')=='takserver' and meta.get('name')=='ignite-extensions' and
+            not meta.get('deletionTimestamp') and not meta.get('ownerReferences') and
+            not obj.get('data') and set(obj.get('binaryData',{}))=={'ignite-extensions.jar'},
+            'Ignite map differs from literal publisher payload')
+    raw=base64.b64decode(obj['binaryData']['ignite-extensions.jar'],validate=True)
+    require(0<len(raw)<=1024*1024,'Ignite binary size differs')
+    return hashlib.sha256(raw).hexdigest()
+
+
+def zarf_image_reference(registry,image):
+    """Zarf v0.89.0 transform for fully-qualified TAK tag/digest references."""
+    authority=r'[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?'
+    require(isinstance(registry,str) and re.fullmatch(authority,registry),'unsupported Zarf registry authority')
+    require(isinstance(image,str) and len(image)<=1024 and image.count('@')<=1,'unsupported source image')
+    name_tag,_,digest=image.partition('@')
+    slash=name_tag.rfind('/');colon=name_tag.rfind(':')
+    name,tag=(name_tag[:colon],name_tag[colon+1:]) if colon>slash else (name_tag,'latest')
+    host,separator,path=name.partition('/')
+    require(separator and re.fullmatch(authority,host) and ('.' in host or ':' in host or host=='localhost') and
+            host not in ('docker.io','index.docker.io') and
+            re.fullmatch(r'[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*',path) and
+            re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}',tag) and
+            (not digest or re.fullmatch(r'sha256:[a-f0-9]{64}',digest)), 'unsupported source image')
+    if registry.startswith(host):return image
+    if digest:return registry+'/'+path+'@'+digest
+    return registry+'/'+path+':'+tag+'-zarf-'+str(zlib.crc32(name.encode()))
+
+
+def zarf_image_binding(driver,pod,main,pod_image):
+    # hooks/pods.go records the original image and marks its mutation. The
+    # registry credential is generated from the same retained Zarf authority.
+    key='zarf.dev/'+('original-image-'+main['name'])[:63].rstrip('-')
+    meta=pod['metadata']
+    require(meta.get('labels',{}).get('zarf-agent')=='patched' and
+            meta.get('annotations',{}).get(key)==main['image'] and
+            isinstance(pod_image,str) and '/' in pod_image,'Pod image has no exact Zarf source marker')
+    source=driver.get('secret','private-registry',namespace='zarf')
+    source_hash=registry_secret_digest(source,'zarf')
+    raw=base64.b64decode(source['data']['.dockerconfigjson'],validate=True)
+    require(len(raw)<=64*1024,'Zarf registry credential bound differs')
+    def unique(pairs):
+        value={}
+        for k,v in pairs:
+            require(k not in value,'duplicate Zarf registry field');value[k]=v
+        return value
+    config=json.loads(raw,object_pairs_hook=unique);auths=config.get('auths')
+    registry=pod_image.split('/',1)[0]
+    require(set(config)=={'auths'} and isinstance(auths,dict) and 1<=len(auths)<=64 and
+            registry in auths and pod_image==zarf_image_reference(registry,main['image']),
+            'Pod image differs from the bound Zarf registry transform')
+    return source_hash
+
+
+def ignite_image(driver):
+    """Resolve one Ready config container through the frozen Deployment UID."""
+    deployment=driver.get('deployment','takserver-config',namespace='takserver')
+    meta=deployment['metadata'];uid=driver.state['deploymentUIDs']['takserver-config']
+    require(meta.get('uid')==uid and not meta.get('deletionTimestamp'),'Ignite source Deployment changed')
+    containers=deployment['spec']['template']['spec']['containers']
+    require(containers and containers[0].get('name') and containers[0].get('image'),'Ignite source container missing')
+    main=containers[0]
+    replicasets={rs['metadata']['uid'] for rs in driver.get('replicasets',namespace='takserver')['items']
+        if not rs['metadata'].get('deletionTimestamp') and
+        any(o.get('kind')=='Deployment' and o.get('uid')==uid and o.get('controller') is True for o in rs['metadata'].get('ownerReferences',[]))}
+    candidates=[]
+    for pod in driver.get('pods',namespace='takserver')['items']:
+        owners=[o for o in pod['metadata'].get('ownerReferences',[]) if o.get('controller') is True]
+        if len(owners)!=1 or owners[0].get('kind')!='ReplicaSet' or owners[0].get('uid') not in replicasets:continue
+        if pod['metadata'].get('deletionTimestamp') or pod.get('status',{}).get('phase')!='Running':continue
+        if not any(c.get('type')=='Ready' and c.get('status')=='True' for c in pod['status'].get('conditions',[])):continue
+        matches=[c for c in pod['spec']['containers'] if c['name']==main['name']]
+        states=[c for c in pod['status'].get('containerStatuses',[]) if c['name']==main['name'] and c.get('ready') is True and c.get('state',{}).get('running')]
+        if len(matches)!=1 or len(states)!=1:continue
+        pod_image=matches[0].get('image')
+        registry_source=(zarf_image_binding(driver,pod,main,pod_image) if pod_image!=main['image'] else None)
+        require(not any(m.get('mountPath','').rstrip('/') in ('','/ignite-extensions.jar') for m in matches[0].get('volumeMounts',[])),'Ignite source file is volume-mounted')
+        image_id=states[0].get('imageID','')
+        require(bool(re.search(r'(?:^|@|://)sha256:[a-f0-9]{64}$',image_id)),'Ignite image has no immutable runtime identity')
+        candidates.append({'pod':pod['metadata']['name'],'podUID':pod['metadata']['uid'],'ownerUID':owners[0]['uid'],
+            'container':main['name'],'deploymentUID':uid,'image':main['image'],'imageID':image_id,
+            'podImage':pod_image,'registrySourceSHA256':registry_source})
+    require(len(candidates)==1,'Ignite source config Pod is not uniquely Ready')
+    return candidates[0]
+
+
+def ignite_binding(driver,obj):
+    jar=ignite_jar(obj);before=ignite_image(driver)
+    result=driver.exec(before['pod'],before['container'],['sha256sum','--','/ignite-extensions.jar'],namespace='takserver')
+    require(result.returncode==0 and not result.stderr.strip() and
+            result.stdout.strip()==jar+'  /ignite-extensions.jar','Ignite map differs from bound config image binary')
+    require(ignite_image(driver)==before,'Ignite source changed during binary observation')
+    return {'imageBoundJarSHA256':jar,'imageSourceSHA256':sha({k:before[k] for k in ('deploymentUID','image','imageID','container','podImage','registrySourceSHA256')})}
+
+
 def trust_binding(driver,obj):
     """Bind public trust data to retained Core authority and exact source metadata."""
     meta=obj['metadata'];namespace=meta['namespace'];name=meta['name']
@@ -900,9 +1010,10 @@ def trust_binding(driver,obj):
     if name=='kube-root-ca.crt':
         source_namespace,source_name,key,source_key='kube-system',name,'ca.crt','ca.crt'
         source_owner='kubernetes-root-ca-publisher'
-    elif name=='istio-ca-root-cert':
+    elif name in ('istio-ca-root-cert','istio-ca-crl'):
         require(meta.get('labels',{}).get('istio.io/config')=='true','Istio trust source marker missing')
-        source_namespace,source_name,key,source_key='istio-system',name,'root-cert.pem','root-cert.pem'
+        key='ca-crl.pem' if name=='istio-ca-crl' else 'root-cert.pem'
+        source_namespace,source_name,source_key='istio-system',name,key
         source_owner='istio-namespace-controller'
     elif name=='uds-trust-bundle':
         labels=meta.get('labels',{});require(labels.get('uds/package')==namespace and labels.get('uds/ca-bundle')=='true','UDS bundle source labels differ')
@@ -913,7 +1024,7 @@ def trust_binding(driver,obj):
         source_owner='uds-core-ca-bundle-controller'
     else:raise ValueError('unknown trust map')
     source=driver.get('configmap',source_name,namespace=source_namespace)
-    require(set(obj.get('data',{}))=={key} and obj['data'][key] and obj['data'][key]==source.get('data',{}).get(source_key),'trust map is not the bound Core authority data')
+    require(set(obj.get('data',{}))=={key} and isinstance(obj['data'][key],str) and (bool(obj['data'][key]) or name=='istio-ca-crl') and source_key in source.get('data',{}) and obj['data'][key]==source['data'][source_key],'trust map is not the bound Core authority data')
     rec=resource_record(obj)
     rec.update(dataSHA256=sha(obj['data']),sourceOwner=source_owner,sourceNamespace=source_namespace,sourceName=source_name,sourceUID=source['metadata']['uid'],sourceDataSHA256=sha(source.get('data',{})))
     return rec
@@ -924,7 +1035,7 @@ def capture_trust(driver):
     for namespace in APP_RELEASES:
         if not driver.kube('get','namespace',namespace,'--ignore-not-found','-o','json').strip():continue
         for obj in driver.get('configmaps',namespace=namespace)['items']:
-            if obj['metadata']['name'] in ('kube-root-ca.crt','istio-ca-root-cert','uds-trust-bundle'):result.append(trust_binding(driver,obj))
+            if obj['metadata']['name'] in ('kube-root-ca.crt','istio-ca-root-cert','istio-ca-crl','uds-trust-bundle'):result.append(trust_binding(driver,obj))
     return result
 
 

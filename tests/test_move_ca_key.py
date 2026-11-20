@@ -6,7 +6,9 @@
 api_curl retries a dropped handshake and still returns an HTTP 409, which
 the cert hooks treat as "already exists"."""
 
+import os
 import socket
+import tempfile
 import struct
 import subprocess
 import threading
@@ -231,6 +233,58 @@ def split_fields(body: str, section: str) -> list[tuple[str, str]]:
         name, value = line.split("\t", 1)
         rows.append((name, value))
     return rows
+
+
+class PrivateKeyEncodingTests(unittest.TestCase):
+    def openssl(self, *args, env):
+        return subprocess.run(["openssl", *args], env=env, capture_output=True, check=True).stdout
+
+    def fixture(self, directory, env, name, password):
+        clear = directory / "clear.pem"
+        self.openssl("genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out", str(clear), env=env)
+        path = directory / name
+        self.openssl("pkcs8", "-topk8", "-v2", "des-ede3-cbc", "-in", str(clear),
+                     "-passout", "env:" + password, "-out", str(path), env=env)
+        clear.unlink()
+        return path
+
+    def normalize(self, directory, env):
+        return subprocess.run(["bash", "-eu", "-o", "pipefail", "-c",
+            'PUBLISH_CERT_SOURCE_ONLY=1; source "$1"; normalize_generated_private_keys "$2"',
+            "bash", str(PUBLISH), str(directory)], env=env, capture_output=True, text=True, timeout=20)
+
+    def test_old_keys_become_modern_encrypted_pkcs8_without_changing_identity_or_password(self):
+        env = {**os.environ, "CAPASS": "synthetic-ca-Aa1!", "PASS": "synthetic-client-Bb2!"}
+        with tempfile.TemporaryDirectory(prefix="key encoding ") as temporary:
+            directory = Path(temporary)
+            keys = [(self.fixture(directory, env, name, password), password)
+                    for name, password in (("ca-do-not-share.key", "CAPASS"), ("admin.key", "PASS"))]
+            public = {path: self.openssl("pkey", "-in", str(path), "-passin", "env:" + password,
+                       "-pubout", "-outform", "DER", env=env) for path, password in keys}
+            self.assertEqual(self.normalize(directory, env).returncode, 0)
+            for path, password in keys:
+                metadata = self.openssl("asn1parse", "-in", str(path), env=env).decode()
+                self.assertIn("aes-256-cbc", metadata)
+                self.assertIn("hmacWithSHA256", metadata)
+                self.assertNotIn("des-ede3-cbc", metadata)
+                self.assertEqual(self.openssl("pkey", "-in", str(path), "-passin", "env:" + password,
+                                 "-pubout", "-outform", "DER", env=env), public[path])
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(list(directory.glob("*.pkcs8.*")), [])
+
+    def test_failed_decryption_preserves_original_and_removes_temporary_output(self):
+        env = {**os.environ, "CAPASS": "synthetic-ca-Aa1!", "PASS": "synthetic-client-Bb2!"}
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            path = self.fixture(directory, env, "admin.key", "PASS")
+            before = path.read_bytes()
+            result = self.normalize(directory, {**env, "PASS": "wrong-synthetic-password"})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(list(directory.glob("*.pkcs8.*")), [])
+            self.assertEqual(result.stderr.strip(), "Generated private key normalization failed")
+            for value in env["CAPASS"], env["PASS"], "wrong-synthetic-password":
+                self.assertNotIn(value, result.stdout + result.stderr)
 
 
 class SplitKeyTests(unittest.TestCase):

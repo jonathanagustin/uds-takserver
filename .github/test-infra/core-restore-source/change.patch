@@ -1,0 +1,86 @@
+diff --git a/src/velero/chart/templates/crds/restores.yaml b/src/velero/chart/templates/crds/restores.yaml
+index fa750cf..eadaa2e 100644
+--- a/src/velero/chart/templates/crds/restores.yaml
++++ b/src/velero/chart/templates/crds/restores.yaml
+@@ -409,6 +409,33 @@ spec:
+                 - name
+                 type: object
+                 x-kubernetes-map-type: atomic
++              resourcePolicy:
++                description: |-
++                  ResourcePolicy specifies the reference to a ConfigMap containing resource
++                  filter policies for this restore. The ConfigMap can contain a
++                  namespacedFilterPolicies section that specifies per-namespace resource type
++                  filters, label selectors, and resource name patterns, and a
++                  clusterScopedFilterPolicy section for per-kind filtering of cluster-scoped
++                  resources. The ConfigMap format is the same as for BackupSpec.ResourcePolicy.
++                nullable: true
++                properties:
++                  apiGroup:
++                    description: |-
++                      APIGroup is the group for the resource being referenced.
++                      If APIGroup is not specified, the specified Kind must be in the core API group.
++                      For any other third-party types, APIGroup is required.
++                    type: string
++                  kind:
++                    description: Kind is the type of resource being referenced
++                    type: string
++                  name:
++                    description: Name is the name of resource being referenced
++                    type: string
++                required:
++                - kind
++                - name
++                type: object
++                x-kubernetes-map-type: atomic
+               restorePVs:
+                 description: |-
+                   RestorePVs specifies whether to restore all included
+diff --git a/src/velero/tasks.yaml b/src/velero/tasks.yaml
+index 09db579..41b6e39 100644
+--- a/src/velero/tasks.yaml
++++ b/src/velero/tasks.yaml
+@@ -13,8 +13,27 @@ tasks:
+   - name: validate
+     actions:
+       - task: health-check
++      - task: validate-restore-policy-schema
+       - task: execute-backup
+ 
++  - name: validate-restore-policy-schema
++    description: Validate the Restore resource policy API without persisting a restore
++    actions:
++      - description: Dry-run a Restore with a resource policy reference
++        cmd: |-
++          uds zarf tools kubectl create --dry-run=server --validate=strict -f - >/dev/null <<'EOF'
++          apiVersion: velero.io/v1
++          kind: Restore
++          metadata:
++            generateName: uds-restore-policy-schema-
++            namespace: velero
++          spec:
++            backupName: schema-validation-only
++            resourcePolicy:
++              kind: configmap
++              name: schema-validation-only
++          EOF
++
+   - name: health-check
+     actions:
+       - description: Velero StatefulSet Health Check
+diff --git a/src/velero/common/zarf.yaml b/src/velero/common/zarf.yaml
+--- a/src/velero/common/zarf.yaml
++++ b/src/velero/common/zarf.yaml
+@@ -1,2 +1,2 @@
+-# Copyright 2024 Defense Unicorns
++# Copyright 2024-2026 Defense Unicorns
+ # SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Defense-Unicorns-Commercial
+@@ -41,6 +41,8 @@
+           - sourcePath: .velero.uds-velero-config
+             targetPath: .
+       - name: velero
++        # Core config owns the CRDs; preserve them when upstream CRDs already exist.
++        serverSideApply: "false"
+         namespace: velero
+         url: https://vmware-tanzu.github.io/helm-charts
+         version: 12.2.1
