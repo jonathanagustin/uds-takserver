@@ -228,10 +228,19 @@ test("a CoreDNS rollout is done only when the new pods are Available", () => {
     false,
   );
   assert.equal(
-    rolloutDone({ metadata: { generation: 3 }, spec: { replicas: 1 }, status: { observedGeneration: 3, updatedReplicas: 1, availableReplicas: 1 } }),
+    rolloutDone({ metadata: { generation: 3 }, spec: { replicas: 1 }, status: { observedGeneration: 3, replicas: 1, updatedReplicas: 1, availableReplicas: 1, unavailableReplicas: 0 } }),
     true,
   );
-  assert.equal(rolloutDone({ metadata: { generation: 3 }, status: { updatedReplicas: 1, availableReplicas: 1 } }), true);
+  assert.equal(rolloutDone({ metadata: { generation: 3 }, status: { updatedReplicas: 1, availableReplicas: 1 } }), false);
+  // RollingUpdate with maxSurge=1: old pod is still available while new pod is creating.
+  assert.equal(
+    rolloutDone({ metadata: { generation: 3 }, spec: { replicas: 1 }, status: { observedGeneration: 3, replicas: 2, updatedReplicas: 1, availableReplicas: 1, unavailableReplicas: 1 } }),
+    false,
+  );
+  assert.equal(
+    rolloutDone({ metadata: { generation: 3 }, spec: { replicas: 1 }, status: { observedGeneration: 3, replicas: 1, updatedReplicas: 1, availableReplicas: 1, unavailableReplicas: 1 } }),
+    false,
+  );
 });
 
 test("waitRollout polls until the Deployment is Available", async () => {
