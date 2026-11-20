@@ -58,7 +58,7 @@ const EXPECTED: Rule[] = [
   { apiGroups: ["networking.istio.io"], resources: ["destinationrules"], verbs: ["watch"] },
   { apiGroups: ["pepr.dev"], resources: ["peprstores"], verbs: ["create", "get", "patch", "watch"] },
   // Pepr's finalizer patch. finalize-chart moves it into the takclients Role.
-  { apiGroups: ["tak.jonathanagustin.github.io"], resources: ["takclients"], verbs: ["patch"] },
+  { apiGroups: ["tak.uds.dev"], resources: ["takclients"], verbs: ["patch"] },
 ];
 
 function generatedRules(): Rule[] {

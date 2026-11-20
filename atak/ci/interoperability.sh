@@ -56,13 +56,13 @@ prepare() {
 # The same controller and server group as e2e.sh's ATAK device. The silent
 # observer is not a contact; Android uses the actual Broadcast UI target.
 k create -f - >/dev/null <<YAML
-apiVersion: tak.jonathanagustin.github.io/v1alpha1
+apiVersion: tak.uds.dev/v1alpha1
 kind: TakClient
 metadata:
   name: ${name}
   namespace: takclients
   labels:
-    tak.jonathanagustin.github.io/scenario-owner: "${owner}"
+    tak.uds.dev/scenario-owner: "${owner}"
 spec:
   callsign: ${name}
   groups:

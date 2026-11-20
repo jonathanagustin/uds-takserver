@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/jonathanagustin/uds-takserver/compare/v0.20.0...v1.0.0) (2026-11-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* rename TakClient CRD API group to tak.uds.dev ([#752](https://github.com/jonathanagustin/uds-takserver/issues/752))
+
+### Features
+
+* rename TakClient CRD API group to tak.uds.dev ([#752](https://github.com/jonathanagustin/uds-takserver/issues/752)) ([b0b4eda](https://github.com/jonathanagustin/uds-takserver/commit/b0b4eda2be416936a86264c798a0e9afd8c36604))
+
 ## [0.20.0](https://github.com/jonathanagustin/uds-takserver/compare/v0.19.0...v0.20.0) (2026-11-20)
 
 
