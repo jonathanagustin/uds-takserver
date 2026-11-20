@@ -48,7 +48,7 @@ zarf() {
 # package contents. Keep tool pins, checkout attributes and runtime helpers.
 inputs() {
   git ls-files -s -z -- . \
-    ':(exclude)docs/**' ':(exclude)docs-site/**' ':(exclude)adr/**' ':(exclude)tests/**' \
+    ':(exclude)docs/**' ':(exclude)docs-site/**' ':(exclude)dev/**' ':(exclude)adr/**' ':(exclude)tests/**' \
     ':(exclude).github/**' ':(exclude)bundle/**' ':(exclude)atak/**' \
     ':(exclude)demo/**' ':(exclude)bench/**' ':(exclude)*.md' \
     ':(exclude)renovate.json' ':(exclude).release-please-manifest.json' \
@@ -165,7 +165,7 @@ prebuilt() {
   done
   echo "dev-package: pulling ${r} (waited ${waited}s)" >&2
   rm -f "${file}"
-  if ! zarf package pull "oci://${r}" --output-directory . --no-progress >&2 || [[ ! -f "${file}" ]]; then
+  if ! zarf package pull "oci://${r}" --output-directory . >&2 || [[ ! -f "${file}" ]]; then
     echo "dev-package: pull of ${r} failed; creating the package here" >&2
     echo false
     return

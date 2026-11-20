@@ -17,6 +17,16 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 cd "${root}"
 
+# A read-only fork cannot publish its new immutable key into upstream GHCR.
+# Prepare the exact verified candidate bytes behind a job-local source mirror;
+# Zarf's registry override preserves the canonical package and workload refs.
+if [[ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]]; then
+  fork="$(python3 .github/scripts/candidate-consumer.py is-fork)"
+  if [[ "${fork}" = "true" ]]; then
+    python3 .github/scripts/candidate-consumer.py prepare
+  fi
+fi
+
 cloudtak_version="$(git config -f .gitmodules submodule.upstream/cloudtak.branch)"
 cloudtak_tag="$(./.github/container-and-chart/cloudtak/build.sh --tag)"
 postgis_version="18-3.6"

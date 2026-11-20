@@ -386,6 +386,30 @@ test("the data package has the manifest, the 8089 stream, the truststore, and th
   assert.deepEqual(zip([{ name: "a.txt", data: Buffer.from("hello") }]), one);
 });
 
+test("CA readiness diagnostics classify unavailable inputs without exposing them", async () => {
+  const cases = [
+    { reason: "missing-certificate", remove: "config" },
+    { reason: "missing-key", remove: "key" },
+    { reason: "missing-passphrase", remove: "pass" },
+    { reason: "unreadable-material", remove: "invalid" },
+  ];
+  for (const { reason, remove } of cases) {
+    const { d, store } = fake();
+    if (remove === "config") delete store.configMaps["takserver/cert-migration"];
+    if (remove === "key") delete store.secrets["takserver/takserver-ca-key"];
+    if (remove === "pass") delete store.secrets["takserver/takserver-keystore"];
+    if (remove === "invalid") store.secrets["takserver/takserver-ca-key"].data!["ca-do-not-share.key"] = b64("private-input-sentinel");
+    const observations: string[] = [];
+    assert.equal(await readCa(d.cluster, value => observations.push(value)), undefined);
+    assert.deepEqual(observations, [reason]);
+    assert.equal(store.secrets[`takserver/${CRL_SECRET}`], undefined);
+  }
+  const { d } = fake();
+  const observations: string[] = [];
+  assert.ok(await readCa(d.cluster, value => observations.push(value)));
+  assert.deepEqual(observations, []);
+});
+
 test("readCa and readAdmin wait for every piece", async () => {
   const { d, store } = fake();
   assert.notEqual(await readCa(d.cluster), undefined);

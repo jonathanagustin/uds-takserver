@@ -1,0 +1,205 @@
+{
+  "conclusion": "success",
+  "head_sha": "d044a34b3278f388014e599f88253d0097c83633",
+  "job_id": 135135600561,
+  "labels": [
+    "ubuntu-22.04"
+  ],
+  "run_attempt": 1,
+  "run_id": 44398702032,
+  "status": "completed",
+  "steps": [
+    {
+      "completed_at": "2026-11-18T21:10:48Z",
+      "conclusion": "success",
+      "name": "Set up job",
+      "number": 1,
+      "started_at": "2026-11-18T21:10:46Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:10:50Z",
+      "conclusion": "success",
+      "name": "Checkout exact experiment source",
+      "number": 2,
+      "started_at": "2026-11-18T21:10:48Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:10:50Z",
+      "conclusion": "success",
+      "name": "Verify native architecture before setup or cluster work",
+      "number": 3,
+      "started_at": "2026-11-18T21:10:50Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:10:53Z",
+      "conclusion": "success",
+      "name": "Install pinned client tools",
+      "number": 4,
+      "started_at": "2026-11-18T21:10:50Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:10:53Z",
+      "conclusion": "success",
+      "name": "Set up test Python",
+      "number": 5,
+      "started_at": "2026-11-18T21:10:53Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:10:55Z",
+      "conclusion": "success",
+      "name": "Install Docker Compose",
+      "number": 6,
+      "started_at": "2026-11-18T21:10:53Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:10:55Z",
+      "conclusion": "success",
+      "name": "Use the pinned embedded Kubernetes client",
+      "number": 7,
+      "started_at": "2026-11-18T21:10:55Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:10:55Z",
+      "conclusion": "success",
+      "name": "Refuse a remote daemon or existing cluster before mutation",
+      "number": 8,
+      "started_at": "2026-11-18T21:10:55Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:10:55Z",
+      "conclusion": "success",
+      "name": "Prepare the disposable runner",
+      "number": 9,
+      "started_at": "2026-11-18T21:10:55Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:11:19Z",
+      "conclusion": "success",
+      "name": "Acquire only the matching published application package",
+      "number": 10,
+      "started_at": "2026-11-18T21:10:55Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:16:07Z",
+      "conclusion": "success",
+      "name": "Restore the slim Core baseline without the application",
+      "number": 11,
+      "started_at": "2026-11-18T21:11:19Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:16:10Z",
+      "conclusion": "success",
+      "name": "Bind this job's disposable cluster and fit the runner",
+      "number": 12,
+      "started_at": "2026-11-18T21:16:07Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:16:11Z",
+      "conclusion": "success",
+      "name": "Begin the cold application boundary",
+      "number": 13,
+      "started_at": "2026-11-18T21:16:10Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:32:51Z",
+      "conclusion": "success",
+      "name": "Deploy and validate the normal application bundle",
+      "number": 14,
+      "started_at": "2026-11-18T21:16:11Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:32:57Z",
+      "conclusion": "success",
+      "name": "Finish the cold observation",
+      "number": 15,
+      "started_at": "2026-11-18T21:32:51Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:33:02Z",
+      "conclusion": "success",
+      "name": "Begin the warm application boundary",
+      "number": 16,
+      "started_at": "2026-11-18T21:32:57Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:35:05Z",
+      "conclusion": "success",
+      "name": "Restart only the two measured application Deployments",
+      "number": 17,
+      "started_at": "2026-11-18T21:33:02Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:35:11Z",
+      "conclusion": "success",
+      "name": "Finish and validate the warm pair",
+      "number": 18,
+      "started_at": "2026-11-18T21:35:05Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:35:12Z",
+      "conclusion": "success",
+      "name": "Retain only typed startup evidence, including partial failures",
+      "number": 19,
+      "started_at": "2026-11-18T21:35:11Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:35:12Z",
+      "conclusion": "success",
+      "name": "Post Install Docker Compose",
+      "number": 35,
+      "started_at": "2026-11-18T21:35:12Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:35:13Z",
+      "conclusion": "success",
+      "name": "Post Set up test Python",
+      "number": 36,
+      "started_at": "2026-11-18T21:35:12Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:35:13Z",
+      "conclusion": "success",
+      "name": "Post Install pinned client tools",
+      "number": 37,
+      "started_at": "2026-11-18T21:35:13Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:35:13Z",
+      "conclusion": "success",
+      "name": "Post Checkout exact experiment source",
+      "number": 38,
+      "started_at": "2026-11-18T21:35:13Z",
+      "status": "completed"
+    },
+    {
+      "completed_at": "2026-11-18T21:35:13Z",
+      "conclusion": "success",
+      "name": "Complete job",
+      "number": 39,
+      "started_at": "2026-11-18T21:35:13Z",
+      "status": "completed"
+    }
+  ]
+}

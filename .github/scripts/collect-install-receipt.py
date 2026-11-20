@@ -36,7 +36,8 @@ OMISSION_STAGES = frozenset({'operation', 'context', 'source-checkout', 'source-
                              'pinned-key', 'cli-version', 'pinned-snapshot', 'execution',
                              'checkpoint-validation', 'checkpoint-archive', 'app-archive',
                              'bundle-selection', 'local-package-oci', 'bundle-oci',
-                             'app-archive-stability', 'receipt-write'})
+                             'app-archive-stability', 'checkpoint-archive-stability',
+                             'bundle-archive-stability', 'receipt-write'})
 _omission_stage = 'operation'
 
 
@@ -206,6 +207,7 @@ def resolved_inputs(root, env, directory):
     bundles = [*root.glob(f'uds-bundle-takserver-dev-{arch}-dev.tar.zst'),
                *(root / 'bundle').glob(f'uds-bundle-takserver-dev-{arch}-dev.tar.zst')]
     require(len(bundles) == 1, 'ambiguous generated bundle')
+    bundle_hash = checkpoint.archive_hash(bundles[0])
     # Use the official SDK's deterministic local archive digest. Never resolve
     # an OCI tag or a cluster package as a substitute for these exact bytes.
     stage('local-package-oci')
@@ -216,7 +218,13 @@ def resolved_inputs(root, env, directory):
     stage('bundle-oci')
     derived = artifacts.identities(artifacts.metadata(bundles[0]), arch, package_digest)
     stage('app-archive-stability')
-    require(checkpoint.archive_hash(package) == package_hash, 'package changed during collection')
+    require(checkpoint.archive_hash(package) == package_hash and
+            checkpoint.archive_hash(plain) == package_hash, 'package changed during collection')
+    stage('checkpoint-archive-stability')
+    require(checkpoint.archive_hash(archive) == acquisition['archive_sha256'],
+            'checkpoint changed during collection')
+    stage('bundle-archive-stability')
+    require(checkpoint.archive_hash(bundles[0]) == bundle_hash, 'bundle changed during collection')
     inputs = {**pinned, 'package_archive_sha256': package_hash,
               'checkpoint_oci_digest': acquisition['index_digest'],
               **derived}

@@ -25,6 +25,7 @@ ignore_globs() {
 docs/**
 adr/**
 docs-site/**
+dev/**
 assets/**
 atak/**
 bench/**

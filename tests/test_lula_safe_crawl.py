@@ -3,11 +3,14 @@
 """Run actual published-and-patched Lula analysis against an in-memory API."""
 import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import subprocess
 import tempfile
+import tarfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("patch_crawl", ROOT / ".github/lula/patch_crawl.py")
@@ -175,6 +178,53 @@ class SafeCrawl(unittest.TestCase):
             archive.write_bytes(b"not the official archive")
             with self.assertRaisesRegex(ValueError, "integrity"):
                 PATCH.verify_archive(archive)
+
+    def test_archive_extraction_checks_integrity_before_opening_archive_or_writing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "wrong.tgz"
+            source = Path(directory) / "crawl.js"
+            archive.write_bytes(b"not the official archive")
+            with patch.object(PATCH.tarfile, "open") as opened:
+                with self.assertRaisesRegex(ValueError, "integrity"):
+                    PATCH.extract_crawl(archive, source)
+                opened.assert_not_called()
+            self.assertFalse(source.exists())
+
+    def test_extraction_is_narrow_and_rejects_wrong_source_or_external_versions(self):
+        lock = json.loads((ROOT / ".github/lula/source.lock.json").read_text())
+        for failure in (None, "changed-source", "changed-dependency", "symlink", "oversized"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                archive, source = root / "fixture.tgz", root / "crawl.js"
+                metadata = {"dependencies": dict(lock["crawlRuntimeDependencies"])}
+                if failure == "changed-dependency":
+                    metadata["dependencies"]["commander"] = "0.0.0"
+                raw = OFFICIAL.read_bytes() + (b"changed" if failure == "changed-source" else b"")
+                if failure == "oversized":
+                    raw = b"x" * (1024 * 1024 + 1)
+                with tarfile.open(archive, "w:gz") as stream:
+                    for name, payload in (("dist/cli/commands/crawl.js", raw),
+                                          ("package.json", json.dumps(metadata).encode()),
+                                          ("../../unrelated", b"must never be extracted")):
+                        member = tarfile.TarInfo("package/" + name)
+                        member.size = len(payload)
+                        if failure == "symlink" and name.endswith("crawl.js"):
+                            member.type, member.linkname, member.size = tarfile.SYMTYPE, "../../other", 0
+                        stream.addfile(member, io.BytesIO(payload))
+                # Synthetic member-shape controls use the real official module
+                # bytes. Real archive acceptance is exercised by runtime CI.
+                with patch.object(PATCH, "verify_archive") as verified:
+                    if failure:
+                        with self.assertRaises(ValueError):
+                            PATCH.extract_crawl(archive, source)
+                        self.assertFalse(source.exists())
+                    else:
+                        PATCH.extract_crawl(archive, source)
+                        self.assertEqual(source.read_bytes(), OFFICIAL.read_bytes())
+                        with self.assertRaises(FileExistsError):
+                            PATCH.extract_crawl(archive, source)
+                    verified.assert_called_with(archive)
+                self.assertEqual(set(root.iterdir()), {archive} if failure else {archive, source})
 
 
 if __name__ == "__main__":

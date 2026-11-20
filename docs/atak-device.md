@@ -2,15 +2,15 @@
 
 `atak/` runs the real Android Tactical Assault Kit for Civilian Use (ATAK-CIV) app, built from the public source in the `upstream/atak-civ` submodule (tag 5.5.1.10), in an Android-x86 virtual machine (VM) managed by KubeVirt. It behaves like a field device: it imports a connection data package with its client certificate, streams Cursor on Target (CoT) events on 8089 over mutual Transport Layer Security (TLS), and shows up in `/Marti/api/clientEndPoints`. A phone view of its screen is served at `https://atak.<domain>/` behind Keycloak.
 
-The device runs a Team Awareness Kit (TAK) client. It is optional and separate from the TAK package. Nothing in `zarf.yaml` or the default tests deploys it. The dedicated workflow `.github/workflows/atak-e2e.yaml` builds and deploys it on the normal test cluster. See [architecture decision record (ADR) 14](../adr/0014-atak-test-device-in-kubevirt.md).
+The device runs a Team Awareness Kit (TAK) client. It is optional and separate from the TAK package. Nothing in `zarf.yaml` or the default tests deploys it. The dedicated workflow `.github/workflows/atak-e2e.yaml` builds and deploys it on the normal test cluster.
 
 [![Demo clip: ATAK-CIV in a KubeVirt VM connects to the same TAK Server with its client certificate](../docs-site/public/demo/demo-clip-atak-device.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo/demo-clip-atak-device.mp4)
 
 ## Requirements
 
-- amd64 nodes with `/dev/kvm`. The VM image is Android-x86 and the Android application package (APK) is built for `x86_64` only. There is no arm64 build (see [Supported architectures](../README.md#supported-architectures)).
+- amd64 nodes with `/dev/kvm`. The VM image is Android-x86 and the Android application package (APK) is built for `x86_64` only. There is no arm64 build (see [Supported architectures](reference.md#supported-architectures)).
 - A 2Gi guest and 2 vCPU for the VM, plus KubeVirt. 2Gi is the configured guest in `atak/deploy/device.yaml`. It is the size this trial asks the scheduler for, together with KubeVirt's launcher overhead. A successful boot at 2Gi would not make it a measured minimum.
-- The standard TAK streaming port 8089 on the passthrough gateway (`standardPorts` in `charts/takserver/values.yaml`, [ADR 12](../adr/0012-standard-tak-ports-on-the-passthrough-gateway.md)) and the in-cluster Domain Name System (DNS) rewrite, so the device can reach `takserver-stream.<domain>` the way a phone would.
+- The standard TAK streaming port 8089 on the passthrough gateway (`standardPorts` in `charts/takserver/values.yaml`) and the in-cluster Domain Name System (DNS) rewrite, so the device can reach `takserver-stream.<domain>` the way a phone would.
 
 ## Images
 
@@ -31,14 +31,14 @@ For deployment, provisioning, and connection checks in one procedure, see
 
 ```bash
 uds zarf package create atak --set ATAK_TAG=5.5.1.10 --confirm
-uds zarf package deploy zarf-package-atak-device-amd64-*.tar.zst --set DOMAIN=uds.dev --confirm
+uds zarf package deploy zarf-package-atak-device-amd64-*.tar.zst --set-variables DOMAIN=uds.dev --confirm
 ```
 
 Or deploy the package the last `main` run tested, without building it:
 
 ```bash
 uds zarf package deploy oci://ghcr.io/jonathanagustin/uds-takserver/packages/atak-device:5.5.1.10 \
-  --architecture amd64 --set DOMAIN=uds.dev --confirm
+  --architecture amd64 --set-variables DOMAIN=uds.dev --confirm
 ```
 
 The package (`atak/zarf.yaml`) has two components:
@@ -102,9 +102,9 @@ Set `DOMAIN` when the cluster does not use `uds.dev`.
 
 The device authenticates with a client certificate, the way a provisioned field device does. There is no password enrollment.
 
-At run time `atak/ci/e2e.sh` applies a `TakClient` ([ADR 22](../adr/0022-takclient-operator.md)) for callsign `atak-device` in group `Operators`, waits for it to be `Ready`, and copies `package.zip` from Secret `takclients/atak-device` into Secret `atak/atak-device-dpk`, which the driver pod mounts. The `takserver-oidc` watcher does the work:
+At run time `atak/ci/e2e.sh` applies a `TakClient` for callsign `atak-device` in group `Operators`, waits for it to be `Ready`, and copies `package.zip` from Secret `takclients/atak-device` into Secret `atak/atak-device-dpk`, which the driver pod mounts. The `takserver-oidc` watcher does the work:
 
-1. It creates a key and certificate signing request (CSR) with `CN=atak-device, O=TAK, OU=UDS` and asks TAK to sign it through Basic enrollment on 8446. TAK sets the lifetime globally (`TAKServerCAConfig`, 30 days by default). The watcher validates the returned key, certificate authority (CA) signature, subject, client usage and validity before publishing it. See [ADR 24](../adr/0024-tak-signed-takclient-revocation.md).
+1. It creates a key and certificate signing request (CSR) with `CN=atak-device, O=TAK, OU=UDS` and asks TAK to sign it through Basic enrollment on 8446. TAK sets the lifetime globally (`TAKServerCAConfig`, 30 days by default). The watcher validates the returned key, certificate authority (CA) signature, subject, client usage and validity before publishing it.
 2. It registers `atak-device` as a TAK file user in `Operators` through TAK's admin application programming interface (API) on 8443. TAK 5.7 maps a certificate to a user this way: `X509Authenticator` matches a client certificate against the file users by fingerprint or by the CN, and takes that user's groups. `Operators` is the group Keycloak users get, so the device and CloudTAK users see each other. A certificate with no file user still connects, but only in the anonymous group.
 3. It builds a standard ATAK connection data package: `MANIFEST/manifest.xml`, `certs/server.pref` with one stream `takserver-stream.<domain>:8089:ssl` and its `caLocation0`, `caPassword0`, `certificateLocation0`, and `clientPassword0` entries, the client `certs/atak-device.p12`, and the CA in `certs/truststore.p12`. Both PKCS#12 files use SHA-1 and 3DES, which Android 9 reads, and a generated password. The CA certificate in the truststore has a friendlyName (`tak-ca`). Without one, Android's PKCS12 keystore lists no entry and ATAK reports "Unable to validate Truststore".
 

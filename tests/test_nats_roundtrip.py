@@ -1,16 +1,20 @@
 # Copyright 2026 uds-takserver authors
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Run the chart 1.0.1 config on NATS 2.15.1 and exercise core pub/sub."""
+"""Run the chart 1.0.1 config on the packaged NATS version and exercise core pub/sub."""
 
 import importlib.util
+import json
 import shutil
 import socket
 import subprocess
 import tempfile
 import time
 import unittest
+import uuid
 from pathlib import Path
+
+import yaml
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -19,8 +23,13 @@ SPEC = importlib.util.spec_from_file_location(
 nats = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(nats)
 
-SERVER_IMAGE = "nats:2.15.1-alpine"
-RELOADER_IMAGE = "natsio/nats-server-config-reloader:0.25.0"
+ROOT = Path(__file__).resolve().parents[1]
+NATS_VALUES = yaml.safe_load((ROOT / "values/common-values.yaml").read_text())["nats"]
+SERVER = NATS_VALUES["container"]["image"]
+SERVER_IMAGE = f'{SERVER["repository"]}:{SERVER["tag"]}'
+SERVER_VERSION = SERVER["tag"].removesuffix("-alpine")
+RELOADER = NATS_VALUES["reloader"]["image"]
+RELOADER_IMAGE = f'{RELOADER["repository"]}:{RELOADER["tag"]}'
 
 
 def _docker(*args, check=True):
@@ -39,10 +48,10 @@ class NatsRoundtripTests(unittest.TestCase):
     def test_chart_config_survives_a_restart(self):
         if shutil.which("docker") is None or _docker("info", check=False).returncode != 0:
             self.skipTest("docker is not available")
-        name = "nats-roundtrip-test"
-        reloader = "nats-reloader-test"
+        suffix = uuid.uuid4().hex
+        name = "nats-roundtrip-test-" + suffix
+        reloader = "nats-reloader-test-" + suffix
         port = _free_port()
-        _docker("rm", "-f", name, reloader, check=False)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config = root / "nats.conf"
@@ -71,14 +80,17 @@ class NatsRoundtripTests(unittest.TestCase):
                 self._wait_ready(name)
                 info = nats.roundtrip("127.0.0.1", port)
                 self.assertIn("server_id", info)
+                # Keep loopback monitoring out of any configured HTTP proxy.
                 varz = _docker(
                     "exec",
                     name,
                     "wget",
+                    "-Y",
+                    "off",
                     "-qO-",
                     "http://127.0.0.1:8222/varz",
                 ).stdout
-                self.assertIn('"version": "2.15.1"', varz)
+                self.assertEqual(json.loads(varz)["version"], SERVER_VERSION)
                 _docker("restart", name)
                 self._wait_ready(name)
                 nats.roundtrip("127.0.0.1", port)

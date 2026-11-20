@@ -23,7 +23,7 @@ The chart also renders ConfigMap `postgres-configuration`. `pg_hba.conf` and `po
 
 Those defaults are what the package ships. The nightly benchmark has measured these settings only at 10 clients for 60 seconds. That is why `values/` does not set `shared_buffers`, `work_mem`, `effective_cache_size`, `max_wal_size`, or `checkpoint_timeout`. The harness records `pg_stat_database`, `pg_stat_checkpointer`, `pg_stat_io`, and the `postgresql` container working set beside the TAK load.
 
-`bench/configs/postgis-buffers.yaml` and `bench/configs/postgis-wal.yaml` apply those five parameters with `ALTER SYSTEM` and restart `takserver-postgresql`. `shared_buffers` is 128MB or 64MB, both under the 512Mi limit. `effective_cache_size` is a planner hint, not memory the server allocates. The sweep does not set `fsync=off`. A setting is copied into the package only after a harness report puts it on the front. The key for that is `postgresql.primary.extendedConfiguration`, which Bitnami appends under `conf.d`. On run 40174810574, at the chart defaults, the steady working set was 57Mi on amd64 and 59Mi on arm64.
+`bench/configs/postgis-buffers.yaml` and `bench/configs/postgis-wal.yaml` apply those five parameters with `ALTER SYSTEM` and restart `takserver-postgresql`. `shared_buffers` is 128MB or 64MB, both under the 512Mi limit. `effective_cache_size` is a planner hint, not memory the server allocates. The sweep does not set `fsync=off`. A setting is copied into the package only after a harness report puts it on the front. The key for that is `postgresql.primary.extendedConfiguration`, which Bitnami appends under `conf.d`. At chart defaults, the steady working set is roughly 57–59 MiB.
 
 The example password is public. Replace it and the matching JDBC password before deploying to a shared cluster.
 
@@ -52,18 +52,33 @@ A directory that is not PostgreSQL 15 or 18 makes the `18-3.6` container exit.
 
 The upgrade test deploys the last release and writes a row. Then it deploys this branch and checks the row, its timestamp, the PVC, the server major version, and the PostGIS version. Since 0.7.0 the last release is already on PostgreSQL 18, so that job no longer runs the in-place upgrade from 15. A second job, `validate-upgrade-pg15`, pins release 0.6.0 with `UPGRADE_BASELINE_TAG=v0.6.0`, so the upgrade from 15 stays tested. It runs on pushes to `main`, and on a pull request with the `upgrade-pg15` label when a commit is pushed.
 
+### Interrupted PostgreSQL upgrades
+
+The entrypoint journals the migration in `${PGDATA}.pg15-to-pg18.state`, beside the data directory on the same volume. `PG_VERSION=18` alone does not mean the migration finished: `initdb` writes it before any existing data is transferred.
+
+| Journal stage | Restart behavior |
+| --- | --- |
+| `preparing` | No linking or new-server writes have started. Restore the original `.pg15` directory and retry the migration automatically. |
+| `linking` or `postgis` | Preserve both directories and refuse startup. The old cluster may be disabled or share files that the new server has changed. |
+| `complete` | Migration, extension updates, and a clean server shutdown finished. Resume removal of the old directory and journal, then start normally. |
+| Unknown stage, inconsistent directories, or an old `.pg15` directory without a journal | Preserve the files and refuse startup because safe recovery cannot be inferred. |
+
+If the log requests operator recovery, stop the database workload and application writers, preserve the failed volume for investigation, and restore the **entire pre-upgrade volume snapshot** before retrying. This includes the parent directory holding the data directory, old directory, and journal. Follow the rollback procedure above if returning to PostgreSQL 15. Do not delete the journal to force startup or assume the `.pg15` directory is a usable rollback copy after linking.
+
+The native image smoke checks exercise both normal migration and restart after PG18 initialization with retained rows in the Bitnami and CloudTAK layouts. Offline regression tests also kill the entrypoint during linking, extension updates, and final cleanup to verify that incomplete states cannot reach ordinary startup.
+
 ## Backup
 
 For a step-by-step recovery procedure, see
 [Back up and restore TAK Server](how-to/backup-and-restore.md).
 
-Slim (`k3d-core-slim-dev`) does not install Velero. The full bundle does. `core-backup-restore` at `1.16.0-upstream` is a required package there, not an optional component. See [architecture decision record (ADR) 0016](../adr/0016-logical-db-dump.md).
+Slim (`k3d-core-slim-dev`) does not install Velero. The full bundle does. `core-backup-restore` at `1.16.0-upstream` is a required package there, not an optional component.
 
 Velero's default schedule is `velero-udsbackup`, daily at 03:00 Coordinated Universal Time (UTC), kept for 240h, `snapshotVolumes: false`. Unified Defense Stack (UDS) Core 1.16.0 does not deploy a node-agent, and k3d local-path has no snapshot application programming interface (API), so the default backup is API objects only. The Postgres files on the volume are not in it.
 
 To cover the databases, the package stores a logical `pg_dump` in Secret `tak-db-dump` (database `cot`) and Secret `cloudtak-db-dump` (CloudTAK's PostGIS database). CronJobs `tak-db-dump` (02:15 UTC) and `cloudtak-db-dump` (02:20 UTC) refresh those Secrets. They render only when `backup.dump.enabled` is true, which the full bundle sets. A slim install does not create them.
 
-`FILESYSTEM_BACKUP` defaults to `false`. Slim leaves it there. The full-core deploy (`bundle/full/uds-config.yaml`) sets it to `true`. That renders DaemonSet `node-agent` from `docker.io/velero/velero:v1.18.4` (amd64 and arm64, the same tag Core already runs), Exemption `velero-node-agent`, and `backup.velero.io/backup-volumes: data` on the Postgres and PostGIS pods. The Velero Package gets an egress allow to the Kubernetes API for pods labeled `name: node-agent`. See [ADR 0021](../adr/0021-velero-node-agent.md).
+`FILESYSTEM_BACKUP` defaults to `false`. Slim leaves it there. The full-core deploy (`bundle/full/uds-config.yaml`) sets it to `true`. That renders DaemonSet `node-agent` from `docker.io/velero/velero:v1.18.4` (amd64 and arm64, the same tag Core already runs), Exemption `velero-node-agent`, and `backup.velero.io/backup-volumes: data` on the Postgres and PostGIS pods. The Velero Package gets an egress allow to the Kubernetes API for pods labeled `name: node-agent`.
 
 File-system backup needs volumes that are not hostPath. Velero skips a hostPath PersistentVolume (`isHostPathVolume` in Velero's `pkg/podvolume/backupper.go`), and k3d's default `local-path` class makes hostPath PersistentVolumes. So on a default k3d install the node-agent runs but copies nothing.
 

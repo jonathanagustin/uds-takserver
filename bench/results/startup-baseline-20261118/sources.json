@@ -1,0 +1,38 @@
+{
+  "dataset": {
+    "architecture": "amd64",
+    "archive_bytes": 10790,
+    "archive_sha256": "ebcbd0e5d2f4f30417dc99a9e470e23fa26f2b40d2ef9359a117e4d12f71c697",
+    "artifact_id": 14472627384,
+    "artifact_name": "startup-pair-amd64-44398702032-1",
+    "attempt": 1,
+    "files": {
+      "bindings.json": "8b83b0e379ab0a70deec5812caa364908a0d2ee706176b93234c4ef248acfdec",
+      "cold-begin.json": "4cfd9affd2d492ead07861895a42f59e1924e41da6a10c2ad3838ade9dd63784",
+      "cold.json": "272acf5f1d685d1de20b95a188faa328c5ffdf9363ecf6e7a22f8692d02ba3c0",
+      "pair.json": "cc69c18b7aec97081c10174cafe7c7523e14106fe3d7f381e0fb59487cd58f89",
+      "warm-begin.json": "a27d1c27124568b2f9afb9db07b08cf963dbcaf1558a91a303641bff6e9dddef",
+      "warm.json": "4668e4f18b301f58d7028c61eefc312db013bdffcdf4a001158c048d2adfddb9"
+    },
+    "job_id": 135135600561,
+    "run_id": 44398702032,
+    "workflow_id": 417819272
+  },
+  "independent_checker": {
+    "path": "bench/results/startup-repeat-20261115/check.py",
+    "sha256": "f22e56f73093e461c419193875c7708934bc9c394ae53a053695abee16634360"
+  },
+  "metadata_files": {
+    "artifact.json": "fd70235047b37745577afd69ca84c7d36d4b109174947165c4fe759b3b308ad4",
+    "job.json": "09c82d993304aec987fe655a047bf2b0ccb50eee769df31e6b8855f987f84578",
+    "run.json": "61641856ade9135ddfca11208e20ae5835f100adfa277dd7a2e21744354f592f"
+  },
+  "schema": 1,
+  "source_commit": "d044a34b3278f388014e599f88253d0097c83633",
+  "source_files": {
+    "source/amd64-startup.yaml.txt": "4e863b6cdab6be256b01e60a08e1a383fc2f80a3728c55a4e18dd9482b773733",
+    "source/jvm_metrics.py.txt": "4aefb225f62752e233b116a1874e730edc2c8b8c99a072fd472845f3147061d3",
+    "source/phases.py.txt": "46ee653922f7670ec793798d56745d5c84c6cb979669474e2b64586e184762c8",
+    "source/startup_trials.py.txt": "7b8bc4030dafb080d0ae27bf21cba8899f16676ed0fcf7ccc57d31417cd4d32e"
+  }
+}

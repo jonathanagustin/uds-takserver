@@ -83,7 +83,14 @@ class ProducerQueues(unittest.TestCase):
             for test_job, dedicated_job in [(f"{image}-image", "build"), (f"{image}-index", "index")]:
                 first = workflows["test"]["jobs"][test_job]
                 second = workflows[f"{image}-image"]["jobs"][dedicated_job]
-                self.assertEqual(first["concurrency"], second["concurrency"])
+                first_queue = dict(first["concurrency"])
+                if dedicated_job == "build":
+                    # Fork Test jobs consume the canonical producer's bytes.
+                    # Waiting while holding its mutex would deadlock it.
+                    suffix = "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && format('-consumer-{0}', github.run_id) || '' }}"
+                    self.assertTrue(first_queue["group"].endswith(suffix))
+                    first_queue["group"] = first_queue["group"][:-len(suffix)]
+                self.assertEqual(first_queue, second["concurrency"], "trusted producers must retain their shared FIFO mutex")
                 queue = first["concurrency"]
                 self.assertEqual(set(queue), {"group", "queue", "cancel-in-progress"})
                 self.assertEqual(queue["queue"], "max")

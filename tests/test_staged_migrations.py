@@ -308,8 +308,9 @@ class StagedMigrationTests(unittest.TestCase):
         subprocess.run(['git', 'clone', '--shared', '--quiet', str(S.ROOT), str(root)], check=True,
                        capture_output=True, timeout=20)
         subprocess.run(['bash', '.github/scripts/pin-image-tags.sh'], cwd=root, check=True,
-                       capture_output=True, timeout=20, env={k: v for k, v in os.environ.items()
-                                                           if k != 'GITHUB_STEP_SUMMARY'})
+                       capture_output=True, timeout=20, env={**{k: v for k, v in os.environ.items()
+                                                              if k != 'GITHUB_STEP_SUMMARY'},
+                                                           'GITHUB_EVENT_NAME': 'unit-test'})
         candidate = Path(temporary.name) / 'candidate'
         candidate.mkdir()
         files = {}

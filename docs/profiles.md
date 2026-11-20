@@ -2,7 +2,7 @@
 
 Use values overlays to tune resources for Team Awareness Kit (TAK) services. This page describes two named values overlays, `small` and `production`. Neither is the package default. The nightly benchmark measures both (see [Benchmarks](benchmarks.md)), but only at 10 clients for 60 seconds. Neither is a sizing result yet. Package bytes per component are unmeasured too. CloudTAK is already an optional component (`required: false` in `zarf.yaml`). Small does not drop another one.
 
-The footprint below is the steady working set from `tests/usage.sh` at the end of install on [run 40174810574](https://github.com/jonathanagustin/uds-takserver/actions/runs/40174810574). The source is the kubelet application programming interface (API), specifically its Summary API, the same one `bench/run.py` reads. The higher of amd64 and arm64:
+The footprint below is the steady working set measured by `tests/usage.sh` via the kubelet Summary API at the end of a clean install (showing the higher of amd64 and arm64):
 
 | Container | central processing unit (CPU) | Working set |
 | --- | --- | --- |

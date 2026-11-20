@@ -150,7 +150,9 @@ function encode(value: string | Buffer): string {
 
 // The CA, its key, and its passphrase. undefined until the cert Job has
 // published all three.
-export async function readCa(cluster: Cluster): Promise<Ca | undefined> {
+export type CaUnavailable = "missing-certificate" | "missing-key" | "missing-passphrase" | "unreadable-material";
+
+export async function readCa(cluster: Cluster, unavailable?: (reason: CaUnavailable) => void): Promise<Ca | undefined> {
   const configMap = await cluster.getConfigMap(TAK_NAMESPACE, CERT_CONFIGMAP);
   const caKey = await cluster.getSecret(TAK_NAMESPACE, CA_KEY_SECRET);
   const keystore = await cluster.getSecret(TAK_NAMESPACE, KEYSTORE_SECRET);
@@ -158,13 +160,16 @@ export async function readCa(cluster: Cluster): Promise<Ca | undefined> {
   const keyPem = decode(caKey?.data?.["ca-do-not-share.key"]);
   const pass = decode(keystore?.data?.CAPASS);
   if (!caPem || !keyPem || pass === undefined) {
+    unavailable?.(!caPem ? "missing-certificate" : !keyPem ? "missing-key" : "missing-passphrase");
     return undefined;
   }
   try {
     return loadCa(caPem, keyPem, pass);
   } catch {
     // A CA in the middle of a rotation (cert-rotation test) or a key that
-    // does not open. Nothing is signed until both are readable.
+    // does not open. Nothing is signed until both are readable. Never log
+    // the crypto exception: it may contain material supplied to the parser.
+    unavailable?.("unreadable-material");
     return undefined;
   }
 }
