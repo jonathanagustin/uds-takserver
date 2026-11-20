@@ -277,8 +277,7 @@ keep their chosen account even if they copy a TAK app label.
 
 The package deploys the configuration chart first and waits for the Package to
 be Ready for its current generation before updating admission. No separate manual
-Helm stage is needed; see [ADR 0007](../adr/0007-per-workload-network-rules.md#dedicated-tak-identities-opt-in-migration)
-for the pinned implementation and readiness checks.
+Helm stage is needed.
 
 For an existing installation, keep the same package archive and deployed values
 through these stages:
