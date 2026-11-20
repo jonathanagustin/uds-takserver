@@ -389,7 +389,7 @@ def main() -> None:
                 "-i", str(args.music_track),
                 "-map", "0:v:0", "-map", "1:a:0",
                 "-c:v", "libx264", "-preset", "medium", "-crf", "19", "-pix_fmt", "yuv420p",
-                "-af", "afade=t=in:st=0:d=0.25,afade=t=out:st=40.5:d=0.8",
+                "-af", "afade=t=in:st=0:d=0.25,afade=t=out:st=40.5:d=0.8,apad",
                 "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
                 "-shortest",
                 "-movflags", "+faststart",
