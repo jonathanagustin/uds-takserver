@@ -29,5 +29,6 @@ RUN apt-get update \
       openjdk-17-jdk-headless \
       patch \
       pkg-config \
+      xauth \
       xvfb \
     && rm -rf /var/lib/apt/lists/*
