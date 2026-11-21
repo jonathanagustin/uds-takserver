@@ -80,6 +80,7 @@ compliance/README.md
 .github/workflows/proj-cache.yaml
 .github/workflows/gles-cache.yaml
 .github/workflows/mdbtools-cache.yaml
+.github/workflows/takx-native-caches.yaml
 .github/scripts/migrate-ghcr.py
 .github/workflows/test-aks.yaml
 .github/workflows/test-eks.yaml

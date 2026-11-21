@@ -26,7 +26,7 @@ RUN set -x; \
     echo "${PATCH_SHA256}  /build/openssl-pgsc.patch" | sha256sum -c -; \
     tar -xzf /build/quictls.tar.gz -C /build; \
     echo "${LICENSE_SHA256}  /build/openssl-openssl-3.0.14-quic1/LICENSE.txt" | sha256sum -c -; \
-    patch -d /build/openssl-openssl-3.0.14-quic1 --fuzz=0 --batch --no-backup-if-mismatch -p1 -i /build/openssl-pgsc.patch; \
+    patch -d /build/openssl-openssl-3.0.14-quic1 --fuzz=0 --batch --no-backup-if-mismatch -p0 -i /build/openssl-pgsc.patch; \
     mkdir -p /quictls; \
     ./Configure linux-x86_64 no-shared no-tests no-dso \
       -fPIC -O2 -march=x86-64 -mtune=generic \
