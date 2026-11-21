@@ -53,6 +53,7 @@ RUN set -x; \
       -DASSIMP_NO_EXPORT=OFF \
       -DASSIMP_BUILD_JASSIMP=OFF \
       -DSYSTEM_IRRXML=OFF \
+      -DPUBLIC_ZLIB_PREFIX=/opt/zlib \
       -DZLIB_INCLUDE_DIR=/opt/zlib/include \
       -DZLIB_LIBRARIES=/opt/zlib/lib/libz.a \
       -DCMAKE_C_FLAGS="-O2 -fPIC -march=x86-64 -mtune=generic" \
