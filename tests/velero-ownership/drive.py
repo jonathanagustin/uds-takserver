@@ -28,30 +28,13 @@ require = T.require
 
 def node_agent_field_owners(managed_fields):
     """Project four reviewed paths without persisting field values or arbitrary names."""
-    fields = {
-        'args': ('f:args',),
-        'image': ('f:image',),
-        'nodeNameFieldRef': ('f:env', 'k:{"name":"NODE_NAME"}', 'f:valueFrom', 'f:fieldRef'),
-        'namespaceFieldRef': ('f:env', 'k:{"name":"VELERO_NAMESPACE"}', 'f:valueFrom', 'f:fieldRef'),
-    }
-    owners = {name: set() for name in fields}
+    owners = {name: set() for name in T.NODE_AGENT_FIELDS}
     for entry in managed_fields:
-        if entry.get('fieldsType') != 'FieldsV1' or entry.get('subresource'):
-            continue
-        container = entry.get('fieldsV1', {})
-        for key in ('f:spec', 'f:template', 'f:spec', 'f:containers', 'k:{"name":"node-agent"}'):
-            container = container.get(key, {})
         manager = entry.get('manager')
-        if manager not in ('zarf', 'kubectl-create'):
+        if manager not in T.NODE_AGENT_MANAGERS:
             manager = 'other'
-        for name, path in fields.items():
-            node = container
-            for part in path:
-                node = node.get(part)
-                if node is None:
-                    break
-            if node is not None:
-                owners[name].add(manager)
+        for name in T.node_agent_fields_owned(entry):
+            owners[name].add(manager)
     return {name: sorted(values) for name, values in owners.items()}
 
 
@@ -136,7 +119,7 @@ class Driver:
         require(getattr(files, 'core_provider', None) == self.core_provider, 'driver requires the bound source provider plan')
         self.restore_helper = provider.HELPER if self.core_provider else 'tests/backup-restore.sh'
         self.identity = T.GUARD.verify(context, self.read_command)
-        self.transfer = T.Transfer(context, '', self.read_command)
+        self.transfer = T.Transfer(context, '', self.read_command, release_agent_fields=self.core_provider is not None)
         self.state = {'schema': 1, 'cluster': self.identity, 'driverSHA256': digest(Path(__file__)),
                       'inputs': {key: digest(value) for key, value in files.items()}, 'steps': [], 'accepted': False}
 
