@@ -67,6 +67,22 @@ COMPONENTS = {
         "control_marker": "sqlcipher_static_pic_control=true",
         "required_artifacts": ("lib/libsqlite3.a", "include/sqlite3.h", "LICENSE.md"),
     },
+    "laszip": {
+        "version": "3.4.3",
+        "archive_sha256": "66336908e17bb92739803c80fe627461860cacb017dcff55e476e131981e7b6d",
+        "license_sha256": "dbc8eab1421212bf7b392ea00619f6b8286df50b702d21f6e7382805828a1cef",
+        "control_file": "laszip_control.c",
+        "control_marker": "laszip_static_pic_control=true",
+        "required_artifacts": ("lib/liblaszip.a", "include/laszip/laszip_api.h", "COPYING"),
+    },
+    "assimp": {
+        "version": "4.0.1",
+        "archive_sha256": "459eadafbb84251a93f94c70f2fd8922c169911ff89fe526f1529bac6f699ae0",
+        "license_sha256": "a26ccc3dbf2f58ea99c100945a8a126fa0f9f4d7fd2b49aa8bdb8e09355864d8",
+        "control_file": "assimp_control.c",
+        "control_marker": "assimp_static_pic_control=true",
+        "required_artifacts": ("lib/libassimp.a", "lib/libIrrXML.a", "LICENSE"),
+    },
 }
 
 

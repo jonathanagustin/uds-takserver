@@ -191,6 +191,14 @@ jobs:
             tag: 4.5.7-amd64
             control: sqlcipher_control.c
             link_args: "/opt/cache/lib/libsqlite3.a /opt/openssl/lib/libcrypto.a -lpthread -ldl -lm"
+          - component: laszip
+            tag: 3.4.3-amd64
+            control: laszip_control.c
+            link_args: "/opt/cache/lib/liblaszip.a -lstdc++ -lm"
+          - component: assimp
+            tag: 4.0.1-amd64
+            control: assimp_control.c
+            link_args: "/opt/cache/lib/libassimp.a /opt/cache/lib/libIrrXML.a /opt/zlib/lib/libz.a -lstdc++ -lm"
     name: qualify (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -284,6 +292,10 @@ jobs:
             tag: 8.23.0-amd64
           - component: sqlcipher
             tag: 4.5.7-amd64
+          - component: laszip
+            tag: 3.4.3-amd64
+          - component: assimp
+            tag: 4.0.1-amd64
     name: publish (${{ matrix.component }})
     steps:
       - name: Checkout source
