@@ -83,7 +83,7 @@ variables:
 
 `bundle/uds-bundle.yaml` and `bundle/full/uds-bundle.yaml` show the override (`cloudtak` component, `uds-cloudtak` chart, path `sso.groups`). A bundle of your own needs the same `overrides` entry. Group paths are case-sensitive.
 
-[![Demo clip: a member of /CloudTAK/Users signs in to CloudTAK and is refused at the TAK web UI](../docs-site/public/demo/demo-clip-cloudtak-user.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo/demo-clip-cloudtak-user.mp4)
+[![Demo clip: a member of /CloudTAK/Users signs in to CloudTAK and is refused at the TAK web UI](../docs-site/public/demo/demo-clip-cloudtak-user.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo-run-44802574418-attempt-1/demo-clip-cloudtak-user.mp4)
 
 ![Keycloak refuses a /CloudTAK/Users member at the TAK Server web UI](../docs-site/public/demo/screens/tak-admin-refused.webp)
 
@@ -224,7 +224,7 @@ script with two local CAs.
 
 `webtak` is 8447, the connector the tenant gateway uses, rather than 8446. 8447 has a certificate whose SANs are the `takserver-web` Service names, so CloudTAK verifies it against the deploy-time CA (`NODE_EXTRA_CA_CERTS`). TAK's generated 8443 and 8089 server certificate names no in-cluster host. CloudTAK's TAK library does not verify the server certificate on its certificate-authenticated connections, as upstream ships it. The bootstrap container checks the 8443 chain against the CA and skips only the host name.
 
-[![Demo clip: the ATAK device's marker shows in CloudTAK, then a marker and a chat message sent from CloudTAK arrive on the device](../docs-site/public/demo/demo-clip-sync.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo/demo-clip-sync.mp4)
+[![Demo clip: the ATAK device's marker shows in CloudTAK, then a marker and a chat message sent from CloudTAK arrive on the device](../docs-site/public/demo/demo-clip-sync.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo-run-44802574418-attempt-1/demo-clip-sync.mp4)
 
 ![The TEST MARKER placed in CloudTAK, shown in ATAK on the test device](../docs-site/public/demo/screens/atak-test-marker.webp)
 
