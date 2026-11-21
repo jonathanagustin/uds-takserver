@@ -117,6 +117,8 @@ echo "::endgroup::"
 # Capture a bounded post-failure snapshot without remote addresses or process
 # arguments. A transient bind conflict may have cleared by this point.
 echo "::group::takserver-config Ignite socket snapshot"
+# The remote awk programs use their own positional fields.
+# shellcheck disable=SC2016
 k exec deploy/takserver-config -n takserver -c takserver-config -- sh -c '
   awk '\''$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {
     printf "ephemeral_port_range=%d-%d\n", $1, $2
