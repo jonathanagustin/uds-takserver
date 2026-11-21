@@ -17,7 +17,7 @@
 int main(void) {
     unsigned int major = aiGetVersionMajor();
     unsigned int minor = aiGetVersionMinor();
-    if (major != 4 || minor != 0) {
+    if (major != 4 || minor != 1) {
         fprintf(stderr, "unexpected Assimp version: %u.%u\n", major, minor);
         return 1;
     }
