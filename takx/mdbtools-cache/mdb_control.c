@@ -15,7 +15,7 @@
 int main(void) {
     /* Verify exact ATAK-patched header signatures resolve against libmdb.a. */
     size_t (*ole_fn)(MdbHandle *, MdbColumn *, void *) = mdb_ole_read_next;
-    int (*bool_fmt_fn)(MdbHandle *) = mdb_set_boolean_fmt_numbers;
+    void (*bool_fmt_fn)(MdbHandle *) = mdb_set_boolean_fmt_numbers;
     if (ole_fn == NULL || bool_fmt_fn == NULL) {
         fprintf(stderr, "expected defined mdbtools symbols\n");
         return 1;
