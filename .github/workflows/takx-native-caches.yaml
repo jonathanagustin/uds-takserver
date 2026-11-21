@@ -175,3 +175,149 @@ jobs:
           subject-name: ghcr.io/jonathanagustin/uds-takserver/takx-native-${{ matrix.component }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+  build-and-qualify-layer1:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: curl
+            tag: 8.23.0-amd64
+            control: curl_control.c
+            link_args: "/opt/cache/lib/libcurl.a /opt/openssl/lib/libssl.a /opt/openssl/lib/libcrypto.a /opt/zlib/lib/libz.a -lpthread -ldl"
+          - component: sqlcipher
+            tag: 4.5.7-amd64
+            control: sqlcipher_control.c
+            link_args: "/opt/cache/lib/libsqlite3.a /opt/openssl/lib/libcrypto.a -lpthread -ldl -lm"
+    name: qualify (${{ matrix.component }})
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline native cache verifier tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/native-caches/verify.py --phase verify --component "${{ matrix.component }}"
+          python3 -B -m unittest discover -s takx/native-caches -p test_verify.py -v
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build ${{ matrix.component }} OCI cache locally
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: takx/native-caches/${{ matrix.component }}
+          file: takx/native-caches/${{ matrix.component }}/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: takx-native-${{ matrix.component }}:smoke
+          cache-from: type=gha,scope=takx-native-${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=takx-native-${{ matrix.component }}
+
+      - name: Extract and qualify restored prefix inside prebuilt takx-gl-runner
+        timeout-minutes: 5
+        env:
+          COMPONENT: ${{ matrix.component }}
+          CONTROL: ${{ matrix.control }}
+          LINK_ARGS: ${{ matrix.link_args }}
+        run: |
+          set -eu
+          cid="$(docker create "takx-native-${COMPONENT}:smoke" "/${COMPONENT}")"
+          mkdir -p "${RUNNER_TEMP}/restored-${COMPONENT}"
+          docker cp "${cid}:/${COMPONENT}/." "${RUNNER_TEMP}/restored-${COMPONENT}/"
+          docker rm "${cid}"
+          python3 -B takx/native-caches/verify.py \
+            --phase check-prefix --component "${COMPONENT}" \
+            --prefix "${RUNNER_TEMP}/restored-${COMPONENT}"
+          ossl_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-openssl:3.5.9-amd64 /openssl)"
+          mkdir -p "${RUNNER_TEMP}/dep-openssl"
+          docker cp "${ossl_cid}:/openssl/." "${RUNNER_TEMP}/dep-openssl/"
+          docker rm "${ossl_cid}"
+          zlib_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-zlib:1.3.1-amd64 /zlib)"
+          mkdir -p "${RUNNER_TEMP}/dep-zlib"
+          docker cp "${zlib_cid}:/zlib/." "${RUNNER_TEMP}/dep-zlib/"
+          docker rm "${zlib_cid}"
+          docker run --rm \
+            -e CONTROL="${CONTROL}" \
+            -e LINK_ARGS="${LINK_ARGS}" \
+            -v "${GITHUB_WORKSPACE}/takx/native-caches/${COMPONENT}:/src:ro" \
+            -v "${RUNNER_TEMP}/restored-${COMPONENT}:/opt/cache:ro" \
+            -v "${RUNNER_TEMP}/dep-openssl:/opt/openssl:ro" \
+            -v "${RUNNER_TEMP}/dep-zlib:/opt/zlib:ro" \
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
+            bash -euo pipefail -c '
+              # shellcheck disable=SC2086
+              gcc -std=c99 -Wall -Wextra -Werror -O2 \
+                -I/opt/cache/include -I/opt/openssl/include -I/opt/zlib/include \
+                "/src/${CONTROL}" ${LINK_ARGS} \
+                -o /tmp/control_bin
+              /tmp/control_bin
+            '
+
+      - name: Retain verified cache receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-native-${{ matrix.component }}-receipt
+          path: ${{ runner.temp }}/restored-${{ matrix.component }}/cache-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-layer1:
+    needs: [build-and-qualify-layer1, publish]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: curl
+            tag: 8.23.0-amd64
+          - component: sqlcipher
+            tag: 4.5.7-amd64
+    name: publish (${{ matrix.component }})
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push prebuilt ${{ matrix.component }} OCI cache
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: takx/native-caches/${{ matrix.component }}
+          file: takx/native-caches/${{ matrix.component }}/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/jonathanagustin/uds-takserver/takx-native-${{ matrix.component }}:${{ matrix.tag }}
+            ghcr.io/jonathanagustin/uds-takserver/takx-native-${{ matrix.component }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=takx-native-${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=takx-native-${{ matrix.component }}
+
+      - name: Attest OCI cache build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-name: ghcr.io/jonathanagustin/uds-takserver/takx-native-${{ matrix.component }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

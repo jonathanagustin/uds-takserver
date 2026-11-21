@@ -51,6 +51,22 @@ COMPONENTS = {
         "control_marker": "openssl_static_pic_control=true",
         "required_artifacts": ("lib/libssl.a", "lib/libcrypto.a", "LICENSE.txt"),
     },
+    "curl": {
+        "version": "8.23.0",
+        "archive_sha256": "8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5",
+        "license_sha256": "82f2f4427d6545ee5aaac4f0b80428da6cc8ba41c2cf5da3a03680ec327b9681",
+        "control_file": "curl_control.c",
+        "control_marker": "curl_static_pic_control=true",
+        "required_artifacts": ("lib/libcurl.a", "include/curl/curl.h", "COPYING"),
+    },
+    "sqlcipher": {
+        "version": "4.5.7",
+        "archive_sha256": "b670845f28da0a3c717e991e9f18a334e08f6bc977190bbce6be864ca229f96d",
+        "license_sha256": "09e4af560ce2e3c9c2aa6b564e35947b03db7d1ae345f22a32793ed46542cc14",
+        "control_file": "sqlcipher_control.c",
+        "control_marker": "sqlcipher_static_pic_control=true",
+        "required_artifacts": ("lib/libsqlite3.a", "include/sqlite3.h", "LICENSE.md"),
+    },
 }
 
 
