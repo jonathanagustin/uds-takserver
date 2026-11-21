@@ -11,7 +11,7 @@ Unified Defense Stack (UDS) Core's policy engine validates and mutates every pod
 
 It prints the exempted-resource list and the security context of each Team Awareness Kit (TAK) server pod.
 
-[![Demo clip: what UDS admission changed on a TAK pod, and the one exemption the package needs](../docs-site/public/demo/demo-clip-policy.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo/demo-clip-policy.mp4)
+[![Demo clip: what UDS admission changed on a TAK pod, and the one exemption the package needs](../docs-site/public/demo/demo-clip-policy.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo-run-44802574418-attempt-1/demo-clip-policy.mp4)
 
 ## Exemptions
 
@@ -65,7 +65,7 @@ Only the optional ATAK test device uses this. It is not part of the package: `at
 
 These are not exemptions. The policy engine mutates these settings or leaves them alone, so no `Exemption` object exists.
 
-[![Demo clip: the ambient mesh, a generated network policy that drops a pod, and the release signature and provenance](../docs-site/public/demo/demo-clip-secure.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo/demo-clip-secure.mp4)
+[![Demo clip: the ambient mesh, a generated network policy that drops a pod, and the release signature and provenance](../docs-site/public/demo/demo-clip-secure.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo-run-44802574418-attempt-1/demo-clip-secure.mp4)
 
 ### Non-root user and writable root filesystem
 

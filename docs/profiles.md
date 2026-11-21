@@ -21,7 +21,7 @@ The footprint below is the steady working set measured by `tests/usage.sh` via t
 
 Heaps stay `-Xmx512m` on api, messaging, and config. A 1Gi messaging cgroup ran out of memory and was killed when UserManager started, so neither profile sets a messaging memory limit under 1536Mi.
 
-[![Demo clip: TAK's resource use after install, then Kubernetes replaces a deleted messaging pod and ATAK reconnects](../docs-site/public/demo/demo-clip-self-healing.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo/demo-clip-self-healing.mp4)
+[![Demo clip: TAK's resource use after install, then Kubernetes replaces a deleted messaging pod and ATAK reconnects](../docs-site/public/demo/demo-clip-self-healing.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo-run-44802574418-attempt-1/demo-clip-self-healing.mp4)
 
 ## Default
 
