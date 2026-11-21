@@ -272,14 +272,24 @@ def manifest(directory):
     return value
 
 
+STAGE = ['init']
+
+
+def mark_stage(name):
+    STAGE[0] = name
+
+
 def verify_candidate(gh,directory,run):
+    mark_stage('verify-manifest')
     value=manifest(directory);signing=value['signing']
     require(signing==identity(run['id'],run['run_attempt'],run['head_sha']))
     media=[item['file'] for item in value['outputs'] if item['file'].endswith('.mp4')]
     subjects=media+[MANIFEST]
     extras={MANIFEST,BUNDLE,INTOTO}|{name+'.sigstore.json' for name in media}
+    mark_stage('verify-inventory')
     check_inventory(directory,value['outputs'],extras)
     expected={name:{'sha256':sha(Path(directory)/name)} for name in subjects}
+    mark_stage('verify-attestation')
     for name in subjects:
         results=gh.command(['attestation','verify',str(Path(directory)/name),'--bundle',str(Path(directory)/BUNDLE),
              '--repo',REPO,'--signer-workflow',REPO+'/'+WORKFLOW,'--signer-digest',run['head_sha'],'--source-digest',run['head_sha'],
@@ -301,11 +311,13 @@ def verify_candidate(gh,directory,run):
         require(statement['predicate']['runDetails']['builder']['id']==IDENTITY)
         require(definition['resolvedDependencies']==[{'uri':'git+https://github.com/'+REPO+'@'+REF,'digest':{'gitCommit':run['head_sha']}}])
         require(statement['predicate']['runDetails']['metadata']['invocationId']==certificate['runInvocationURI'])
+    mark_stage('verify-cosign')
     for name in media:
         command=['cosign','verify-blob',str(Path(directory)/name),'--bundle',str(Path(directory)/(name+'.sigstore.json')),
                  '--certificate-identity',IDENTITY,'--certificate-oidc-issuer','https://token.actions.githubusercontent.com']
         # Use the same bounded/private subprocess transport, without a shell.
         gh.cosign(command)
+    mark_stage('verify-intoto')
     envelope=decode((Path(directory)/INTOTO).read_bytes())
     import base64
     require(envelope==decode((Path(directory)/BUNDLE).read_bytes())['dsseEnvelope'])
@@ -325,51 +337,66 @@ def assets(gh,release_id,files):
 
 
 def publish(gh,run_id,attempt,directory):
+    mark_stage('publish-mode')
     require(mode(run_id,attempt,False,os.environ.get('GITHUB_REF'))=='publish')
+    mark_stage('run-identity')
     run=run_identity(gh,run_id,attempt)
+    mark_stage('extract-artifact')
     extract(gh,run,'demo-signed-attempt-'+str(attempt),directory)
     value=verify_candidate(gh,directory,run);release_tag=tag(value['signing'])
+    mark_stage('scan-files')
     files={p.name:info(p) for p in Path(directory).iterdir()};require(len(files)<=128)
     # A tag's existence is not inferred from a failed release lookup.
+    mark_stage('list-releases')
     releases=gh.pages('repos/'+REPO+'/releases?per_page=100')
     matches=[item for page in releases for item in page if item['tag_name']==release_tag]
     require(len(matches)<=1)
     if not matches:
+        mark_stage('lookup-tag')
         refs=gh.api('repos/'+REPO+'/git/matching-refs/tags/'+release_tag)
         refs=[item for item in refs if item['ref']=='refs/tags/'+release_tag]
         require(len(refs)<=1)
         if refs:require(refs[0]['object']['type']=='commit' and refs[0]['object']['sha']==run['head_sha'])
         else:
+            mark_stage('create-tag')
             gh.command(['api','--method','POST','repos/'+REPO+'/git/refs','-f','ref=refs/tags/'+release_tag,
                         '-f','sha='+run['head_sha']])
+        mark_stage('create-release')
         release=gh.command(['api','--method','POST','repos/'+REPO+'/releases',
                     '-f','tag_name='+release_tag,'-f','target_commitish='+run['head_sha'],
                     '-F','draft=true','-F','prerelease=true','-f','make_latest=false',
                     '-f','name=Demo recording '+str(run_id)+' attempt '+str(attempt),
                     '-f','body=Immutable signed recording candidate; source '+run['head_sha']+'. Not a package release.'])
     else:
+        mark_stage('get-release')
         release=gh.api('repos/'+REPO+'/releases/'+str(matches[0]['id']))
+    mark_stage('validate-release')
     require(type(release.get('id')) is int and release['id']>0)
     release_path='repos/'+REPO+'/releases/'+str(release['id'])
     require(type(release['draft']) is bool and release['tag_name']==release_tag and release['prerelease'] is True and release['target_commitish']==run['head_sha'])
     tag_record=gh.api('repos/'+REPO+'/git/ref/tags/'+release_tag)
     require(tag_record['object']['type']=='commit' and tag_record['object']['sha']==run['head_sha'])
+    mark_stage('list-assets')
     present=assets(gh,release['id'],files)
     if not release['draft']:require(set(present)==set(files));return
+    mark_stage('upload-assets')
     for name in sorted(set(files)-set(present)):
         require(info(Path(directory)/name)==files[name])
         gh.command(['release','upload',release_tag,str(Path(directory)/name),'--repo',REPO],json_output=False)
         require(name in assets(gh,release['id'],files))
     require(set(assets(gh,release['id'],files))==set(files))
     # Hash-confirm each actual uploaded asset using immutable IDs before promotion.
+    mark_stage('readback-assets')
     for name,asset_id in assets(gh,release['id'],files).items():
         with tempfile.TemporaryFile(dir=directory) as stream:
             gh.command(['api','repos/'+REPO+'/releases/assets/'+str(asset_id),'-H','Accept: application/octet-stream'],stream,FILE)
             stream.seek(0);require(hashlib.file_digest(stream,'sha256').hexdigest()==files[name]['sha256'])
+    mark_stage('recheck-before-promote')
     require(run_identity(gh,run_id,attempt)['head_sha']==run['head_sha'])
     require(gh.api('repos/'+REPO+'/git/ref/tags/'+release_tag)['object']==tag_record['object'])
     current=gh.api(release_path)
     require(current['tag_name']==release_tag and current['id']==release['id'] and current['draft'] is True and current['prerelease'] is True and current['target_commitish']==run['head_sha'])
+    mark_stage('promote-release')
     gh.command(['api','--method','PATCH',release_path,'-F','draft=false','-f','make_latest=false'])
     final=gh.api(release_path)
     require(final['tag_name']==release_tag and final['id']==release['id'] and final['draft'] is False and final['prerelease'] is True and final['target_commitish']==run['head_sha'])
@@ -383,6 +410,7 @@ def main():
     parser.add_argument('--app-source')
     args=parser.parse_args()
     try:
+        mark_stage('init')
         require(os.environ.get('GITHUB_REPOSITORY')==REPO)
         if args.operation=='mode':
             selected=mode(os.environ.get('PUBLISH_RUN_ID',''),os.environ.get('PUBLISH_ATTEMPT',''),
@@ -403,7 +431,7 @@ def main():
                     verify_candidate(client,directory,run)
         return 0
     except (ValueError,KeyError,TypeError,AttributeError,OSError,subprocess.SubprocessError,zipfile.BadZipFile):
-        print('Demo publication refused; no historical asset changed or success inferred',file=__import__('sys').stderr)
+        print(f'Demo publication refused at stage {STAGE[0]}; no historical asset changed or success inferred',file=__import__('sys').stderr)
         return 1
 
 
