@@ -119,9 +119,13 @@ int main(void) {
     GLint glmajor = 0;
     glGetIntegerv(GL_MAJOR_VERSION, &glmajor);
     CHECK(glmajor >= 3);
-    const char *renderer = (const char *)glGetString(GL_RENDERER);
-    const char *version = (const char *)glGetString(GL_VERSION);
-    CHECK(renderer && strstr(renderer, "llvmpipe") && version && strstr(version, "OpenGL ES 3."));
+    const char *renderer_ptr = (const char *)glGetString(GL_RENDERER);
+    const char *version_ptr = (const char *)glGetString(GL_VERSION);
+    CHECK(renderer_ptr && strstr(renderer_ptr, "llvmpipe") && version_ptr && strstr(version_ptr, "OpenGL ES 3."));
+    char renderer[256];
+    char version[256];
+    snprintf(renderer, sizeof(renderer), "%s", renderer_ptr);
+    snprintf(version, sizeof(version), "%s", version_ptr);
 
     /* Control 1: Xvfb ES 3 clear + readback. */
     glViewport(0, 0, width, height);
