@@ -77,6 +77,7 @@ compliance/README.md
 .github/workflows/geos-local-qualification.yaml
 .github/workflows/takx-gl-qualification.yaml
 .github/workflows/takx-gl-runner-image.yaml
+.github/workflows/proj-cache.yaml
 .github/scripts/migrate-ghcr.py
 .github/workflows/test-aks.yaml
 .github/workflows/test-eks.yaml
