@@ -21,6 +21,7 @@ LOCAL = ('uds-takserver-config', 'takserver')
 CORE = ('velero', 'velero')
 PAYLOAD = {'privilegedFsBackup': True, 'podLabels': {
     'app.kubernetes.io/name': 'velero', 'app.kubernetes.io/component': 'velero-data-mover'}}
+LOCAL_CONFIG_DATA = json.dumps(PAYLOAD) + '\n'
 TERMINAL = {
     'backups.velero.io': {'Completed', 'Failed', 'PartiallyFailed', 'FailedValidation'},
     'restores.velero.io': {'Completed', 'Failed', 'PartiallyFailed', 'FailedValidation'},
@@ -29,6 +30,50 @@ TERMINAL = {
     'datauploads.velero.io': {'Completed', 'Failed', 'Canceled'},
     'datadownloads.velero.io': {'Completed', 'Failed', 'Canceled'},
 }
+
+
+NODE_AGENT_CONTAINER = ('f:spec', 'f:template', 'f:spec', 'f:containers', 'k:{"name":"node-agent"}')
+NODE_AGENT_FIELDS = {
+    'args': (*NODE_AGENT_CONTAINER, 'f:args'),
+    'image': (*NODE_AGENT_CONTAINER, 'f:image'),
+    'nodeNameFieldRef': (*NODE_AGENT_CONTAINER, 'f:env', 'k:{"name":"NODE_NAME"}', 'f:valueFrom', 'f:fieldRef'),
+    'namespaceFieldRef': (*NODE_AGENT_CONTAINER, 'f:env', 'k:{"name":"VELERO_NAMESPACE"}', 'f:valueFrom', 'f:fieldRef'),
+}
+HANDOFF_FIELDS = {
+    **NODE_AGENT_FIELDS,
+    'packageLabel': ('f:metadata', 'f:labels', 'f:zarf.dev/package'),
+    'podPackageLabel': ('f:spec', 'f:template', 'f:metadata', 'f:labels', 'f:zarf.dev/package'),
+}
+NODE_AGENT_MANAGERS = ('kubectl-create', 'zarf')
+
+
+def node_agent_fields_owned(entry, fields=NODE_AGENT_FIELDS):
+    if entry.get('fieldsType') != 'FieldsV1' or entry.get('subresource'):
+        return []
+    owned = []
+    for name, path in fields.items():
+        node = entry.get('fieldsV1', {})
+        for key in path:
+            node = node.get(key)
+            if node is None:
+                break
+        if node is not None:
+            owned.append(name)
+    return owned
+
+
+def field_release_patch(managed_fields):
+    """Release reviewed leaf paths from the two observed managers."""
+    require(isinstance(managed_fields, list) and managed_fields, 'managed fields are unavailable')
+    patch = []
+    for index, entry in enumerate(managed_fields):
+        for name in node_agent_fields_owned(entry, HANDOFF_FIELDS):
+            require(entry.get('manager') in NODE_AGENT_MANAGERS and entry.get('apiVersion') == 'apps/v1',
+                    'reviewed agent field has an unexpected manager or API version')
+            path = '/'.join(key.replace('~', '~0').replace('/', '~1')
+                            for key in HANDOFF_FIELDS[name])
+            patch.append({'op': 'remove', 'path': f'/metadata/managedFields/{index}/fieldsV1/{path}'})
+    return patch
 
 
 def require(value, message):
@@ -99,15 +144,18 @@ def validate_idle(objects):
 
 
 class Transfer:
-    def __init__(self, context, uid, command, guard=GUARD.verify):
+    def __init__(self, context, uid, command, guard=GUARD.verify, *, release_agent_fields=False):
         self.context, self.uid, self.command, self.guard = context, uid, command, guard
         self.identity = guard(context, command)
+        self.release_agent_fields = release_agent_fields
 
-    def read(self, kind, name=None):
+    def read(self, kind, name=None, *, managed_fields=False):
         args = ['kubectl', '--context', self.context, 'get', kind]
         if name:
             args.append(name)
         args += ['-n', 'velero', '-o', 'json']
+        if managed_fields:
+            args.append('--show-managed-fields')
         return json.loads(self.command(args))
 
     def before_write(self):
@@ -136,7 +184,8 @@ class Transfer:
 
     def transfer(self, source, target):
         self.before_write()
-        ds = self.read('daemonset', 'node-agent')
+        release_fields = self.release_agent_fields and source != target
+        ds = self.read('daemonset', 'node-agent', managed_fields=release_fields)
         # Idempotence is based on actual API state, not a prior success journal.
         if source != target and ownership(ds) == target:
             validate_agent(ds, self.uid, target)
@@ -151,12 +200,17 @@ class Transfer:
             require(ds['metadata'].get('annotations', {}).get('helm.sh/resource-policy') == 'keep',
                     'Core source agent lacks prior keep protection')
         patch = ownership_patch(ds, self.uid, source, target)
+        if release_fields:
+            patch.extend(field_release_patch(ds['metadata'].get('managedFields')))
         # Recheck run/cluster immediately before the guarded write as idle reads take time.
         require(self.guard(self.context, self.command) == self.identity, 'ephemeral cluster receipt changed')
         self.command(['kubectl', '--context', self.context, 'patch', 'daemonset', 'node-agent', '-n', 'velero',
                       '--type=json', '--patch-file=/dev/stdin', '-o', 'json'], json.dumps(patch))
-        actual = self.read('daemonset', 'node-agent')
+        actual = self.read('daemonset', 'node-agent', managed_fields=release_fields)
         validate_agent(actual, self.uid, target)
+        if release_fields:
+            require(not field_release_patch(actual['metadata'].get('managedFields')),
+                    'reviewed field ownership release did not persist')
         require(actual['metadata']['annotations'].get('helm.sh/resource-policy') == 'keep', 'keep patch not retained')
         return {'changed': True, 'uid': self.uid, 'resourceVersion': actual['metadata']['resourceVersion']}
 
@@ -170,17 +224,33 @@ class Transfer:
                              '-n', 'velero', '--ignore-not-found', '-o', 'json'])
         if text.strip():
             obj = json.loads(text)
-            require(obj['metadata'].get('uid') and obj['metadata'].get('resourceVersion')
-                    and ownership(obj) == LOCAL and not obj['metadata'].get('deletionTimestamp')
-                    and obj['metadata'].get('labels', {}).get('app.kubernetes.io/managed-by') == 'Helm'
-                    and json.loads(obj.get('data', {}).get('node-agent-config.json', 'null')) == PAYLOAD,
+            meta = obj['metadata']
+            data = obj.get('data', {}).get('node-agent-config.json', 'null')
+            require(meta.get('uid') and meta.get('resourceVersion')
+                    and ownership(obj) == LOCAL and not meta.get('deletionTimestamp')
+                    and meta.get('labels', {}).get('app.kubernetes.io/managed-by') == 'Helm'
+                    and json.loads(data) == PAYLOAD,
                     'existing local config is not the expected nonterminating Helm object')
-            return {'changed': False, 'uid': obj['metadata']['uid']}
+            if data == LOCAL_CONFIG_DATA:
+                return {'changed': False, 'uid': meta['uid']}
+            # Normalize only a semantically identical config created by an earlier trial.
+            patch = [{'op': 'test', 'path': '/metadata/' + key, 'value': meta[key]}
+                     for key in ('uid', 'resourceVersion')]
+            patch += [{'op': 'test', 'path': '/data/node-agent-config.json', 'value': data},
+                      {'op': 'replace', 'path': '/data/node-agent-config.json', 'value': LOCAL_CONFIG_DATA}]
+            require(self.guard(self.context, self.command) == self.identity, 'ephemeral cluster receipt changed')
+            result = json.loads(self.command(
+                ['kubectl', '--context', self.context, 'patch', 'configmap', 'node-agent-config',
+                 '-n', 'velero', '--type=json', '--patch-file=/dev/stdin', '-o', 'json'], json.dumps(patch)))
+            require(result['metadata']['uid'] == meta['uid'] and ownership(result) == LOCAL
+                    and result['data']['node-agent-config.json'] == LOCAL_CONFIG_DATA,
+                    'API did not retain the ConfigMap identity and desired data')
+            return {'changed': True, 'uid': meta['uid']}
         obj = {'apiVersion': 'v1', 'kind': 'ConfigMap', 'metadata': {
             'name': 'node-agent-config', 'namespace': 'velero',
             'annotations': {'meta.helm.sh/release-name': LOCAL[0], 'meta.helm.sh/release-namespace': LOCAL[1]},
             'labels': {'app.kubernetes.io/managed-by': 'Helm'}},
-            'data': {'node-agent-config.json': json.dumps(PAYLOAD, separators=(',', ':'))}}
+            'data': {'node-agent-config.json': LOCAL_CONFIG_DATA}}
         require(self.guard(self.context, self.command) == self.identity, 'ephemeral cluster receipt changed')
         result = json.loads(self.command(['kubectl', '--context', self.context, 'create', '-f', '-', '-o', 'json'], json.dumps(obj)))
         require(result.get('metadata', {}).get('uid') and result['metadata'].get('resourceVersion')

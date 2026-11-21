@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.1](https://github.com/jonathanagustin/uds-takserver/compare/v1.2.0...v1.2.1) (2026-11-21)
+
+
+### Bug Fixes
+
+* reconcile Velero package labels and config on handoff ([#775](https://github.com/jonathanagustin/uds-takserver/issues/775)) ([46ecc1b](https://github.com/jonathanagustin/uds-takserver/commit/46ecc1bca01b5493fce8660269398a35867dc4d7))
+* release scoped Velero fields during candidate handoff ([#773](https://github.com/jonathanagustin/uds-takserver/issues/773)) ([93a4988](https://github.com/jonathanagustin/uds-takserver/commit/93a4988bc9c6e505444cf457e6678b7698f7cc6c))
+
 ## [1.2.0](https://github.com/jonathanagustin/uds-takserver/compare/v1.1.0...v1.2.0) (2026-11-20)
 
 
