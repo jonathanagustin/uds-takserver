@@ -19,7 +19,14 @@
 
 <!-- github-only:start -->
 <p align="center">
-  <a href="https://jonathanagustin.github.io/uds-takserver/">Read the documentation</a>
+  <a href="https://jonathanagustin.github.io/uds-takserver/">Read the documentation</a> ·
+  <a href="https://jonathanagustin.github.io/uds-takserver/#ui-preview">Watch the overview trailer</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/jonathanagustin/uds-takserver/releases/download/demo/uds-takserver-civilian-trailer.mp4">
+    <img src="https://github.com/jonathanagustin/uds-takserver/releases/download/demo/civilian-trailer-poster.jpg" alt="Watch the TAK Server on UDS overview trailer" width="760">
+  </a>
 </p>
 <!-- github-only:end -->
 
@@ -214,7 +221,7 @@ After deployment, use the [Access](#access) table to choose a browser or certifi
 
 ## Demo
 
-[Watch the 26-second UI preview](https://jonathanagustin.github.io/uds-takserver/#ui-preview): CloudTAK mapping, marker creation, sharing and TAK Server status, edited from recorded demos.
+[Watch the overview trailer](https://jonathanagustin.github.io/uds-takserver/#ui-preview): civilian first-responder scenes combined with recorded CloudTAK mapping and sharing on TAK Server.
 
 ### Deploy
 
