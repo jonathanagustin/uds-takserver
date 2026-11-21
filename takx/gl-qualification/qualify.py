@@ -17,12 +17,15 @@ import sys
 
 ROOT = Path(__file__).resolve().parent
 CONTROL_SRC = ROOT / "gl_controls.c"
+JNI_JAVA_SRC = ROOT / "GlJniSmoke.java"
+JNI_C_SRC = ROOT / "gl_jni_bridge.c"
 SCHEMA = "uds-takx-gl-qualification-v1"
 REQUIRED_CONTROLS = (
     "xvfb_es3_clear_readback",
     "textured_polygon_atlas_readback",
     "context_destroy_recreate_invalidation",
     "layer_visibility_clear_redraw",
+    "jni_strict_gles3_bridge_readback",
 )
 MAX_OUTPUT_BYTES = 1024 * 1024
 COMMAND_TIMEOUT_S = 120
@@ -95,6 +98,8 @@ def validate_receipt(receipt: dict) -> None:
     for name in REQUIRED_CONTROLS:
         if controls.get(name) is not True:
             raise ValueError(f"required GL control did not pass: {name}")
+    if receipt.get("jni_warnings") != 0:
+        raise ValueError("receipt must prove zero strict -Xcheck:jni warnings")
     providers = receipt.get("providers")
     if not isinstance(providers, list) or not providers:
         raise ValueError("receipt must record hashed ELF providers")
@@ -112,7 +117,9 @@ def validate_receipt(receipt: dict) -> None:
             raise ValueError(f"scope.{key} must remain false")
 
 
-def run_bounded(argv: list[str], env: dict[str, str] | None = None) -> str:
+def run_bounded(
+    argv: list[str], env: dict[str, str] | None = None, *, forbid_jni_warnings: bool = False
+) -> str:
     result = subprocess.run(
         argv,
         capture_output=True,
@@ -127,34 +134,66 @@ def run_bounded(argv: list[str], env: dict[str, str] | None = None) -> str:
         raise RuntimeError(
             f"command failed (exit={result.returncode}): {argv[0]}: {result.stderr.strip()[:400]}"
         )
+    if forbid_jni_warnings:
+        combined = f"{result.stdout}\n{result.stderr}"
+        if "WARNING" in combined or "JNI" in result.stderr:
+            raise RuntimeError(
+                f"strict -Xcheck:jni diagnostic detected: {result.stderr.strip()[:400]}"
+            )
     return result.stdout
 
 
+def resolve_java_home() -> Path:
+    env_home = os.environ.get("JAVA_HOME")
+    if env_home:
+        candidate = Path(env_home)
+        if (candidate / "include" / "jni.h").is_file():
+            return candidate
+    javac_bin = shutil.which("javac")
+    if javac_bin:
+        candidate = Path(javac_bin).resolve().parent.parent
+        if (candidate / "include" / "jni.h").is_file():
+            return candidate
+    raise RuntimeError("JDK with include/jni.h is required for JNI GL qualification")
+
+
 def verify_offline() -> dict:
-    """Offline guard: verify source presence and deterministic hash without running GL."""
-    if not CONTROL_SRC.is_file():
-        raise FileNotFoundError(f"missing control source: {CONTROL_SRC}")
-    text = CONTROL_SRC.read_text(encoding="utf-8")
+    """Offline guard: verify source presence and deterministic hashes without running GL."""
+    for src in (CONTROL_SRC, JNI_JAVA_SRC, JNI_C_SRC):
+        if not src.is_file():
+            raise FileNotFoundError(f"missing control source: {src}")
+    combined = (
+        CONTROL_SRC.read_text(encoding="utf-8")
+        + "\n"
+        + JNI_JAVA_SRC.read_text(encoding="utf-8")
+        + "\n"
+        + JNI_C_SRC.read_text(encoding="utf-8")
+    )
     for name in REQUIRED_CONTROLS:
-        if name not in text:
-            raise ValueError(f"control source missing assertion marker: {name}")
+        if name not in combined:
+            raise ValueError(f"control sources missing assertion marker: {name}")
     return {
         "schema": SCHEMA,
         "phase": "verify",
         "control_source": CONTROL_SRC.name,
         "control_source_sha256": sha256_file(CONTROL_SRC),
+        "jni_java_source_sha256": sha256_file(JNI_JAVA_SRC),
+        "jni_c_source_sha256": sha256_file(JNI_C_SRC),
         "required_controls": list(REQUIRED_CONTROLS),
     }
 
 
 def qualify(output_dir: Path, cc: str = "gcc") -> dict:
-    """Compile gl_controls.c and execute under isolated Xvfb + Mesa llvmpipe."""
+    """Compile C + JNI controls and execute under isolated Xvfb + Mesa llvmpipe."""
     if output_dir.exists() and any(output_dir.iterdir()):
         raise ValueError(f"output directory must be empty: {output_dir}")
     if shutil.which("xvfb-run") is None:
         raise RuntimeError("xvfb-run is required for --phase qualify")
     if shutil.which(cc) is None:
         raise RuntimeError(f"C compiler not found: {cc}")
+    if shutil.which("javac") is None or shutil.which("java") is None:
+        raise RuntimeError("javac and java are required for JNI GL qualification")
+    java_home = resolve_java_home()
 
     output_dir.mkdir(parents=True, exist_ok=True)
     binary = output_dir / "gl_controls"
@@ -162,6 +201,17 @@ def qualify(output_dir: Path, cc: str = "gcc") -> dict:
         cc, "-std=c99", "-Wall", "-Wextra", "-Werror", "-O2",
         str(CONTROL_SRC),
         "-o", str(binary),
+        "-lX11", "-lEGL", "-lGLESv2",
+    ])
+
+    jni_lib = output_dir / "libtakx_gl_jni.so"
+    run_bounded(["javac", "-d", str(output_dir), str(JNI_JAVA_SRC)])
+    run_bounded([
+        cc, "-std=c99", "-Wall", "-Wextra", "-Werror", "-O2", "-shared", "-fPIC",
+        f"-I{java_home / 'include'}",
+        f"-I{java_home / 'include' / 'linux'}",
+        str(JNI_C_SRC),
+        "-o", str(jni_lib),
         "-lX11", "-lEGL", "-lGLESv2",
     ])
 
@@ -174,17 +224,29 @@ def qualify(output_dir: Path, cc: str = "gcc") -> dict:
         "--server-args=-screen 0 640x480x24",
         str(binary),
     ], env=env)
+    jni_stdout = run_bounded([
+        "xvfb-run", "--auto-servernum",
+        "--server-args=-screen 0 640x480x24",
+        "java", "-Xcheck:jni", "-cp", str(output_dir), "GlJniSmoke", str(jni_lib),
+    ], env=env, forbid_jni_warnings=True)
 
     parsed = parse_control_output(stdout)
-    fields = parsed["fields"]
+    jni_parsed = parse_control_output(jni_stdout)
+    fields = {**parsed["fields"], **jni_parsed["fields"]}
     controls = {name: fields.get(name) == "true" for name in REQUIRED_CONTROLS}
+    jni_class = output_dir / "GlJniSmoke.class"
     receipt = {
         "schema": SCHEMA,
         "phase": "qualify",
         "arch": platform.machine(),
         "control_source": CONTROL_SRC.name,
         "control_source_sha256": sha256_file(CONTROL_SRC),
+        "jni_java_source_sha256": sha256_file(JNI_JAVA_SRC),
+        "jni_c_source_sha256": sha256_file(JNI_C_SRC),
         "binary_sha256": sha256_file(binary),
+        "jni_library_sha256": sha256_file(jni_lib),
+        "jni_class_sha256": sha256_file(jni_class),
+        "jni_warnings": 0,
         "display": fields.get("display", ""),
         "egl": fields.get("egl", ""),
         "version": fields.get("version", ""),
@@ -195,6 +257,7 @@ def qualify(output_dir: Path, cc: str = "gcc") -> dict:
             "recreated": fields.get("pixel_recreated", ""),
             "layer_on": fields.get("pixel_layer_on", ""),
             "layer_off": fields.get("pixel_layer_off", ""),
+            "jni": fields.get("pixel_jni", ""),
         },
         "controls": controls,
         "providers": hash_providers(parsed["providers"]),

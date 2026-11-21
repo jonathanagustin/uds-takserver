@@ -22,7 +22,12 @@ def sample_receipt():
         "arch": "x86_64",
         "control_source": "gl_controls.c",
         "control_source_sha256": "a" * 64,
+        "jni_java_source_sha256": "d" * 64,
+        "jni_c_source_sha256": "e" * 64,
         "binary_sha256": "b" * 64,
+        "jni_library_sha256": "f" * 64,
+        "jni_class_sha256": "1" * 64,
+        "jni_warnings": 0,
         "display": ":99",
         "egl": "1.5",
         "version": "OpenGL ES 3.2 Mesa 24.2.8-1ubuntu1~24.04.1",
@@ -33,6 +38,7 @@ def sample_receipt():
             "recreated": "51,212,153,255",
             "layer_on": "230,161,13,255",
             "layer_off": "10,13,18,255",
+            "jni": "229,160,13,255",
         },
         "controls": {name: True for name in Q.REQUIRED_CONTROLS},
         "providers": [
@@ -58,6 +64,8 @@ class GlQualificationTests(unittest.TestCase):
         self.assertEqual(result["schema"], Q.SCHEMA)
         self.assertEqual(result["phase"], "verify")
         self.assertEqual(len(result["control_source_sha256"]), 64)
+        self.assertEqual(len(result["jni_java_source_sha256"]), 64)
+        self.assertEqual(len(result["jni_c_source_sha256"]), 64)
         self.assertEqual(tuple(result["required_controls"]), Q.REQUIRED_CONTROLS)
 
     def test_parse_control_output_extracts_fields_and_providers(self):
@@ -92,6 +100,11 @@ class GlQualificationTests(unittest.TestCase):
         bad_renderer["renderer"] = "stub-renderer"
         with self.assertRaisesRegex(ValueError, "llvmpipe"):
             Q.validate_receipt(bad_renderer)
+
+        bad_jni = copy.deepcopy(base)
+        bad_jni["jni_warnings"] = 1
+        with self.assertRaisesRegex(ValueError, "jni"):
+            Q.validate_receipt(bad_jni)
 
         for control in Q.REQUIRED_CONTROLS:
             missing = copy.deepcopy(base)

@@ -20,7 +20,9 @@ concurrency:
 jobs:
   qualify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    container:
+      image: ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64
+    timeout-minutes: 10
     steps:
       - name: Checkout candidate source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,16 +35,7 @@ jobs:
           python3 -B takx/gl-qualification/qualify.py --phase verify
           python3 -B -m unittest discover -s takx/gl-qualification -p test_qualify.py -v
 
-      - name: Install Mesa llvmpipe and Xvfb toolchain
-        timeout-minutes: 5
-        run: |
-          set -euo pipefail
-          python3 -c 'import platform; assert platform.machine() == "x86_64", "native AMD64 required"'
-          sudo apt-get update -o Acquire::Retries=0 -o Acquire::http::Timeout=15
-          sudo apt-get install -y --no-install-recommends \
-            gcc xvfb libx11-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri
-
-      - name: Compile and run Mesa + Xvfb GLES3 qualification controls
+      - name: Compile and run Mesa + Xvfb + JNI GLES3 qualification controls
         timeout-minutes: 5
         run: |
           python3 -B takx/gl-qualification/qualify.py \
