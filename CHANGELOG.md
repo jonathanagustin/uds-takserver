@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.3.0](https://github.com/jonathanagustin/uds-takserver/compare/v1.2.3...v1.3.0) (2026-11-21)
+
+
+### Features
+
+* **takx:** add hosted Mesa llvmpipe and Xvfb GLES3 qualification harness ([#785](https://github.com/jonathanagustin/uds-takserver/issues/785)) ([6a7b1f1](https://github.com/jonathanagustin/uds-takserver/commit/6a7b1f18087dc0819e7894cdebadaada76d8c294))
+* **takx:** add prebuilt libglvnd 1.7.0 OCI cache and GHCR publish workflow ([#790](https://github.com/jonathanagustin/uds-takserver/issues/790)) ([52b333b](https://github.com/jonathanagustin/uds-takserver/commit/52b333b42035e486243359d7e5a904410d8b4975))
+* **takx:** add prebuilt Mesa/Xvfb/JDK17 GL runner image and GHCR publish workflow ([#786](https://github.com/jonathanagustin/uds-takserver/issues/786)) ([60fe3ca](https://github.com/jonathanagustin/uds-takserver/commit/60fe3caadd6b434ca6fddc0a21f67a4cd7c7a39e))
+* **takx:** add prebuilt PROJ 4.9.1 static PIC OCI cache and GHCR publish workflow ([#789](https://github.com/jonathanagustin/uds-takserver/issues/789)) ([bc423b3](https://github.com/jonathanagustin/uds-takserver/commit/bc423b33bb847184d3828d836457f7948ae3fdf4))
+* **takx:** add strict -Xcheck:jni GLES3 bridge control and use prebuilt GHCR runner ([#788](https://github.com/jonathanagustin/uds-takserver/issues/788)) ([b23d876](https://github.com/jonathanagustin/uds-takserver/commit/b23d87682996392d24fbd8d192253f2865063ee3))
+
 ## [1.2.3](https://github.com/jonathanagustin/uds-takserver/compare/v1.2.2...v1.2.3) (2026-11-21)
 
 
