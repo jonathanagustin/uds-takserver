@@ -204,6 +204,28 @@ digest and input key. The config and capsule matched the manifest, and
 the cache verifier matched all five capsule files and both static archive
 object inventories to the [registry receipt](https://github.com/jonathanagustin/uds-takserver/actions/runs/44709400370/artifacts/14616307543).
 
+### Read-only PR cache consumer
+
+`takx/geos-cache/pr_consumer.py` reads the reviewed immutable subject pinned in
+`takx/geos-cache/pr-consumer.lock.json` for read-only PR jobs in
+`.github/workflows/native-cache-pr.yaml`:
+
+- It verifies the exact protected-main workflow attestation (`--deny-self-hosted-runners`,
+  `--source-ref refs/heads/main`, pinned `source_commit`, `run_id`, `run_attempt`,
+  `subject_digest`, `input_key`, and `capsule_sha256`) with an empty registry
+  credential config before checking build-input compatibility.
+- If all consumed recipes and `inputs.lock.json` build inputs match the verified
+  predicate, it performs anonymous readback (`transport.readback`, verifying SLSA
+  provenance, the GEOS predicate, and all OCI/capsule/file digests) and runs
+  `qualify.py` at two fresh prefixes.
+- If build inputs differ after authentication, it reports a compatibility miss
+  (`cacheHit: false`, `reason: "build-inputs-differ"`) and falls back to a fresh
+  native build and two-prefix qualification. Authentication, transport, or capsule
+  failures fail closed.
+- The job remains strictly read-only (`contents: read`, `attestations: read`) and
+  does not promote SDK or security acceptance (`sdkAcceptance: false`,
+  `securityAcceptance: false`).
+
 ### Accepted native local evidence
 
 The fresh native AMD64 trial [44357847600](https://github.com/jonathanagustin/uds-takserver/actions/runs/44357847600)

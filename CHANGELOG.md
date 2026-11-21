@@ -1,5 +1,50 @@
 # Changelog
 
+## [1.2.1](https://github.com/jonathanagustin/uds-takserver/compare/v1.2.0...v1.2.1) (2026-11-21)
+
+
+### Bug Fixes
+
+* reconcile Velero package labels and config on handoff ([#775](https://github.com/jonathanagustin/uds-takserver/issues/775)) ([46ecc1b](https://github.com/jonathanagustin/uds-takserver/commit/46ecc1bca01b5493fce8660269398a35867dc4d7))
+* release scoped Velero fields during candidate handoff ([#773](https://github.com/jonathanagustin/uds-takserver/issues/773)) ([93a4988](https://github.com/jonathanagustin/uds-takserver/commit/93a4988bc9c6e505444cf457e6678b7698f7cc6c))
+
+## [1.2.0](https://github.com/jonathanagustin/uds-takserver/compare/v1.1.0...v1.2.0) (2026-11-20)
+
+
+### Features
+
+* **demo:** apply tactical obsidian and fieldmark styling to video pipelines ([#768](https://github.com/jonathanagustin/uds-takserver/issues/768)) ([ac71991](https://github.com/jonathanagustin/uds-takserver/commit/ac71991faa72e91ab4a7de3d31fe842c437ea5d2))
+
+## [1.1.0](https://github.com/jonathanagustin/uds-takserver/compare/v1.0.0...v1.1.0) (2026-11-20)
+
+
+### Features
+
+* **demo:** mix Pulse of Hope soundtrack into civilian hero trailer ([#765](https://github.com/jonathanagustin/uds-takserver/issues/765)) ([b8ccc1e](https://github.com/jonathanagustin/uds-takserver/commit/b8ccc1e8ff664cd2e8170f7f2a602e3827108a96))
+
+
+### Bug Fixes
+
+* **demo:** align trailer captions with recorded evidence ([#762](https://github.com/jonathanagustin/uds-takserver/issues/762)) ([ded2ebc](https://github.com/jonathanagustin/uds-takserver/commit/ded2ebce86422c68050bd643979ad830ae865e84))
+
+## [1.0.0](https://github.com/jonathanagustin/uds-takserver/compare/v0.20.0...v1.0.0) (2026-11-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* rename TakClient CRD API group to tak.uds.dev ([#752](https://github.com/jonathanagustin/uds-takserver/issues/752))
+
+### Features
+
+* rename TakClient CRD API group to tak.uds.dev ([#752](https://github.com/jonathanagustin/uds-takserver/issues/752)) ([b0b4eda](https://github.com/jonathanagustin/uds-takserver/commit/b0b4eda2be416936a86264c798a0e9afd8c36604))
+
+## [0.20.0](https://github.com/jonathanagustin/uds-takserver/compare/v0.19.0...v0.20.0) (2026-11-20)
+
+
+### Features
+
+* **takx:** reuse verified GEOS components in read-only PR builds ([#758](https://github.com/jonathanagustin/uds-takserver/issues/758)) ([1f2dc93](https://github.com/jonathanagustin/uds-takserver/commit/1f2dc939ca4d24681cdc1e52914122bde91964d1))
+
 ## [0.19.0](https://github.com/jonathanagustin/uds-takserver/compare/v0.18.2...v0.19.0) (2026-11-20)
 
 

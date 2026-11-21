@@ -31,20 +31,25 @@ echo "== Zarf package (KubeVirt, VM, viewer)"
 # ATAK_PACKAGE (oci://...) is a package an earlier run created from the same
 # inputs and published (see device-images.sh package-ref). Deploying it skips
 # the create. Otherwise the package is created here, in PKG_DIR.
+domain_args=(--set-values "global.domain=${DOMAIN}")
 if [[ -n "${ATAK_PACKAGE:-}" ]]; then
+  # Published alpha packages still use the legacy DOMAIN variable.
+  if [[ "${ATAK_PACKAGE_LEGACY:-false}" == true ]]; then
+    domain_args=(--set-variables "DOMAIN=${DOMAIN}")
+  fi
   echo "package: ${ATAK_PACKAGE}" | tee "${OUT}/package.txt"
   start=$(date +%s)
-  uds zarf package deploy "${ATAK_PACKAGE}" --set-variables DOMAIN="${DOMAIN}" --confirm
+  uds zarf package deploy "${ATAK_PACKAGE}" "${domain_args[@]}" --confirm
   echo "deploy (pull from OCI): $(( $(date +%s) - start ))s" | tee -a "${OUT}/package.txt"
 else
   start=$(date +%s)
   pkg_dir="${PKG_DIR:-$(mktemp -d)}"
   mkdir -p "${pkg_dir}"
-  uds zarf package create "${here}" --set ATAK_TAG="${ATAK_TAG}" -o "${pkg_dir}" --confirm
+  ATAK_IMAGE_SOURCE=daemon "${here}/ci/create-package.sh" "${ATAK_TAG}" -o "${pkg_dir}" --confirm
   du -h "${pkg_dir}"/*.tar.zst | tee "${OUT}/package.txt"
   echo "create: $(( $(date +%s) - start ))s" | tee -a "${OUT}/package.txt"
   start=$(date +%s)
-  uds zarf package deploy "${pkg_dir}"/zarf-package-atak-device-amd64-*.tar.zst --set-variables DOMAIN="${DOMAIN}" --confirm
+  uds zarf package deploy "${pkg_dir}"/zarf-package-atak-device-amd64-*.tar.zst "${domain_args[@]}" --confirm
   echo "deploy: $(( $(date +%s) - start ))s" | tee -a "${OUT}/package.txt"
 fi
 # The driver is a test tool, not part of the package. k3d can report a
@@ -81,7 +86,7 @@ admin() {
 DEVICE_USER="${DEVICE_USER:-atak-device}"
 DEVICE_GROUP="${DEVICE_GROUP:-Operators}"
 k apply -f - <<YAML
-apiVersion: tak.jonathanagustin.github.io/v1alpha1
+apiVersion: tak.uds.dev/v1alpha1
 kind: TakClient
 metadata:
   name: ${DEVICE_USER}

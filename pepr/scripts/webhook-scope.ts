@@ -85,7 +85,7 @@ export function pinLiterals(text: string, timeout: number, policy: string): stri
 // but not its matchConditions, which match only TAK objects. Run it after
 // scopeWebhook.
 export function splitTakClientWebhook(text: string): string {
-  const ruleStart = text.indexOf("      - apiGroups:\n          - tak.jonathanagustin.github.io\n");
+  const ruleStart = text.indexOf("      - apiGroups:\n          - tak.uds.dev\n");
   const ruleEnd = text.indexOf("    sideEffects:", ruleStart);
   const entry = text.indexOf("  - admissionReviewVersions:");
   if (ruleStart < 0 || ruleEnd < 0 || entry < 0) {

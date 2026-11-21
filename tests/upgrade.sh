@@ -164,6 +164,59 @@ stream() {
   TAK_CLIENT_KEY_PASSPHRASE="${keystore_before}" python3 -B tests/upgrade-stream.py --port "$(cat /tmp/tak-gateway-port)" \
     --cert "${work}/certs/admin.pem" --key "${work}/certs/admin.key"
 }
+takclient_stream_check() {
+  local expect="$1" cert="$2" key="$3" uid="$4"
+  python3 -B - "${expect}" "$(cat /tmp/tak-gateway-port)" "${cert}" "${key}" "${uid}" <<'PY'
+import select, socket, ssl, sys, time
+
+expect, port, cert, key, uid = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+ctx.load_cert_chain(cert, key)
+
+now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+stale = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 300))
+event = (f'<event version="2.0" uid="{uid}" type="a-f-G-U-C" how="m-g" '
+         f'time="{now}" start="{now}" stale="{stale}"><point lat="0" lon="0" '
+         f'hae="0" ce="9999999" le="9999999"/><detail><contact callsign="{uid}" '
+         'endpoint="*:-1:stcp"/></detail></event>').encode()
+
+def alive(stream):
+    if stream.pending() or select.select([stream], [], [], 0)[0]:
+        return stream.recv(65536) != b""
+    return True
+
+def probe():
+    with socket.create_connection(("127.0.0.1", port), timeout=15) as raw:
+        with ctx.wrap_socket(raw, server_hostname="takserver-stream.uds.dev") as stream:
+            stream.settimeout(5)
+            stream.sendall(event)
+            wait = 3.0 if expect == "accept" else 10.0
+            deadline = time.monotonic() + wait
+            while time.monotonic() < deadline:
+                if not alive(stream):
+                    return False
+                time.sleep(0.2)
+            return True
+
+try:
+    connected = probe()
+except (ssl.SSLError, OSError):
+    connected = False
+
+if expect == "accept":
+    assert connected, f"expected 8089 to accept certificate for {uid}"
+    print(f"PASS 8089 accepted TakClient certificate for {uid}")
+elif expect == "reject":
+    assert not connected, f"expected 8089 to reject revoked certificate for {uid}"
+    print(f"PASS 8089 rejected revoked TakClient certificate for {uid}")
+else:
+    raise SystemExit(f"unknown expect mode: {expect}")
+PY
+}
 postgres_pod() {
   k get pods -n takserver -l app.kubernetes.io/name=postgresql -o json | python3 -c '
 import json,sys
@@ -276,6 +329,39 @@ sha256sum "${work}/certs/admin.pem" "${work}/certs/admin.key" > "${work}/certs.s
 stream
 sso baseline
 
+# Exercise the documented revoke-before-upgrade path when the baseline
+# serves the legacy TakClient API group.
+legacy_takclient=""
+legacy_client_serial=""
+if k get crd takclients.tak.jonathanagustin.github.io >/dev/null 2>&1; then
+  legacy_takclient="upgrade-client"
+  k apply -f - <<YAML
+apiVersion: tak.jonathanagustin.github.io/v1alpha1
+kind: TakClient
+metadata:
+  name: ${legacy_takclient}
+  namespace: takclients
+spec:
+  callsign: ${legacy_takclient}
+  groups:
+    - Operators
+YAML
+  k wait "takclients.tak.jonathanagustin.github.io/${legacy_takclient}" -n takclients --for=condition=Ready --timeout=300s
+  legacy_client_serial="$(k get secret "${legacy_takclient}" -n takclients -o jsonpath='{.metadata.annotations.tak\.jonathanagustin\.github\.io/serial}')"
+  legacy_client_issuer="$(k get secret "${legacy_takclient}" -n takclients -o jsonpath='{.metadata.annotations.tak\.jonathanagustin\.github\.io/issuer}')"
+  test -n "${legacy_client_serial}"
+  [[ "${legacy_client_issuer}" == "tak" ]]
+  mkdir -p "${work}/legacy-client"
+  k get secret "${legacy_takclient}" -n takclients -o jsonpath='{.data.client\.pem}' | base64 -d > "${work}/legacy-client/client.pem"
+  k get secret "${legacy_takclient}" -n takclients -o jsonpath='{.data.client\.key}' | base64 -d > "${work}/legacy-client/client.key"
+  takclient_stream_check accept "${work}/legacy-client/client.pem" "${work}/legacy-client/client.key" "${legacy_takclient}"
+  k delete "takclients.tak.jonathanagustin.github.io/${legacy_takclient}" -n takclients --timeout=180s
+  legacy_secret="$(k get secret "${legacy_takclient}" -n takclients --ignore-not-found -o name)"
+  test -z "${legacy_secret}"
+  takclient_stream_check reject "${work}/legacy-client/client.pem" "${work}/legacy-client/client.key" "${legacy_takclient}"
+  stream
+fi
+
 marker="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 sql <<SQL
 CREATE SCHEMA upgrade_test;
@@ -376,6 +462,66 @@ sha256sum --check "${work}/certs.sha256"
 gateway
 stream
 sso upgraded
+if [[ -n "${legacy_takclient}" ]]; then
+  k get crd takclients.tak.uds.dev -o name
+  if k get crd takclients.tak.jonathanagustin.github.io >/dev/null 2>&1; then
+    echo "legacy CRD takclients.tak.jonathanagustin.github.io still exists after upgrade" >&2
+    exit 1
+  fi
+  legacy_secret="$(k get secret "${legacy_takclient}" -n takclients --ignore-not-found -o name)"
+  test -z "${legacy_secret}"
+  takclient_stream_check reject "${work}/legacy-client/client.pem" "${work}/legacy-client/client.key" "${legacy_takclient}"
+  stream
+
+  k apply -f - <<YAML
+apiVersion: tak.uds.dev/v1alpha1
+kind: TakClient
+metadata:
+  name: ${legacy_takclient}
+  namespace: takclients
+spec:
+  callsign: ${legacy_takclient}
+  groups:
+    - Operators
+YAML
+  k wait "takclients.tak.uds.dev/${legacy_takclient}" -n takclients --for=condition=Ready --timeout=300s
+  migrated_serial="$(k get secret "${legacy_takclient}" -n takclients -o jsonpath='{.metadata.annotations.tak\.uds\.dev/serial}')"
+  migrated_issuer="$(k get secret "${legacy_takclient}" -n takclients -o jsonpath='{.metadata.annotations.tak\.uds\.dev/issuer}')"
+  migrated_legacy_serial="$(k get secret "${legacy_takclient}" -n takclients -o jsonpath='{.metadata.annotations.tak\.jonathanagustin\.github\.io/serial}')"
+  test -n "${migrated_serial}"
+  [[ "${migrated_serial}" != "${legacy_client_serial}" && "${migrated_issuer}" == "tak" && -z "${migrated_legacy_serial}" ]]
+
+  # Old certificate must be recorded in the CRL and rejected on 8089.
+  k get secret takserver-crl -n takserver -o jsonpath='{.data.revoked\.json}' | base64 -d | python3 -B -c '
+import json, sys
+serial = sys.argv[1]
+entries = json.load(sys.stdin)
+assert any(entry.get("serial") == serial for entry in entries), "legacy TakClient serial missing from takserver-crl"
+' "${legacy_client_serial}"
+  takclient_stream_check reject "${work}/legacy-client/client.pem" "${work}/legacy-client/client.key" "${legacy_takclient}"
+
+  # Replacement certificate must connect on 8089.
+  mkdir -p "${work}/migrated-client"
+  k get secret "${legacy_takclient}" -n takclients -o jsonpath='{.data.client\.pem}' | base64 -d > "${work}/migrated-client/client.pem"
+  k get secret "${legacy_takclient}" -n takclients -o jsonpath='{.data.client\.key}' | base64 -d > "${work}/migrated-client/client.key"
+  takclient_stream_check accept "${work}/migrated-client/client.pem" "${work}/migrated-client/client.key" "${legacy_takclient}"
+
+  # Deleting the migrated TakClient must revoke the replacement cert and clean up.
+  k delete "takclients.tak.uds.dev/${legacy_takclient}" -n takclients --timeout=60s
+  if k get secret "${legacy_takclient}" -n takclients >/dev/null 2>&1; then
+    echo "Secret takclients/${legacy_takclient} still exists after deleting migrated TakClient" >&2
+    exit 1
+  fi
+  k get secret takserver-crl -n takserver -o jsonpath='{.data.revoked\.json}' | base64 -d | python3 -B -c '
+import json, sys
+want = set(sys.argv[1:])
+serials = {entry.get("serial") for entry in json.load(sys.stdin)}
+assert want.issubset(serials), f"expected {want} in takserver-crl"
+' "${legacy_client_serial}" "${migrated_serial}"
+  takclient_stream_check reject "${work}/migrated-client/client.pem" "${work}/migrated-client/client.key" "${legacy_takclient}"
+  stream
+  echo "PASS legacy-group TakClient migrated to tak.uds.dev, old cert revoked, new cert accepted and revoked on delete"
+fi
 sql <<< 'DROP SCHEMA upgrade_test CASCADE;'
 echo "PASS released-to-PR upgrade: healthy TAK pods, SSO dashboard, retained client certificate, and PostgreSQL data"
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then

@@ -30,11 +30,11 @@ For deployment, provisioning, and connection checks in one procedure, see
 [Connect the ATAK test device](how-to/connect-atak-test-device.md).
 
 ```bash
-uds zarf package create atak --set ATAK_TAG=5.5.1.10 --confirm
-uds zarf package deploy zarf-package-atak-device-amd64-*.tar.zst --set-variables DOMAIN=uds.dev --confirm
+./atak/ci/create-package.sh 5.5.1.10 --confirm
+uds zarf package deploy zarf-package-atak-device-amd64-*.tar.zst --set-values global.domain=uds.dev --confirm
 ```
 
-Or deploy the package the last `main` run tested, without building it:
+Or deploy the published package without building it. For v1beta1 packages, use `--set-values global.domain=uds.dev`. Existing v1alpha1 packages use `--set-variables DOMAIN=uds.dev`.
 
 ```bash
 uds zarf package deploy oci://ghcr.io/jonathanagustin/uds-takserver/packages/atak-device:5.5.1.10 \
@@ -137,7 +137,7 @@ ATAK always enrolls on 8446 with Hypertext Transfer Protocol (HTTP) Basic authen
 For a real device, apply a `TakClient` in namespace `takclients`:
 
 ```yaml
-apiVersion: tak.jonathanagustin.github.io/v1alpha1
+apiVersion: tak.uds.dev/v1alpha1
 kind: TakClient
 metadata:
   name: alpha-1
@@ -150,11 +150,34 @@ spec:
 
 When `kubectl get takclient alpha-1 -n takclients` shows `Ready`, Secret `takclients/alpha-1` has `package.zip`. Copy it to the device's `Download` folder as `atak-alpha-1.dpk`, or open it with ATAK's Import Manager. The Secret also has `client.pem`, `client.key`, and `ca.pem` for other clients.
 
-The Secret always keeps the full `TakClient` resource name. Newly issued Secrets also record that exact name in the `tak.jonathanagustin.github.io/takclient` annotation. The label with the same key keeps names up to 63 characters unchanged. For longer names, its value is `sha256_` followed by the first 56 lowercase hexadecimal characters of the SHA-256 hash of the full name, encoded as UTF-8. Use that value for label selectors, or retrieve the Secret directly by its full name. Reconciliation and deletion use the full name rather than the label. `spec.callsign` still has its separate 4-to-63-character limit.
+The Secret always keeps the full `TakClient` resource name. Newly issued Secrets also record that exact name in the `tak.uds.dev/takclient` annotation. The label with the same key keeps names up to 63 characters unchanged. For longer names, its value is `sha256_` followed by the first 56 lowercase hexadecimal characters of the SHA-256 hash of the full name, encoded as UTF-8. Use that value for label selectors, or retrieve the Secret directly by its full name. Reconciliation and deletion use the full name rather than the label. `spec.callsign` still has its separate 4-to-63-character limit.
 
 Delete the `TakClient` to remove the device. The watcher first revokes its certificate-table row through TAK's certadmin API on 8443, which closes its streaming connection and rejects reconnects. It then deletes the file user and Secret and records the serial in the CRL as a backstop. Revoking a new TAK-issued certificate does not request a TAK restart. A pending legacy migration or periodic CRL-expiry refresh can still require one. A failed certificate lookup or revoke retains the finalizer and Secret for retry.
 
 On upgrade, existing locally signed certificates are reissued through TAK. The previous certificate still takes the CRL restart path once; connected clients can be interrupted during this migration. Its reload request is retained until both API and messaging pods were created after that CRL update, even if another client is revoked meanwhile. Import the updated data package into devices after migration. Existing `spec.validityDays` fields remain accepted but are deprecated and ignored; change the global TAK CA lifetime instead. The random file-user password used for enrollment and recovery stays in watcher-only Secret `takserver/takclient-enrollment`. Device Secrets and data packages never include it; access to the device material does not grant Basic enrollment capability.
+
+### Migrating from `tak.jonathanagustin.github.io`
+
+Releases before `tak.uds.dev/v1alpha1` served `TakClient` under `tak.jonathanagustin.github.io/v1alpha1`. Because the CustomResourceDefinition (CRD) is renamed, existing `TakClient` objects must be recreated under `tak.uds.dev/v1alpha1`:
+
+The old controller revokes the certificate and removes its generated Secret when you delete a TakClient. Devices lose access from that point until they import the replacement package. Revocations recorded by the old controller persist across the API group change.
+
+To migrate existing `TakClient` resources without stalling CRD removal:
+
+1. Export existing `TakClient` manifests before upgrading:
+
+   ```bash
+   kubectl get takclients.tak.jonathanagustin.github.io -n takclients -o yaml > takclients-backup.yaml
+   ```
+
+2. Delete the old-group objects while the old controller is still running and let finalization complete:
+
+   ```bash
+   kubectl delete takclients.tak.jonathanagustin.github.io --all -n takclients
+   ```
+
+3. Upgrade the TAK Server package. Confirm `kubectl get crd takclients.tak.uds.dev` succeeds.
+4. Recreate each `TakClient` from `takclients-backup.yaml` with `apiVersion: tak.uds.dev/v1alpha1` (dropping cluster-managed `metadata` fields and `status`), wait for `Ready`, and distribute each updated `package.zip` from Secret `takclients/<name>`.
 
 ## Network rules
 

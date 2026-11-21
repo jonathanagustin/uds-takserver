@@ -302,6 +302,7 @@ def main() -> None:
     parser.add_argument("--veo-clip", type=Path, required=True, help="25s live-action responder B-roll MP4")
     parser.add_argument("--ui-clip", type=Path, required=True, help="Recorded CloudTAK/TAK Server UI MP4")
     parser.add_argument("--topo-bg", type=Path, default=Path("assets/tactical-topo.jpg"), help="Topographic outro image")
+    parser.add_argument("--music-track", type=Path, default=None, help="Optional soundtrack MP3/WAV replacing segment audio")
     parser.add_argument("--out-dir", type=Path, required=True, help="Output directory for MP4, poster, and alpha WebMs")
     args = parser.parse_args()
 
@@ -325,9 +326,9 @@ def main() -> None:
         chapters = [
             ("hud1.webm", 4.8, "FIELD TEAMS  //  ATAK & ITAK", "Live position and hazard sharing across every crew"),
             ("hud2.webm", 4.8, "INCIDENT COMMAND  //  CLOUDTAK + SSO", "Browser common operating picture with zero-trust auth"),
-            ("hud3.webm", 11.5, "LIVE STACK  //  UDS CORE + PEPR", "Automated mTLS certificates, CRLs, and air-gapped sync"),
-            ("hud4.webm", 4.8, "AIR-GROUND COORDINATION  //  MULTI-ARCH", "Runs identically on amd64 and arm64 edge clusters"),
-            ("hud5.webm", 4.8, "DISCONNECTED EDGE  //  ZARF AIR-GAP", "One signed Zarf package — deploy anywhere in minutes"),
+            ("hud3.webm", 11.5, "RECORDED DEMO  //  CLOUDTAK", "Create a map marker and open sharing controls"),
+            ("hud4.webm", 4.8, "AIR-GROUND COORDINATION  //  MULTI-ARCH", "Native builds for amd64 and arm64"),
+            ("hud5.webm", 4.8, "DISCONNECTED EDGE  //  ZARF AIR-GAP", "Signed Zarf packages for disconnected installs"),
         ]
         for fname, dur, tag, head in chapters:
             pipe_frames_to_webm(
@@ -381,13 +382,27 @@ def main() -> None:
         concat_file = work / "concat.txt"
         concat_file.write_text("\n".join(f"file '{work / f'seg{i}.mp4'}'" for i in range(1, 8)) + "\n")
         out_mp4 = args.out_dir / "uds-takserver-civilian-trailer.mp4"
-        subprocess.run([
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file),
-            "-c:v", "libx264", "-preset", "medium", "-crf", "19", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
-            "-movflags", "+faststart",
-            str(out_mp4),
-        ], check=True, stderr=subprocess.DEVNULL)
+        if args.music_track is not None:
+            subprocess.run([
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0", "-i", str(concat_file),
+                "-i", str(args.music_track),
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-c:v", "libx264", "-preset", "medium", "-crf", "19", "-pix_fmt", "yuv420p",
+                "-af", "afade=t=in:st=0:d=0.25,afade=t=out:st=40.5:d=0.8,apad",
+                "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
+                "-shortest",
+                "-movflags", "+faststart",
+                str(out_mp4),
+            ], check=True, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.run([
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file),
+                "-c:v", "libx264", "-preset", "medium", "-crf", "19", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
+                "-movflags", "+faststart",
+                str(out_mp4),
+            ], check=True, stderr=subprocess.DEVNULL)
 
         subprocess.run([
             "ffmpeg", "-y", "-ss", "2.6", "-i", str(out_mp4),

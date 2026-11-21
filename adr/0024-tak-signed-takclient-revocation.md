@@ -86,7 +86,7 @@ Run [42072025085](https://github.com/jonathanagustin/uds-takserver/actions/runs/
 ## Implementation and upgrade behavior
 
 The operator marks successfully enrolled certificates with
-`tak.jonathanagustin.github.io/issuer: tak` on the Secret and resource. A missing
+`tak.uds.dev/issuer: tak` on the Secret and resource. A missing
 marker forces a one-time reissue. It revokes the old certificate before
 publishing its replacement; a missing fingerprint or failed certadmin request
 keeps Ready false, and a failed finalization retains the Secret and finalizer.

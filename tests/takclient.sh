@@ -39,7 +39,7 @@ if [[ -z "${gw_port}" ]]; then
 fi
 
 echo "== apply TakClient ${name}"
-k get crd takclients.tak.jonathanagustin.github.io -o name
+k get crd takclients.tak.uds.dev -o name
 
 echo "== ServiceAccounts"
 uuid="pepr-c72fcf944a4f43bbb386d22371aa640f"
@@ -63,7 +63,7 @@ expect yes "${watcher_sa}" create secrets -n takclients
 expect no "${admission_sa}" get secret/takserver-ca-key -n takserver
 expect no "${admission_sa}" list secrets --all-namespaces
 expect no "${admission_sa}" get secrets -n takclients
-expect no "${admission_sa}" patch takclients.tak.jonathanagustin.github.io -n takclients
+expect no "${admission_sa}" patch takclients.tak.uds.dev -n takclients
 expect yes "${admission_sa}" get configmap/core-config -n takserver
 expect no "${watcher_sa}" get secret/takserver-db -n takserver
 for app in "${uuid}:${uuid}" "${uuid}-watcher:${uuid}-watcher"; do
@@ -71,7 +71,7 @@ for app in "${uuid}:${uuid}" "${uuid}-watcher:${uuid}-watcher"; do
   [[ "${account}" = "${app##*:}" ]] || { echo "deploy ${app%%:*} runs as '${account}', want '${app##*:}'" >&2; exit 1; }
 done
 k apply -f - <<YAML
-apiVersion: tak.jonathanagustin.github.io/v1alpha1
+apiVersion: tak.uds.dev/v1alpha1
 kind: TakClient
 metadata:
   name: ${name}
@@ -101,7 +101,7 @@ import json, sys
 assert "user-password" not in json.load(sys.stdin)["data"], "device Secret exposes enrollment capability"
 '
 
-serial="$(k get takclient "${name}" -n takclients -o jsonpath='{.metadata.annotations.tak\.jonathanagustin\.github\.io/serial}')"
+serial="$(k get takclient "${name}" -n takclients -o jsonpath='{.metadata.annotations.tak\.uds\.dev/serial}')"
 openssl verify -CAfile "${work}/ca.pem" "${work}/client.pem"
 actual_serial="$(openssl x509 -in "${work}/client.pem" -noout -serial | cut -d= -f2)"
 python3 - "${actual_serial}" "${serial}" <<'PY_SERIAL'

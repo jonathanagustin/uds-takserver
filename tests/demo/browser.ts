@@ -123,13 +123,13 @@ const pointerOverlay = () => {
       #demo-cursor svg { filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
       .demo-ripple { position: fixed; z-index: 2147483646; pointer-events: none;
         width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%;
-        border: 3px solid #818CF8; animation: demo-ripple .6s ease-out forwards; }
+        border: 3px solid #E5A00D; animation: demo-ripple .6s ease-out forwards; }
       @keyframes demo-ripple { from { transform: scale(.3); opacity: 1 } to { transform: scale(1.4); opacity: 0 } }`;
     document.head.appendChild(style);
     const cursor = document.createElement("div");
     cursor.id = "demo-cursor";
     cursor.innerHTML =
-      '<svg width="30" height="30" viewBox="0 0 22 22"><path d="M3 2 L3 18 L7.5 13.8 L10.6 20 L13.2 18.8 L10.2 12.6 L16.4 12.4 Z" fill="#F8FAFC" stroke="#0F172A" stroke-width="1.4" stroke-linejoin="round"/></svg>';
+      '<svg width="30" height="30" viewBox="0 0 22 22"><path d="M3 2 L3 18 L7.5 13.8 L10.6 20 L13.2 18.8 L10.2 12.6 L16.4 12.4 Z" fill="#F8FAFC" stroke="#0B0E11" stroke-width="1.4" stroke-linejoin="round"/></svg>';
     document.body.appendChild(cursor);
     const saved = sessionStorage.getItem("demo-cursor");
     if (saved) {

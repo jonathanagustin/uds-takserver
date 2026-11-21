@@ -24,7 +24,7 @@ max_bytes="${MAX_BYTES:-9500000}"
 fps=30
 # Each recording is fitted into the window frame's content area.
 size=1632:840
-bg=0x0F172A
+bg=0x0B0E11
 # demo/record-browser.sh already trims the capture to the walkthrough's start.
 web_trim="${WEB_TRIM:-0}"
 # No fallback fonts: stop here if Inter or JetBrains Mono is missing.

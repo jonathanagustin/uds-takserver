@@ -900,7 +900,7 @@ def generated_secret(driver,obj,cleanup=False):
         return True
     if namespace=='takserver' and name=='takclient-enrollment':
         require(meta.get('labels',{}).get('app.kubernetes.io/managed-by')=='takserver-oidc','enrollment cache source label differs')
-        if cleanup:require(not driver.get('takclients.tak.jonathanagustin.github.io',namespace='takclients')['items'],'active client enrollment credentials must not be retired')
+        if cleanup:require(not driver.get('takclients.tak.uds.dev',namespace='takclients')['items'],'active client enrollment credentials must not be retired')
         return True
     return False
 
@@ -1097,11 +1097,11 @@ def preserved_registry(driver,obj,bindings):
 
 
 def no_live_clients(driver):
-    try:clients=driver.get('takclients.tak.jonathanagustin.github.io',namespace='takclients')['items']
+    try:clients=driver.get('takclients.tak.uds.dev',namespace='takclients')['items']
     except ValueError:
         # The Pepr chart owns the CRD as a template, so uninstall may already
         # have removed the API. A failed list alone never establishes absence.
-        require(not driver.kube('get','customresourcedefinition','takclients.tak.jonathanagustin.github.io',
+        require(not driver.kube('get','customresourcedefinition','takclients.tak.uds.dev',
                                 '--ignore-not-found','-o','json').strip(),'TakClient inventory unavailable')
         return
     require(isinstance(clients,list) and not clients,

@@ -72,7 +72,7 @@ const MOVED = new Set([
   "takclients",
 ]);
 
-const TAKCLIENT_GROUP = "tak.jonathanagustin.github.io";
+const TAKCLIENT_GROUP = "tak.uds.dev";
 
 export const ADMISSION_SA = "{{ .Values.uuid }}";
 export const WATCHER_SA = "{{ .Values.uuid }}-watcher";

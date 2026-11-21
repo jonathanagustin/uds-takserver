@@ -144,7 +144,7 @@ The host needs a POSIX shell and a running container engine; see
 Release packages are published to `oci://ghcr.io/jonathanagustin/uds-takserver/takserver:<version>-upstream`, with one artifact per architecture. Add the package to a UDS bundle alongside UDS Core with the [`keylessVerification`](#verify-a-release) block below, or deploy it directly onto a cluster that already runs UDS Core with the passthrough gateway:
 
 ```bash
-VERSION=0.19.0 # x-release-please-version
+VERSION=1.2.1 # x-release-please-version
 uds zarf package deploy "oci://ghcr.io/jonathanagustin/uds-takserver/takserver:${VERSION}-upstream" --confirm
 ```
 
@@ -260,7 +260,7 @@ https://github.com/user-attachments/assets/2773b517-9793-45b9-811b-147ce0671d69
 Each release package is signed keylessly by `.github/workflows/release.yaml` on `main`, and the signature is recorded in the public Sigstore transparency log. Verify it before deploying, once per architecture:
 
 ```bash
-VERSION=0.19.0 # x-release-please-version
+VERSION=1.2.1 # x-release-please-version
 uds zarf package verify "oci://ghcr.io/jonathanagustin/uds-takserver/takserver:${VERSION}-upstream" \
   --architecture amd64 \
   --certificate-identity-regexp '^https://github\.com/jonathanagustin/(uds-k3d-takserver|uds-takserver)/\.github/workflows/release\.yaml@refs/(tags/v[0-9]+\.[0-9]+\.[0-9]+|heads/main)$' \
@@ -281,7 +281,7 @@ Add the same `keylessVerification` block to the package entry in your bundle (as
 The package index also carries signed SLSA v1 build provenance in GHCR and in the repository's attestations. Verify it with the [GitHub CLI](https://cli.github.com/):
 
 ```bash
-VERSION=0.19.0 # x-release-please-version
+VERSION=1.2.1 # x-release-please-version
 gh attestation verify "oci://ghcr.io/jonathanagustin/uds-takserver/takserver:${VERSION}-upstream" \
   --owner jonathanagustin \
   --signer-workflow jonathanagustin/uds-takserver/.github/workflows/release.yaml
