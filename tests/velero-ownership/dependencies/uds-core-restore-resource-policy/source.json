@@ -1,0 +1,31 @@
+{
+  "upstream": "https://github.com/defenseunicorns/uds-core",
+  "baseCommit": "cff1255458757284305d2755314e1738e3e281ed",
+  "license": "AGPL-3.0-or-later",
+  "upstreamCopyright": "Copyright 2024-2026 Defense Unicorns",
+  "patchSHA256": "d70c2a95789323b1dc7a05c6dd74912c303fd56733da7488aa530e408339a6af",
+  "licenseSHA256": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
+  "files": {
+    "src/velero/chart/templates/crds/restores.yaml": {
+      "beforeSHA256": "689e35b8dad98292373f48218746098a3bcdb4b134a4a4b87195785012c1575c",
+      "afterSHA256": "eb650958cfba9a0e1e951ecde2e4436062e58d80afc86db50aef48262a95fb43"
+    },
+    "src/velero/tasks.yaml": {
+      "beforeSHA256": "b61a94f8ee9d3795cda7fcd5b15c3824e7d6113f1fb6bab16b5b6276d394730d",
+      "afterSHA256": "ad4abe6fe0ba653a7220168fd6f21bd0abf0b8912dd6cef7227ee5944b425279"
+    }
+  },
+  "validation": {
+    "exactBasePatchCheckPassed": true,
+    "appliedBytesMatchPreparedFiles": true,
+    "liveCoreAcceptance": false
+  },
+  "veleroAPI": {
+    "repository": "vmware-tanzu/velero",
+    "commit": "4ee1e79a7aed367fd9b767b8219ec65bd0c96892",
+    "path": "config/crd/v1/bases/velero.io_restores.yaml",
+    "fileSHA256": "91eab7251df2936fcfa7bed32736c3949e1f70bbe4dcadde2e5dc2d299613042",
+    "resourcePolicySchemaSHA256": "2af8b1138430962130ee6db8588721a09bafabd7e0e546a070da5d6fd5ab8ff6",
+    "exactResourcePolicySchemaMatched": true
+  }
+}
