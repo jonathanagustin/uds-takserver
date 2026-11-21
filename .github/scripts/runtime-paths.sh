@@ -75,6 +75,7 @@ compliance/README.md
 .github/workflows/native-cache.yaml
 .github/workflows/native-cache-pr.yaml
 .github/workflows/geos-local-qualification.yaml
+.github/workflows/takx-gl-qualification.yaml
 .github/scripts/migrate-ghcr.py
 .github/workflows/test-aks.yaml
 .github/workflows/test-eks.yaml
