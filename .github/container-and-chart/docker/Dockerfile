@@ -122,7 +122,6 @@ RUN bash -euxo pipefail -c '\
     cp "$root/takserver-core/enable_admin.sh" "$out/enable_admin.sh"; \
     cp "$root/takserver-core/messaging-readiness.sh" "$out/messaging-readiness.sh"; \
     cp "$root/takserver-core/config-readiness.sh" "$out/config-readiness.sh"; \
-    cp "$root/takserver-core/api-readiness.sh" "$out/api-readiness.sh"; \
     cp "$root/takserver-core/takserver-pm.jar" "$out/takserver-pm.jar"; \
     ext="$(find /src/src -name "ignite-extensions*.jar" -path "*/build/*" | head -n 1)"; \
     test -s "$ext"; \
@@ -163,11 +162,12 @@ COPY --from=builder \
     /image-root/enable_admin.sh \
     /image-root/messaging-readiness.sh \
     /image-root/config-readiness.sh \
-    /image-root/api-readiness.sh \
     /image-root/db-connection-configuration.sh \
     /image-root/takserver-pm.jar \
     /image-root/ignite-extensions.jar \
     /
+
+COPY api-readiness.sh /api-readiness.sh
 
 # setenv.sh sets -Djdk.tls.client.protocols=TLSv1.2, so every default TLS client in
 # the TAK JVM offers TLS 1.2 only. TAK's OIDC discovery and token calls use a
@@ -204,7 +204,7 @@ RUN chmod 0755 \
     && sed -i "s#cat 'UserAuthenticationFile.xml' | grep -q 'ROLE_ADMIN'#grep -qs -e ROLE_ADMIN -e 'adding new file-based user' /opt/tak/UserAuthenticationFile.xml /logs/takserver-messaging.log#" \
         /messaging-readiness.sh \
     && sed -i 's#location="UserAuthenticationFile.xml"#location="/opt/tak/UserAuthenticationFile.xml"#' /CoreConfig.xml \
-    && sed -i '2i : > /logs/takserver-api.log' /takserver-api-cluster.sh \
+    && sed -i '2i rm -f /tmp/takserver-api-started && : > /logs/takserver-api.log || exit 1' /takserver-api-cluster.sh \
     && sed -i '2i : > /logs/takserver-messaging.log' /takserver-messaging-cluster.sh \
     && sed -i '2i : > /logs/takserver-config.log' /takserver-config-cluster.sh
 

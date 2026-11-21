@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.2.3](https://github.com/jonathanagustin/uds-takserver/compare/v1.2.2...v1.2.3) (2026-11-21)
+
+
+### Bug Fixes
+
+* **demo:** report safe static refusal stage in publication.py ([#780](https://github.com/jonathanagustin/uds-takserver/issues/780)) ([30e1cb7](https://github.com/jonathanagustin/uds-takserver/commit/30e1cb7193577f81f2168d5745303b04efa8a839))
+
+## [1.2.2](https://github.com/jonathanagustin/uds-takserver/compare/v1.2.1...v1.2.2) (2026-11-21)
+
+
+### Bug Fixes
+
+* keep TAK API readiness across daily log rotation ([#776](https://github.com/jonathanagustin/uds-takserver/issues/776)) ([83c1262](https://github.com/jonathanagustin/uds-takserver/commit/83c1262b9059de6fa512f357eff87d16f9adf93d))
+
 ## [1.2.1](https://github.com/jonathanagustin/uds-takserver/compare/v1.2.0...v1.2.1) (2026-11-21)
 
 

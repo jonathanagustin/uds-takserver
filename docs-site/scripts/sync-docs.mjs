@@ -44,7 +44,7 @@ const siteBase = `${assetBase}${args['url-prefix'] ? '/' + args['url-prefix'] : 
 // videos into public/demo/ and Pages serves them as video/mp4. The posters
 // in public/demo/ are committed. The copies are gitignored.
 // Preserve the published demo source and its historical provenance.
-const demoRelease = 'https://github.com/jonathanagustin/uds-takserver/releases/download/demo';
+const demoRelease = 'https://github.com/jonathanagustin/uds-takserver/releases/download/demo-run-44802574418-attempt-1';
 const demoDir = path.resolve(import.meta.dirname, '../public/demo');
 
 const pages = [
