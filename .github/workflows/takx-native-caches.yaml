@@ -52,6 +52,14 @@ jobs:
             tag: 3.5.9-amd64
             control: openssl_control.c
             link_args: "/opt/cache/lib/libssl.a /opt/cache/lib/libcrypto.a -lpthread -ldl"
+          - component: nghttp2
+            tag: 1.62.1-amd64
+            control: nghttp2_control.c
+            link_args: "/opt/cache/lib/libnghttp2.a"
+          - component: libmicrohttpd
+            tag: 1.0.1-amd64
+            control: libmicrohttpd_control.c
+            link_args: "/opt/cache/lib/libmicrohttpd.a -lpthread"
     name: qualify (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -138,6 +146,10 @@ jobs:
             tag: 3.0.14-quic1-amd64
           - component: openssl
             tag: 3.5.9-amd64
+          - component: nghttp2
+            tag: 1.62.1-amd64
+          - component: libmicrohttpd
+            tag: 1.0.1-amd64
     name: publish (${{ matrix.component }})
     steps:
       - name: Checkout source
