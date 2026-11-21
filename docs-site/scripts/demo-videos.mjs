@@ -18,7 +18,7 @@ export function embedDemoVideos(markdown, videos, assetBase = '/uds-takserver') 
     .map((line, index) => {
       const clip = line
         .trim()
-        .match(/^\[!\[([^\]]*)\]\(([^)\s]+\.(?:jpg|png|webp))\)\]\(https:\/\/github\.com\/[^)\s]+\/releases\/download\/demo\/([\w.-]+\.mp4)\)$/);
+        .match(/^\[!\[([^\]]*)\]\(([^)\s]+\.(?:jpg|png|webp))\)\]\(https:\/\/github\.com\/[^)\s]+\/releases\/download\/(?:demo|demo-run-44802574418-attempt-1)\/([\w.-]+\.mp4)\)$/);
       if (clip) {
         if (!videos.has(clip[3])) return line;
         const label = clip[1].replace(/"/g, '&quot;');
@@ -29,7 +29,7 @@ export function embedDemoVideos(markdown, videos, assetBase = '/uds-takserver') 
         ].join('\n');
       }
       if (!/^https:\/\/github\.com\/user-attachments\/assets\/\S+$/.test(line.trim())) return line;
-      const next = lines.slice(index + 1).join('\n').match(/releases\/download\/demo\/([\w.-]+\.mp4)/);
+      const next = lines.slice(index + 1).join('\n').match(/releases\/download\/(?:demo|demo-run-44802574418-attempt-1)\/([\w.-]+\.mp4)/);
       const name = recordings.get(line.trim()) ?? next?.[1];
       if (!name || !videos.has(name)) return line;
       const base = name.replace(/\.mp4$/, '');

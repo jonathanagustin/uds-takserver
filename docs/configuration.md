@@ -6,7 +6,7 @@ The package deploys the public TAK Server chart from [TAK-Product-Center/Server]
 
 The flavor is `upstream`. `uds run create-dev-package` passes `--flavor upstream`.
 
-[![Demo clip: the Package custom resource reaches Ready after the deploy](../docs-site/public/demo/demo-clip-package-ready.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo/demo-clip-package-ready.mp4)
+[![Demo clip: the Package custom resource reaches Ready after the deploy](../docs-site/public/demo/demo-clip-package-ready.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo-run-44802574418-attempt-1/demo-clip-package-ready.mp4)
 
 ![kubectl get packages shows the TAK Package as Ready](../docs-site/public/demo/screens/packages-ready.webp)
 
