@@ -51,16 +51,20 @@ class API:
             return json.dumps(self.busy[kind])
         self.writes.append((args, input_text))
         if action == 'patch':
+            obj = self.config if kind == 'configmap' else self.ds
             for op in json.loads(input_text):
-                key = op['path'].split('/')[-1].replace('~1', '/')
-                target = self.ds['metadata'] if op['path'].count('/') == 2 else self.ds['metadata'][op['path'].split('/')[2]]
+                *parents, key = op['path'].split('/')[1:]
+                target = obj
+                for parent in parents:
+                    target = target[parent]
+                key = key.replace('~1', '/')
                 if op['op'] == 'test':
                     if target[key] != op['value']:
                         raise ValueError('API conflict')
                 else:
                     target[key] = op['value']
-            self.ds['metadata']['resourceVersion'] = '13'
-            return json.dumps(self.ds)
+            obj['metadata']['resourceVersion'] = str(int(obj['metadata']['resourceVersion']) + 1)
+            return json.dumps(obj)
         self.config = json.loads(input_text)
         self.config['metadata'].update(uid='config-uid', resourceVersion='1')
         return json.dumps(self.config)
@@ -84,11 +88,13 @@ class TransferTests(unittest.TestCase):
         for key in reversed(T.NODE_AGENT_CONTAINER):
             fields = {key: fields}
         entry = {'manager': 'zarf', 'apiVersion': 'apps/v1', 'fieldsType': 'FieldsV1', 'fieldsV1': fields}
+        fields['f:metadata'] = {'f:labels': {'f:zarf.dev/package': {}, 'f:keep-this': {}}}
+        fields['f:spec']['f:template']['f:metadata'] = {'f:labels': {'f:zarf.dev/package': {}}}
         patch = T.field_release_patch([entry])
-        self.assertEqual(len(patch), 3)
+        self.assertEqual(len(patch), 5)
         self.assertTrue(all(op['op'] == 'remove' and op['path'].startswith('/metadata/managedFields/0/')
                             for op in patch))
-        self.assertCountEqual([op['path'].rsplit('/', 1)[-1] for op in patch], ['f:args', 'f:image', 'f:fieldRef'])
+        self.assertCountEqual([op['path'].rsplit('/', 1)[-1] for op in patch], ['f:args', 'f:image', 'f:fieldRef', 'f:zarf.dev~1package', 'f:zarf.dev~1package'])
         with self.assertRaisesRegex(ValueError, 'unexpected manager'):
             T.field_release_patch([{**entry, 'manager': 'unreviewed'}])
         with self.assertRaisesRegex(ValueError, 'unavailable'):
@@ -180,6 +186,17 @@ class TransferTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             api.driver().local_config()
         self.assertEqual(len(api.writes), 1)
+
+    def test_local_config_normalizes_older_serialization_in_place(self):
+        api = API()
+        api.ds = agent(T.CORE)
+        api.ds['metadata']['annotations']['helm.sh/resource-policy'] = 'keep'
+        first = api.driver().local_config()
+        api.config['data']['node-agent-config.json'] = json.dumps(T.PAYLOAD, separators=(',', ':'))
+        result = api.driver().local_config()
+        self.assertEqual(result, first)
+        self.assertEqual(api.config['data']['node-agent-config.json'], T.LOCAL_CONFIG_DATA)
+        self.assertFalse(api.driver().local_config()['changed'])
 
     def test_api_conflict_is_not_retried_or_rolled_back(self):
         api = API()

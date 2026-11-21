@@ -178,8 +178,10 @@ active, unknown or terminating Velero work, unpaused schedules and live data
 movers. Metadata writes use API JSON Patch tests for the exact UID,
 resourceVersion, old Helm owner and managed-by label. In the signed Core source
 candidate trial, the same atomic patch releases ownership of the node-agent
-arguments, image and two Downward API field references from the reviewed
+arguments, image, two Downward API field references, and Zarf package labels
+from the reviewed
 `kubectl-create` and `zarf` managers. The patch leaves the pod template intact.
+The local ConfigMap is prepared with the chart's exact JSON string.
 The next package deployment applies its own manifest with ordinary conflict
 checks. A concurrent update
 fails instead of being retried or forced. These are bounded observations, not

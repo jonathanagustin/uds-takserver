@@ -21,6 +21,7 @@ LOCAL = ('uds-takserver-config', 'takserver')
 CORE = ('velero', 'velero')
 PAYLOAD = {'privilegedFsBackup': True, 'podLabels': {
     'app.kubernetes.io/name': 'velero', 'app.kubernetes.io/component': 'velero-data-mover'}}
+LOCAL_CONFIG_DATA = json.dumps(PAYLOAD) + '\n'
 TERMINAL = {
     'backups.velero.io': {'Completed', 'Failed', 'PartiallyFailed', 'FailedValidation'},
     'restores.velero.io': {'Completed', 'Failed', 'PartiallyFailed', 'FailedValidation'},
@@ -33,21 +34,26 @@ TERMINAL = {
 
 NODE_AGENT_CONTAINER = ('f:spec', 'f:template', 'f:spec', 'f:containers', 'k:{"name":"node-agent"}')
 NODE_AGENT_FIELDS = {
-    'args': ('f:args',),
-    'image': ('f:image',),
-    'nodeNameFieldRef': ('f:env', 'k:{"name":"NODE_NAME"}', 'f:valueFrom', 'f:fieldRef'),
-    'namespaceFieldRef': ('f:env', 'k:{"name":"VELERO_NAMESPACE"}', 'f:valueFrom', 'f:fieldRef'),
+    'args': (*NODE_AGENT_CONTAINER, 'f:args'),
+    'image': (*NODE_AGENT_CONTAINER, 'f:image'),
+    'nodeNameFieldRef': (*NODE_AGENT_CONTAINER, 'f:env', 'k:{"name":"NODE_NAME"}', 'f:valueFrom', 'f:fieldRef'),
+    'namespaceFieldRef': (*NODE_AGENT_CONTAINER, 'f:env', 'k:{"name":"VELERO_NAMESPACE"}', 'f:valueFrom', 'f:fieldRef'),
+}
+HANDOFF_FIELDS = {
+    **NODE_AGENT_FIELDS,
+    'packageLabel': ('f:metadata', 'f:labels', 'f:zarf.dev/package'),
+    'podPackageLabel': ('f:spec', 'f:template', 'f:metadata', 'f:labels', 'f:zarf.dev/package'),
 }
 NODE_AGENT_MANAGERS = ('kubectl-create', 'zarf')
 
 
-def node_agent_fields_owned(entry):
+def node_agent_fields_owned(entry, fields=NODE_AGENT_FIELDS):
     if entry.get('fieldsType') != 'FieldsV1' or entry.get('subresource'):
         return []
     owned = []
-    for name, path in NODE_AGENT_FIELDS.items():
+    for name, path in fields.items():
         node = entry.get('fieldsV1', {})
-        for key in (*NODE_AGENT_CONTAINER, *path):
+        for key in path:
             node = node.get(key)
             if node is None:
                 break
@@ -57,15 +63,15 @@ def node_agent_fields_owned(entry):
 
 
 def field_release_patch(managed_fields):
-    """Release only the four reviewed leaf paths from the two observed managers."""
+    """Release reviewed leaf paths from the two observed managers."""
     require(isinstance(managed_fields, list) and managed_fields, 'managed fields are unavailable')
     patch = []
     for index, entry in enumerate(managed_fields):
-        for name in node_agent_fields_owned(entry):
+        for name in node_agent_fields_owned(entry, HANDOFF_FIELDS):
             require(entry.get('manager') in NODE_AGENT_MANAGERS and entry.get('apiVersion') == 'apps/v1',
                     'reviewed agent field has an unexpected manager or API version')
             path = '/'.join(key.replace('~', '~0').replace('/', '~1')
-                            for key in (*NODE_AGENT_CONTAINER, *NODE_AGENT_FIELDS[name]))
+                            for key in HANDOFF_FIELDS[name])
             patch.append({'op': 'remove', 'path': f'/metadata/managedFields/{index}/fieldsV1/{path}'})
     return patch
 
@@ -218,17 +224,33 @@ class Transfer:
                              '-n', 'velero', '--ignore-not-found', '-o', 'json'])
         if text.strip():
             obj = json.loads(text)
-            require(obj['metadata'].get('uid') and obj['metadata'].get('resourceVersion')
-                    and ownership(obj) == LOCAL and not obj['metadata'].get('deletionTimestamp')
-                    and obj['metadata'].get('labels', {}).get('app.kubernetes.io/managed-by') == 'Helm'
-                    and json.loads(obj.get('data', {}).get('node-agent-config.json', 'null')) == PAYLOAD,
+            meta = obj['metadata']
+            data = obj.get('data', {}).get('node-agent-config.json', 'null')
+            require(meta.get('uid') and meta.get('resourceVersion')
+                    and ownership(obj) == LOCAL and not meta.get('deletionTimestamp')
+                    and meta.get('labels', {}).get('app.kubernetes.io/managed-by') == 'Helm'
+                    and json.loads(data) == PAYLOAD,
                     'existing local config is not the expected nonterminating Helm object')
-            return {'changed': False, 'uid': obj['metadata']['uid']}
+            if data == LOCAL_CONFIG_DATA:
+                return {'changed': False, 'uid': meta['uid']}
+            # Normalize only a semantically identical config created by an earlier trial.
+            patch = [{'op': 'test', 'path': '/metadata/' + key, 'value': meta[key]}
+                     for key in ('uid', 'resourceVersion')]
+            patch += [{'op': 'test', 'path': '/data/node-agent-config.json', 'value': data},
+                      {'op': 'replace', 'path': '/data/node-agent-config.json', 'value': LOCAL_CONFIG_DATA}]
+            require(self.guard(self.context, self.command) == self.identity, 'ephemeral cluster receipt changed')
+            result = json.loads(self.command(
+                ['kubectl', '--context', self.context, 'patch', 'configmap', 'node-agent-config',
+                 '-n', 'velero', '--type=json', '--patch-file=/dev/stdin', '-o', 'json'], json.dumps(patch)))
+            require(result['metadata']['uid'] == meta['uid'] and ownership(result) == LOCAL
+                    and result['data']['node-agent-config.json'] == LOCAL_CONFIG_DATA,
+                    'API did not retain the ConfigMap identity and desired data')
+            return {'changed': True, 'uid': meta['uid']}
         obj = {'apiVersion': 'v1', 'kind': 'ConfigMap', 'metadata': {
             'name': 'node-agent-config', 'namespace': 'velero',
             'annotations': {'meta.helm.sh/release-name': LOCAL[0], 'meta.helm.sh/release-namespace': LOCAL[1]},
             'labels': {'app.kubernetes.io/managed-by': 'Helm'}},
-            'data': {'node-agent-config.json': json.dumps(PAYLOAD, separators=(',', ':'))}}
+            'data': {'node-agent-config.json': LOCAL_CONFIG_DATA}}
         require(self.guard(self.context, self.command) == self.identity, 'ephemeral cluster receipt changed')
         result = json.loads(self.command(['kubectl', '--context', self.context, 'create', '-f', '-', '-o', 'json'], json.dumps(obj)))
         require(result.get('metadata', {}).get('uid') and result['metadata'].get('resourceVersion')
