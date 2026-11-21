@@ -114,6 +114,22 @@ k logs deploy/takserver-api -n takserver -c takserver-api 2>/dev/null |
   echo "omitted unsanitizable api log"
 echo "::endgroup::"
 
+# Capture a bounded post-failure snapshot without remote addresses or process
+# arguments. A transient bind conflict may have cleared by this point.
+echo "::group::takserver-config Ignite socket snapshot"
+k exec deploy/takserver-config -n takserver -c takserver-config -- sh -c '
+  awk '\''$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {
+    printf "ephemeral_port_range=%d-%d\n", $1, $2
+  }'\'' /proc/sys/net/ipv4/ip_local_port_range
+  awk '\''FNR > 1 {
+    n = split($2, endpoint, ":")
+    p = toupper(endpoint[n])
+    if ((p == "B7FC" || p == "B7FD") && ++matches <= 20)
+      printf "local_port=%d tcp_state=%s inode=%s\n", (p == "B7FC" ? 47100 : 47101), $4, $10
+  } END { printf "matching_sockets=%d\n", matches }'\'' /proc/net/tcp /proc/net/tcp6
+' 2>/dev/null || echo "Could not read the config workload socket snapshot."
+echo "::endgroup::"
+
 # The process command line and environment are not printed. They carry
 # unquoted passwords and client secrets that a value regex can miss.
 
