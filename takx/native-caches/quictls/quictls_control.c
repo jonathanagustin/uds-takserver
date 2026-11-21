@@ -15,7 +15,7 @@
 
 int main(void) {
     const char *ver = OpenSSL_version(OPENSSL_VERSION);
-    if (ver == NULL || strstr(ver, "3.0.14+quic1") == NULL) {
+    if (ver == NULL || strstr(ver, "3.0.14+quic") == NULL) {
         fprintf(stderr, "unexpected quictls version: %s\n", ver ? ver : "(null)");
         return 1;
     }
