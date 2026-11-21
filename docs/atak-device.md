@@ -4,7 +4,7 @@
 
 The device runs a Team Awareness Kit (TAK) client. It is optional and separate from the TAK package. Nothing in `zarf.yaml` or the default tests deploys it. The dedicated workflow `.github/workflows/atak-e2e.yaml` builds and deploys it on the normal test cluster.
 
-[![Demo clip: ATAK-CIV in a KubeVirt VM connects to the same TAK Server with its client certificate](../docs-site/public/demo/demo-clip-atak-device.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo/demo-clip-atak-device.mp4)
+[![Demo clip: ATAK-CIV in a KubeVirt VM connects to the same TAK Server with its client certificate](../docs-site/public/demo/demo-clip-atak-device.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo-run-44802574418-attempt-1/demo-clip-atak-device.mp4)
 
 ## Requirements
 
