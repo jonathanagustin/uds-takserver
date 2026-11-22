@@ -99,6 +99,19 @@ COMPONENTS = {
         "control_marker": "libmicrohttpd_static_pic_control=true",
         "required_artifacts": ("lib/libmicrohttpd.a", "include/microhttpd.h", "COPYING"),
     },
+    "ngtcp2": {
+        "version": "1.6.0",
+        "archive_sha256": "3e40cfb92ab710295cb7c07721db28d16c6f251f61420a462c448cf39a59cc29",
+        "license_sha256": "542dd526d2ea23565f0571cc68df6f05ed11248a90ff0f32de19d8ba589db513",
+        "control_file": "ngtcp2_control.c",
+        "control_marker": "ngtcp2_static_pic_control=true",
+        "required_artifacts": (
+            "lib/libngtcp2.a",
+            "lib/libngtcp2_crypto_quictls.a",
+            "include/ngtcp2/ngtcp2.h",
+            "COPYING",
+        ),
+    },
 }
 
 
