@@ -9,6 +9,7 @@ on:
       - "takx/compat/**"
       - "takx/contour-style/**"
       - "takx/gl-qualification/**"
+      - "takx/kernel-java/**"
       - "takx/kernel-render-context/**"
       - "takx/kernel-spatial-db/**"
       - "takx/kernel-texture/**"
@@ -930,5 +931,75 @@ jobs:
         with:
           name: takx-worldwind-java-hosted-receipt
           path: ${{ runner.temp }}/takx-worldwind-java-hosted/hosted-worldwind-java-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-kernel-java:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline kernel-java verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/kernel-java/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/kernel-java -p 'test_*.py' -v
+
+      - name: Fetch pinned upstream ATAK Kernel commit
+        timeout-minutes: 5
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/pinned-atak"
+          git -C "${RUNNER_TEMP}/pinned-atak" init -q
+          git -C "${RUNNER_TEMP}/pinned-atak" remote add origin https://github.com/TAK-Product-Center/atak-civ.git
+          git -C "${RUNNER_TEMP}/pinned-atak" fetch --depth 1 origin 9f6893dd657feacc35ec5de03dad721c2e44170e
+          git -C "${RUNNER_TEMP}/pinned-atak" checkout -q FETCH_HEAD
+
+      - name: Build pinned SWIG 4.3.0 and qualify GIS Java JARs
+        timeout-minutes: 8
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libpcre2-dev
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            "https://downloads.sourceforge.net/project/swig/swig/swig-4.3.0/swig-4.3.0.tar.gz" \
+            -o "${RUNNER_TEMP}/swig-4.3.0.tar.gz"
+          printf '%s  %s\n' "f7203ef796f61af986c70c05816236cbd0d31b7aa9631e5ab53020ab7804aa9e" "${RUNNER_TEMP}/swig-4.3.0.tar.gz" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/swig-4.3.0.tar.gz" -C "${RUNNER_TEMP}"
+          (
+            cd "${RUNNER_TEMP}/swig-4.3.0"
+            PATH="${JAVA_HOME_17_X64}/bin:${PATH}" ./configure \
+              --prefix="${RUNNER_TEMP}/swig-install" \
+              --without-alllang \
+              --with-java
+            make -j4
+            make install
+          )
+          python3 -B takx/gis-java/run_hosted_controls.py \
+            --phase qualify \
+            --java-home "${JAVA_HOME_17_X64}" \
+            --swig-bin "${RUNNER_TEMP}/swig-install/bin/swig" \
+            --swig-lib "${RUNNER_TEMP}/swig-install/share/swig/4.3.0" \
+            --output "${RUNNER_TEMP}/gis-java"
+
+      - name: Compile all 1,176 Kernel engine-shared Java sources and 59 compat adapters live on JDK 17
+        timeout-minutes: 8
+        run: |
+          python3 -B takx/kernel-java/run_hosted_controls.py \
+            --phase qualify \
+            --atak-source "${RUNNER_TEMP}/pinned-atak" \
+            --gis-build "${RUNNER_TEMP}/gis-java/build" \
+            --java-home "${JAVA_HOME_17_X64}" \
+            --output "${RUNNER_TEMP}/takx-kernel-java-hosted"
+
+      - name: Retain verified kernel-java hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-kernel-java-hosted-receipt
+          path: ${{ runner.temp }}/takx-kernel-java-hosted/hosted-kernel-java-receipt.json
           if-no-files-found: error
           retention-days: 14
