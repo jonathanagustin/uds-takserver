@@ -1,5 +1,5 @@
 {{- $class := .Values.storage.postgresClass }}
-{{- if eq $class "###ZARF_VAR_POSTGRES_STORAGE_CLASS###" }}
+{{- if eq $class (printf "###ZARF_%s###" "VAR_POSTGRES_STORAGE_CLASS") }}
 {{- $class = .Variables.POSTGRES_STORAGE_CLASS }}
 {{- end }}
 {{- if $class }}

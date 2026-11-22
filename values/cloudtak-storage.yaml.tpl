@@ -1,5 +1,5 @@
 {{- $class := .Values.storage.cloudtakClass }}
-{{- if eq $class "###ZARF_VAR_CLOUDTAK_STORAGE_CLASS###" }}
+{{- if eq $class (printf "###ZARF_%s###" "VAR_CLOUDTAK_STORAGE_CLASS") }}
 {{- $class = .Variables.CLOUDTAK_STORAGE_CLASS }}
 {{- end }}
 {{- if $class }}

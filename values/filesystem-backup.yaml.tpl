@@ -1,5 +1,5 @@
 {{- $enabled := printf "%v" .Values.backup.filesystem.enabled }}
-{{- if eq $enabled "###ZARF_VAR_FILESYSTEM_BACKUP###" }}
+{{- if eq $enabled (printf "###ZARF_%s###" "VAR_FILESYSTEM_BACKUP") }}
 {{- $enabled = .Variables.FILESYSTEM_BACKUP }}
 {{- end }}
 {{- if eq $enabled "true" }}
