@@ -71,10 +71,14 @@ class HandoffTests(unittest.TestCase):
 
     def test_owner_variable_default_and_early_zarf_values_file(self):
         package = yaml.safe_load((ROOT / 'zarf.yaml').read_text())
-        variable = next(v for v in package['variables'] if v['name'] == 'FILESYSTEM_BACKUP_OWNER')
-        self.assertEqual(variable['default'], 'local')
-        switch = yaml.safe_load((ROOT / 'values/filesystem-backup-switch.yaml').read_text())
-        self.assertEqual(switch['backup']['filesystem']['owner'], '###ZARF_VAR_FILESYSTEM_BACKUP_OWNER###')
+        if 'variables' in package:
+            variable = next(v for v in package['variables'] if v['name'] == 'FILESYSTEM_BACKUP_OWNER')
+            self.assertEqual(variable['default'], 'local')
+            switch = yaml.safe_load((ROOT / 'values/filesystem-backup-switch.yaml').read_text())
+            self.assertEqual(switch['backup']['filesystem']['owner'], '###ZARF_VAR_FILESYSTEM_BACKUP_OWNER###')
+        else:
+            values = yaml.safe_load((ROOT / 'values/zarf-values.yaml').read_text())
+            self.assertEqual(values['backup']['filesystem']['owner'], 'local')
 
     def test_preparation_preserves_bundle_custom_exemptions_and_default_inputs(self):
         bundle = yaml.safe_load((ROOT / 'bundle/full/uds-bundle.yaml').read_text())

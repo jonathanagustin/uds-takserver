@@ -444,13 +444,16 @@ class PackageGuards(unittest.TestCase):
 
     def test_only_legacy_upstream_chart_uses_client_side_apply_compatibility(self):
         package=yaml.safe_load((ROOT/'common/zarf.yaml').read_text())
-        charts=[chart for component in package['components'] for chart in component.get('charts',[])]
+        components=[package['component']] if 'component' in package else package['components']
+        charts=[chart for component in components for chart in component.get('charts',[])]
         legacy=[chart for chart in charts if chart.get('serverSideApply')=='false']
         self.assertEqual(len(legacy),1)
         chart=legacy[0]
         self.assertEqual((chart['name'],chart['namespace'],chart['releaseName']),('takserver','takserver','takserver'))
-        self.assertEqual(chart['url'],'https://github.com/TAK-Product-Center/Server.git')
-        self.assertEqual(chart['version'],'5.7-RELEASE-14')
+        url=chart['git']['url'] if 'git' in chart else chart['url']
+        version=chart['git']['ref']['tag'] if 'git' in chart else chart['version']
+        self.assertEqual(url,'https://github.com/TAK-Product-Center/Server.git')
+        self.assertEqual(version,'5.7-RELEASE-14')
         self.assertTrue(all('serverSideApply' not in item for item in charts if item is not chart))
         self.assertIs(type(chart['serverSideApply']),str)
         for phase in P.PHASES:self.assertNotIn('--force-conflicts',P.deploy_command(self.bound(),phase))

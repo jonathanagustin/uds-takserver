@@ -364,6 +364,18 @@ COMPONENTS = {
             "LICENSE.TXT",
         ),
     },
+    "spatialite": {
+        "version": "4.3.0a",
+        "archive_sha256": "88900030a4762904a7880273f292e5e8ca6b15b7c6c3fb88ffa9e67ee8a5a499",
+        "license_sha256": "b81965482914858383484d7e63b5de1d0c4647fa7f527e78d4499e4a7b76aab5",
+        "control_file": "spatialite_control.c",
+        "control_marker": "spatialite_static_pic_control=true",
+        "required_artifacts": (
+            "lib/libspatialite.a",
+            "include/spatialite.h",
+            "COPYING",
+        ),
+    },
 }
 
 
