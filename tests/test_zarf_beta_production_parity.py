@@ -62,10 +62,30 @@ def _convert_component(component):
         out["charts"] = [_convert_chart(c) for c in component["charts"]]
     if "images" in component:
         out["images"] = [{"name": img} for img in component["images"]]
-    if "healthChecks" in component:
-        out["healthChecks"] = component["healthChecks"]
+    actions = {}
     if "actions" in component:
-        out["actions"] = component["actions"]
+        actions = {k: dict(v) for k, v in component["actions"].items()}
+    if "healthChecks" in component:
+        on_deploy = dict(actions.get("onDeploy") or {})
+        waits = list(on_deploy.get("onSuccess") or [])
+        for hc in component["healthChecks"]:
+            kind = hc["kind"].lower()
+            condition = "available" if kind == "deployment" else "exists"
+            waits.append({
+                "description": f"Wait for {hc['kind']}/{hc['name']}",
+                "wait": {
+                    "cluster": {
+                        "kind": kind,
+                        "name": hc["name"],
+                        "namespace": hc["namespace"],
+                        "condition": condition,
+                    }
+                },
+            })
+        on_deploy["onSuccess"] = waits
+        actions["onDeploy"] = on_deploy
+    if actions:
+        out["actions"] = actions
     return out
 
 
@@ -162,8 +182,10 @@ class BetaStagingTransformTests(unittest.TestCase):
             self.assertNotIn("required", by_name["cloudtak"])
             self.assertNotIn("default", by_name["cloudtak"])
             self.assertTrue(all(isinstance(i, dict) and "name" in i for i in by_name["takserver"]["images"]))
-            self.assertEqual(len(by_name["takserver"]["healthChecks"]), 2)
-            self.assertEqual(len(by_name["cloudtak"]["healthChecks"]), 2)
+            self.assertNotIn("healthChecks", by_name["takserver"])
+            self.assertNotIn("healthChecks", by_name["cloudtak"])
+            self.assertEqual(len(by_name["takserver"]["actions"]["onDeploy"]["onSuccess"]), 2)
+            self.assertEqual(len(by_name["cloudtak"]["actions"]["onDeploy"]["onSuccess"]), 2)
             self.assertEqual(len(by_name["takserver"]["actions"]["onCreate"]["before"]), 1)
 
 
