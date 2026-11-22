@@ -171,6 +171,86 @@ class PolicyTests(unittest.TestCase):
                 SHADOW.compare_prospective(self.receipt, p, self.target)
             self.assertNotIn('SENTINEL', str(caught.exception))
 
+    def test_execution_class_match_and_mismatch_stay_fresh(self):
+        self.job['labels'] = ['ubuntu-22.04']
+        self.job['runner_group_name'] = 'GitHub Actions'
+        raw = json.dumps(self.receipt).encode()
+        self.api.artifact.return_value = raw
+
+        matched = SHADOW.shadow(self.api, raw, self.verification(raw), 5, self.target,
+                                self.policy, expected_runner='ubuntu-22.04')
+        self.assertTrue(matched['evidence_qualified'])
+        self.assertEqual(matched['execution_class_comparison'], {
+            'historical_runner': 'ubuntu-22.04',
+            'expected_runner': 'ubuntu-22.04',
+            'runner_group': 'GitHub Actions',
+            'execution_class_equal': True,
+            'reuse_authorized': False,
+        })
+        self.assertEqual(matched['decision'], 'execute-fresh')
+        self.assertFalse(matched['reuse_authorized'])
+        self.assertIn('execution-class-policy-not-established', matched['blockers'])
+        self.assertNotIn('execution-class-differs', matched['blockers'])
+
+        mismatched = SHADOW.shadow(self.api, raw, self.verification(raw), 5, self.target,
+                                   self.policy, expected_runner='ubuntu-24.04')
+        self.assertTrue(mismatched['evidence_qualified'])
+        self.assertFalse(mismatched['execution_class_comparison']['execution_class_equal'])
+        self.assertEqual(mismatched['blockers'][0], 'execution-class-differs')
+        self.assertEqual(mismatched['decision'], 'execute-fresh')
+        self.assertFalse(mismatched['reuse_authorized'])
+
+    def test_execution_class_invalid_labels_group_or_expected_runner_fail_closed(self):
+        valid_job = {'labels': ['ubuntu-22.04'], 'runner_group_name': 'GitHub Actions'}
+        self.assertTrue(SHADOW.compare_execution_class(
+            {'labels': ['ubuntu-22.04-arm'], 'runner_group_name': 'GitHub Actions'},
+            'arm64', 'ubuntu-22.04-arm')['execution_class_equal'])
+
+        bad_cases = [
+            (valid_job, 'amd64', 'ubuntu-22.04-arm', 'execution-class-expected-runner-invalid'),
+            (valid_job, 'amd64', 'self-hosted', 'execution-class-expected-runner-invalid'),
+            (valid_job, 'ppc64', 'ubuntu-22.04', 'execution-class-expected-runner-invalid'),
+            ({'labels': ['ubuntu-22.04'], 'runner_group_name': 'Default'}, 'amd64', 'ubuntu-22.04',
+             'execution-class-runner-group-invalid'),
+            ({'labels': ['ubuntu-22.04']}, 'amd64', 'ubuntu-22.04',
+             'execution-class-runner-group-invalid'),
+            ({'labels': [], 'runner_group_name': 'GitHub Actions'}, 'amd64', 'ubuntu-22.04',
+             'execution-class-job-labels-invalid'),
+            ({'labels': ['ubuntu-22.04', 'self-hosted'], 'runner_group_name': 'GitHub Actions'},
+             'amd64', 'ubuntu-22.04', 'execution-class-job-labels-invalid'),
+            ({'labels': ['ubuntu-22.04-arm'], 'runner_group_name': 'GitHub Actions'},
+             'amd64', 'ubuntu-22.04', 'execution-class-job-labels-invalid'),
+            ({'labels': ['SENTINEL-runner'], 'runner_group_name': 'GitHub Actions'},
+             'amd64', 'ubuntu-22.04', 'execution-class-job-labels-invalid'),
+        ]
+        for job, arch, expected, reason in bad_cases:
+            with self.subTest(job=job, arch=arch, expected=expected):
+                with self.assertRaises(SHADOW.Unavailable) as caught:
+                    SHADOW.compare_execution_class(job, arch, expected)
+                self.assertEqual(str(caught.exception), reason)
+                self.assertNotIn('SENTINEL', str(caught.exception))
+
+    def test_cli_accepts_expected_runner_and_keeps_fresh(self):
+        self.job['labels'] = ['ubuntu-22.04']
+        self.job['runner_group_name'] = 'GitHub Actions'
+        raw = json.dumps(self.receipt).encode()
+        self.api.artifact.return_value = raw
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'receipt.json').write_bytes(raw)
+            (root / 'bundle.jsonl').write_text('{}')
+            argv = ['shadow', '--receipt', str(root / 'receipt.json'), '--bundle', str(root / 'bundle.jsonl'),
+                    '--pr', '5', '--target', self.target, '--policy-ref', self.policy,
+                    '--expected-runner', 'ubuntu-22.04']
+            with mock.patch.object(sys, 'argv', argv), mock.patch.object(SHADOW, 'GitHub', return_value=self.api), \
+                    mock.patch.object(SHADOW, 'command', return_value=self.verification(raw)), \
+                    mock.patch.object(sys, 'stdout', new=io.StringIO()) as output:
+                SHADOW.main()
+            result = json.loads(output.getvalue())
+        self.assertTrue(result['execution_class_comparison']['execution_class_equal'])
+        self.assertEqual(result['decision'], 'execute-fresh')
+        self.assertFalse(result['reuse_authorized'])
+
     def result(self, verified_change=None):
         raw = json.dumps(self.receipt).encode()
         self.api.artifact.return_value = raw

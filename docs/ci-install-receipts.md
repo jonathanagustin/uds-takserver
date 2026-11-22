@@ -211,9 +211,13 @@ pipes, not to unrelated GitHub CLI cache files. Missing, malformed or ambiguous 
 to fresh execution. Errors omit response bodies and credentials.
 
 Every output says `decision: execute-fresh` and `reuse_authorized: false`.
-`evidence_qualified` only describes the historical evidence checks. It cannot
-establish prospective package/input equivalence or runner execution-class policy,
-and those blockers remain even when historical evidence passes. It cannot enable
+`evidence_qualified` only describes the historical evidence checks. Optional
+`--expected-runner` compares the selected job's GitHub-hosted runner group and
+single runner label against an allowlisted label for that architecture and
+records `execution_class_comparison` (failing closed on unknown, cross-architecture,
+or non-hosted labels). Neither historical evidence nor runner-label comparison
+establishes prospective package/input equivalence or an approved execution-class
+policy, and those blockers remain even when checks pass. It cannot enable
 reuse, satisfy the Test verifier or replace fresh upgrades. This checker deliberately
 has no CI job, scheduling hook or skip output.
 
