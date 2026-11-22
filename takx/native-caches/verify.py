@@ -283,6 +283,22 @@ COMPONENTS = {
             "Copyright",
         ),
     },
+    "proj": {
+        "version": "4.9.1",
+        "archive_sha256": "fca0388f3f8bc5a1a803d2f6ff30017532367992b30cf144f2d39be88f36c319",
+        "license_sha256": "2dcac4af6990093ef48b896bfb81452d46a31b08d46cce34b27e83f93b2e37f6",
+        "control_file": "proj_control.c",
+        "control_marker": "proj_static_pic_control=true",
+        "required_artifacts": ("lib/libproj.a", "include/proj_api.h", "COPYING"),
+    },
+    "geos": {
+        "version": "3.4.3",
+        "archive_sha256": "cfbf68079117c1c2b76411636444ff41d73c31093c4cab9dcc9a8c1bbe7e3897",
+        "license_sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+        "control_file": "geos_control.c",
+        "control_marker": "geos_static_pic_control=true",
+        "required_artifacts": ("lib/libgeos.a", "lib/libgeos_c.a", "include/geos_c.h", "COPYING"),
+    },
     "mdbtools": {
         "version": "1.0.0",
         "archive_sha256": "3446e1d71abdeb98d41e252777e67e1909b186496fda59f98f67032f7fbcd955",
