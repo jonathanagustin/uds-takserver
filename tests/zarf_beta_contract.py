@@ -3,7 +3,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Real CLI comparison of legacy variables and proposed package values."""
 import argparse
+import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import yaml
@@ -20,11 +23,29 @@ OVERRIDES = dict(zip(DEFAULTS, ('example.test', 'reviewed-tag', 'false', 'api st
     '768Mi', 'true', 'core', 'postgres-test', 'cloudtak-test')))
 
 
-def command(prefix, args):
-    result = subprocess.run(prefix + args, capture_output=True, timeout=120)
+def command(prefix, args, env=None):
+    result = subprocess.run(prefix + args, capture_output=True, timeout=120, env=env)
     if result.returncode or len(result.stdout) > 1024*1024:
         raise RuntimeError('contract command failed; exit=' + str(result.returncode))
     return result.stdout
+
+
+def expect_failure(prefix, args, message, env=None):
+    result = subprocess.run(prefix + args, capture_output=True, timeout=120, env=env)
+    if result.returncode == 0:
+        raise RuntimeError(message)
+
+
+def generate_keypair(directory, name):
+    key = directory / f'{name}.key'
+    pub = directory / f'{name}.pub'
+    ec = subprocess.run(['openssl', 'ecparam', '-name', 'prime256v1', '-genkey', '-noout'],
+                        capture_output=True, check=True, timeout=30)
+    subprocess.run(['openssl', 'pkcs8', '-topk8', '-nocrypt', '-out', str(key)],
+                   input=ec.stdout, capture_output=True, check=True, timeout=30)
+    subprocess.run(['openssl', 'pkey', '-in', str(key), '-pubout', '-out', str(pub)],
+                   capture_output=True, check=True, timeout=30)
+    return key, pub
 
 
 def render_docs(prefix, mode, extra_args=()):
@@ -47,6 +68,76 @@ def render(prefix, mode, override):
     if set(by_name) != expected_names:
         raise RuntimeError('unexpected components for ' + mode + ': ' + str(set(by_name)))
     return by_name['contract']
+
+
+def write_next_bundle(bundle_dir, name, pkg_path, pub_path, selector):
+    bundle_dir.mkdir()
+    shutil.copyfile(pub_path, bundle_dir / 'pkg.pub')
+    (bundle_dir / 'bundle-values.yaml').write_text('global:\n  domain: bundle.example\n')
+    (bundle_dir / 'bundle.uds.hcl').write_text(
+        'uds {\n'
+        '  bundle_api_version = "uds.dev/v1alpha1"\n'
+        '}\n\n'
+        'metadata {\n'
+        f'  name    = "{name}"\n'
+        '  version = "0.1.0"\n'
+        '}\n\n'
+        'package "contract" {\n'
+        f'  source              = "{pkg_path}"\n'
+        '  values_files        = ["./bundle-values.yaml"]\n'
+        f'  optional_components = ["{selector}"]\n'
+        '  signature_verification {\n'
+        '    public_key = file("pkg.pub")\n'
+        '  }\n'
+        '}\n'
+    )
+
+
+def verify_next_bundles(cli, directory, signed_pkg, unsigned_pkg, good_key, good_pub, wrong_pub):
+    env = {**os.environ, 'CLI_FEATURES': 'NextMode=true', 'COSIGN_PASSWORD': ''}
+    for label, selector in (('include', 'optional-addon'), ('exclude', '-optional-addon')):
+        bundle_dir = directory / f'next-{label}'
+        write_next_bundle(bundle_dir, f'contract-{label}', signed_pkg, good_pub, selector)
+        command([cli], ['bundle', 'create', str(bundle_dir), '--signing-key', str(good_key),
+                        '--architecture', 'amd64'], env=env)
+        bundles = list(bundle_dir.glob('uds-bundle-*.tar.zst'))
+        if len(bundles) != 1:
+            raise RuntimeError(f'next bundle artifact missing for {label}')
+        bundle_archive = bundles[0]
+        command([cli], ['bundle', 'verify', str(bundle_archive), '--public-key', str(good_pub)], env=env)
+        expect_failure([cli], ['bundle', 'verify', str(bundle_archive), '--public-key', str(wrong_pub)],
+                       f'next bundle verify accepted wrong public key for {label}', env=env)
+        inspected = json.loads(command(
+            [cli], ['bundle', 'inspect', str(bundle_archive), '--public-key', str(good_pub), '-o', 'json'],
+            env=env,
+        ))
+        if inspected.get('bundleSignature', {}).get('status') != 'verified':
+            raise RuntimeError(f'next bundle inspect did not report verified signature for {label}')
+        pkgs = {p['name']: p for p in inspected.get('packages', [])}
+        pkg = pkgs.get('contract', {})
+        if pkg.get('signature', {}).get('signed') != 'signed' or pkg.get('signature', {}).get('verification') != 'verified':
+            raise RuntimeError(f'next bundle inspect lost verified package posture for {label}')
+        if not pkg.get('valuesFiles'):
+            raise RuntimeError(f'next bundle inspect missing embedded valuesFiles for {label}')
+        # Confirm the OCI archive retained the exact optional_components selector in bundle.uds.hcl.
+        unpacked = directory / f'unpacked-{label}'
+        unpacked.mkdir()
+        subprocess.run(['tar', '--zstd', '-xf', str(bundle_archive), '-C', str(unpacked)],
+                       check=True, capture_output=True, timeout=60)
+        selector_bytes = f'optional_components = ["{selector}"]'.encode()
+        found_selector = any(
+            selector_bytes in blob.read_bytes()
+            for blob in (unpacked / 'blobs').rglob('*')
+            if blob.is_file() and blob.stat().st_size <= 1024 * 1024
+        )
+        if not found_selector:
+            raise RuntimeError(f'next bundle OCI archive lost optional_components selector {selector}')
+    # Substituting an unsigned package must fail bundle create under public_key policy.
+    unsigned_dir = directory / 'next-unsigned'
+    write_next_bundle(unsigned_dir, 'contract-unsigned', unsigned_pkg, good_pub, 'optional-addon')
+    expect_failure([cli], ['bundle', 'create', str(unsigned_dir), '--signing-key', str(good_key),
+                           '--architecture', 'amd64'],
+                   'next bundle create accepted an unsigned package under public_key policy', env=env)
 
 
 def main():
@@ -81,20 +172,23 @@ def main():
     if addon_docs.get('optional-addon') != {'DOMAIN': 'opt.example', 'CLOUDTAK_STORAGE_CLASS': 'fast-ssd'}:
         raise RuntimeError('beta optional component values differed')
     # Verify values.schema rejects invalid values before rendering.
-    invalid = subprocess.run(
-        prefix + [
+    expect_failure(
+        prefix,
+        [
             'dev', 'inspect', 'manifests', str(ROOT / 'beta'),
             '--no-color', '--log-level', 'warn',
             '--set-values', 'backup.filesystem.owner=invalid',
         ],
-        capture_output=True,
-        timeout=120,
+        'beta schema failed to reject invalid backup.filesystem.owner',
     )
-    if invalid.returncode == 0:
-        raise RuntimeError('beta schema failed to reject invalid backup.filesystem.owner')
     with tempfile.TemporaryDirectory() as directory:
+        tmp = Path(directory)
+        good_key, good_pub = generate_keypair(tmp, 'good')
+        _wrong_key, wrong_pub = generate_keypair(tmp, 'wrong')
+        sign_env = {**os.environ, 'COSIGN_PASSWORD': ''}
+        unsigned_beta = None
         for mode in ('alpha', 'beta'):
-            output = Path(directory) / mode
+            output = tmp / mode
             output.mkdir()
             command(prefix, ['package', 'create', str(ROOT / mode), '--confirm', '--skip-sbom',
                              '--output', str(output), '--architecture', 'amd64'])
@@ -102,11 +196,41 @@ def main():
             if len(archives) != 1:
                 raise RuntimeError('package artifact missing')
             if mode == 'beta':
-                defn = yaml.safe_load(command(prefix, ['package', 'inspect', 'definition', str(archives[0]), '--no-color', '--log-level', 'warn']))
+                unsigned_beta = archives[0]
+                defn = yaml.safe_load(command(prefix, ['package', 'inspect', 'definition', str(unsigned_beta),
+                                                       '--no-color', '--log-level', 'warn']))
                 by_comp = {c['name']: c for c in defn.get('components', [])}
                 if by_comp.get('optional-addon', {}).get('optional') is not True:
                     raise RuntimeError('beta built package lost optional: true on optional-addon')
-    print('PASS: alpha/beta renders, chartOverrides, optional component definition, schema rejection, and package creation')
+        # Signed v1beta1 package control: matching key passes; wrong key and unsigned fail.
+        signed_out = tmp / 'beta-signed'
+        signed_out.mkdir()
+        command(prefix, ['package', 'create', str(ROOT / 'beta'), '--confirm', '--skip-sbom',
+                         '--signing-key', str(good_key),
+                         '--output', str(signed_out), '--architecture', 'amd64'], env=sign_env)
+        signed_archives = list(signed_out.glob('zarf-package-*.tar.zst'))
+        if len(signed_archives) != 1:
+            raise RuntimeError('signed beta package artifact missing')
+        signed_beta = signed_archives[0]
+        signed_defn = yaml.safe_load(command(
+            prefix, ['package', 'inspect', 'definition', str(signed_beta),
+                     '--key', str(good_pub), '--verify=always', '--no-color', '--log-level', 'warn'],
+        ))
+        if {c['name']: c for c in signed_defn.get('components', [])}.get('optional-addon', {}).get('optional') is not True:
+            raise RuntimeError('signed beta package lost optional: true on optional-addon')
+        expect_failure(
+            prefix, ['package', 'inspect', 'definition', str(signed_beta),
+                     '--key', str(wrong_pub), '--verify=always', '--no-color', '--log-level', 'warn'],
+            'signed beta package verify accepted wrong public key',
+        )
+        expect_failure(
+            prefix, ['package', 'inspect', 'definition', str(unsigned_beta),
+                     '--key', str(good_pub), '--verify=always', '--no-color', '--log-level', 'warn'],
+            'beta package verify accepted an unsigned package',
+        )
+        if args.uds:
+            verify_next_bundles(args.cli, tmp, signed_beta, unsigned_beta, good_key, good_pub, wrong_pub)
+    print('PASS: alpha/beta renders, chartOverrides, optional component definition, schema rejection, signed package, and Next bundle verification')
 
 
 if __name__ == '__main__':

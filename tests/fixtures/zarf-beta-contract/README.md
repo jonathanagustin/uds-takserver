@@ -16,9 +16,14 @@ Each invocation renders defaults and all ten overrides for both schemas, verifie
 `chartOverrides` root overlay propagation across `import.local`, checks that an
 `optional: true` component receives mapped values and retains `optional: true`
 in the built package definition, confirms `values.schema` rejects an invalid
-`backup.filesystem.owner` value, and creates both packages in temporary
-directories. The chart is local; no cluster, registry, image, or production
-package build is required. The existing `package-values` CI job runs this
+`backup.filesystem.owner` value, verifies Cosign signing and `--verify=always`
+rejection on the built `v1beta1` package (matching key, wrong key, and unsigned),
+and—when invoked with `--uds`—builds and verifies signed Next-mode bundles
+(`CLI_FEATURES=NextMode=true`) covering embedded `values_files`, include/exclude
+`optional_components` persistence in the OCI archive, wrong-key bundle rejection,
+and unsigned-package ingestion rejection. The chart is local; no cluster,
+registry, image, or production package build is required. The existing
+`package-values` CI job runs this contract on every PR.
 
 The chart deliberately quotes every ConfigMap data value. Beta `--set-values`
 infers boolean types for `true` and `false`; legacy variables are strings. This
