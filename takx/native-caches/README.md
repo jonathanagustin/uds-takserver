@@ -26,6 +26,7 @@ Builds, qualifies, and publishes minimal `scratch` OCI artifacts for foundationa
   - `ghcr.io/jonathanagustin/uds-takserver/takx-native-modp-base64:2020-09-26-amd64`
   - `ghcr.io/jonathanagustin/uds-takserver/takx-native-abseil:20240116.2-amd64`
   - `ghcr.io/jonathanagustin/uds-takserver/takx-native-libiconv:1.15-amd64`
+  - `ghcr.io/jonathanagustin/uds-takserver/takx-native-sqlite3:3.46.0-amd64`
 - **Layer 1 (composed from Layer-0 GHCR caches):**
   - `ghcr.io/jonathanagustin/uds-takserver/takx-native-curl:8.23.0-amd64`
   - `ghcr.io/jonathanagustin/uds-takserver/takx-native-sqlcipher:4.5.7-amd64`
@@ -33,6 +34,7 @@ Builds, qualifies, and publishes minimal `scratch` OCI artifacts for foundationa
   - `ghcr.io/jonathanagustin/uds-takserver/takx-native-assimp:4.0.1-amd64`
   - `ghcr.io/jonathanagustin/uds-takserver/takx-native-ngtcp2:1.6.0-amd64`
   - `ghcr.io/jonathanagustin/uds-takserver/takx-native-spdlog:1.14.1-amd64`
+  - `ghcr.io/jonathanagustin/uds-takserver/takx-native-ktx:4.3.1-amd64`
   - `ghcr.io/jonathanagustin/uds-takserver/takx-native-s2geometry:0.11.1-amd64`
 
 Every component compiles inside the digest-pinned GCC 14.2.0 image, verifies exact upstream archive and license SHA-256 hashes from the existing `takx/native-*/inputs.lock.json` manifests, runs a real C consumer control, is extracted and re-verified inside `ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64`, and receives a Sigstore build provenance attestation on `main`.
