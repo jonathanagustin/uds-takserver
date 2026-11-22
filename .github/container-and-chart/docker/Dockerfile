@@ -15,8 +15,8 @@
 # Runtime stages use the Temurin 17 JDK on Ubuntu 22.04, pinned by a
 # manifest list covering amd64 and arm64.
 
-ARG BUILDER_IMAGE=eclipse-temurin:17.0.20_8-jdk-jammy@sha256:51d32af96fb8a13ffbc96c719d7b05447a04ca69f314627d64050a64ecd13057
-ARG RUNTIME_IMAGE=eclipse-temurin:17.0.21_9-jdk-jammy@sha256:76751c16a2a07ec0960e659a2603491f8c79d95592173f6c0df8bf8ebab257cc
+ARG BUILDER_IMAGE=dhi.io/eclipse-temurin:17-jdk-debian13-dev@sha256:ba4e18dd9a9854f57689a9f59169453df5ef5e8005ea72e5ac4a3222c9c37de5
+ARG RUNTIME_IMAGE=dhi.io/eclipse-temurin:17-jdk-debian13-dev@sha256:ba4e18dd9a9854f57689a9f59169453df5ef5e8005ea72e5ac4a3222c9c37de5
 
 FROM ${BUILDER_IMAGE} AS builder
 
