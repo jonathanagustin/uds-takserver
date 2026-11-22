@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Live Kubernetes qualification of signed Zarf v1beta1 and UDS Next-mode bundles.
 
-Exercises the three live cluster gates tracked by #712 against a disposable k3d
+Exercises four live cluster gates tracked by #712 against a disposable k3d
 cluster using the local zarf-beta-contract ConfigMap fixture (no container
 images or registry required):
   1. Signed Next-mode bundle deploy with deploy-time `--set` values and
@@ -11,6 +11,9 @@ images or registry required):
   2. Clean opt-out deploy with `optional_components = ["-optional-addon"]`.
   3. Live in-place upgrade from a `v1alpha1` package to a signed `v1beta1`
      Next-mode bundle.
+  4. Signed direct `v1beta1` `uds zarf package deploy` optional-component
+     default OFF vs `--components optional-addon` opt-in with `--set-values`,
+     followed by clean `package remove`.
 """
 
 import argparse
@@ -89,6 +92,18 @@ def build_bundle(cli, bundle_dir, signing_key, env):
     if len(archives) != 1:
         raise RuntimeError(f'expected 1 bundle archive in {bundle_dir}, found {len(archives)}')
     return archives[0]
+
+
+def direct_deploy_args(zarf_prefix, pkg_path, pub_path, *, components=(), set_values=()):
+    args = [
+        *zarf_prefix, 'package', 'deploy', str(pkg_path),
+        '--confirm', '--key', str(pub_path), '--verify=always',
+    ]
+    if components:
+        args += ['--components', ','.join(components)]
+    for pair in set_values:
+        args += ['--set-values', pair]
+    return args
 
 
 def main():
@@ -190,7 +205,42 @@ def main():
         if after_addon != {'DOMAIN': 'beta-after.example', 'CLOUDTAK_STORAGE_CLASS': 'upgraded-ssd'}:
             raise RuntimeError(f'Gate 3 upgraded optional-addon ConfigMap mismatch: {after_addon}')
 
-    print('PASS: live k3d signed Next-mode deploy, optional-component opt-out, and v1alpha1 -> v1beta1 upgrade')
+        # Clean remove before Gate 4.
+        run_cmd([cli, 'bundle', 'remove', str(include_bundle), '--public-key', str(good_pub)], env=next_env)
+        assert_configmap_absent(cli, 'contract')
+        assert_configmap_absent(cli, 'optional-addon')
+
+        # Gate 4a: direct v1beta1 deploy keeps optional components OFF by default.
+        run_cmd(direct_deploy_args(
+            zarf_prefix, beta_pkg, good_pub,
+            set_values=('global.domain=direct-default.example',),
+        ))
+        direct_default_cm = get_configmap(cli, 'contract')
+        if direct_default_cm.get('DOMAIN') != 'direct-default.example':
+            raise RuntimeError(f'Gate 4a direct default contract ConfigMap mismatch: {direct_default_cm}')
+        assert_configmap_absent(cli, 'optional-addon')
+
+        # Gate 4b: direct v1beta1 deploy with --components optional-addon opts in cleanly.
+        run_cmd(direct_deploy_args(
+            zarf_prefix, beta_pkg, good_pub,
+            components=('optional-addon',),
+            set_values=('global.domain=direct-optin.example', 'storage.cloudtakClass=direct-ssd'),
+        ))
+        direct_optin_cm = get_configmap(cli, 'contract')
+        direct_addon_cm = get_configmap(cli, 'optional-addon')
+        if direct_optin_cm.get('DOMAIN') != 'direct-optin.example' or direct_optin_cm.get('CLOUDTAK_STORAGE_CLASS') != 'direct-ssd':
+            raise RuntimeError(f'Gate 4b direct opt-in contract ConfigMap mismatch: {direct_optin_cm}')
+        if direct_addon_cm != {'DOMAIN': 'direct-optin.example', 'CLOUDTAK_STORAGE_CLASS': 'direct-ssd'}:
+            raise RuntimeError(f'Gate 4b direct opt-in optional-addon ConfigMap mismatch: {direct_addon_cm}')
+
+        # Clean remove of direct v1beta1 package.
+        run_cmd(zarf_prefix + [
+            'package', 'remove', str(beta_pkg), '--confirm', '--key', str(good_pub), '--verify=always',
+        ])
+        assert_configmap_absent(cli, 'contract')
+        assert_configmap_absent(cli, 'optional-addon')
+
+    print('PASS: live k3d signed Next-mode deploy, optional-component opt-out, v1alpha1 -> v1beta1 upgrade, and direct v1beta1 --components opt-in')
 
 
 if __name__ == '__main__':

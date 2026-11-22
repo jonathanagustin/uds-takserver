@@ -71,6 +71,31 @@ class ZarfNextLiveQualificationTests(unittest.TestCase):
                 archive.write_bytes(b'test')
                 self.assertEqual(q.build_bundle('uds', bundle_dir, Path('k'), {}), archive)
 
+    def test_direct_deploy_args_builds_verified_default_and_opt_in_commands(self):
+        default_cmd = q.direct_deploy_args(
+            ['uds', 'zarf'], Path('pkg.tar.zst'), Path('good.pub'),
+            set_values=('global.domain=default.example',),
+        )
+        self.assertEqual(default_cmd, [
+            'uds', 'zarf', 'package', 'deploy', 'pkg.tar.zst',
+            '--confirm', '--key', 'good.pub', '--verify=always',
+            '--set-values', 'global.domain=default.example',
+        ])
+        self.assertNotIn('--components', default_cmd)
+
+        optin_cmd = q.direct_deploy_args(
+            ['uds', 'zarf'], Path('pkg.tar.zst'), Path('good.pub'),
+            components=('optional-addon', 'second-addon'),
+            set_values=('global.domain=optin.example', 'storage.cloudtakClass=ssd'),
+        )
+        self.assertEqual(optin_cmd, [
+            'uds', 'zarf', 'package', 'deploy', 'pkg.tar.zst',
+            '--confirm', '--key', 'good.pub', '--verify=always',
+            '--components', 'optional-addon,second-addon',
+            '--set-values', 'global.domain=optin.example',
+            '--set-values', 'storage.cloudtakClass=ssd',
+        ])
+
 
 if __name__ == '__main__':
     unittest.main()
