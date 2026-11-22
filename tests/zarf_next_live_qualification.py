@@ -224,13 +224,16 @@ def main():
         run_cmd(direct_deploy_args(
             zarf_prefix, beta_pkg, good_pub,
             components=('optional-addon',),
-            set_values=('global.domain=direct-optin.example', 'storage.cloudtakClass=direct-ssd'),
+            set_values=('global.domain=direct-opt-in.example', 'storage.cloudtakClass=direct-ssd'),
         ))
-        direct_optin_cm = get_configmap(cli, 'contract')
+        direct_opt_in_cm = get_configmap(cli, 'contract')
         direct_addon_cm = get_configmap(cli, 'optional-addon')
-        if direct_optin_cm.get('DOMAIN') != 'direct-optin.example' or direct_optin_cm.get('CLOUDTAK_STORAGE_CLASS') != 'direct-ssd':
-            raise RuntimeError(f'Gate 4b direct opt-in contract ConfigMap mismatch: {direct_optin_cm}')
-        if direct_addon_cm != {'DOMAIN': 'direct-optin.example', 'CLOUDTAK_STORAGE_CLASS': 'direct-ssd'}:
+        if (
+            direct_opt_in_cm.get('DOMAIN') != 'direct-opt-in.example'
+            or direct_opt_in_cm.get('CLOUDTAK_STORAGE_CLASS') != 'direct-ssd'
+        ):
+            raise RuntimeError(f'Gate 4b direct opt-in contract ConfigMap mismatch: {direct_opt_in_cm}')
+        if direct_addon_cm != {'DOMAIN': 'direct-opt-in.example', 'CLOUDTAK_STORAGE_CLASS': 'direct-ssd'}:
             raise RuntimeError(f'Gate 4b direct opt-in optional-addon ConfigMap mismatch: {direct_addon_cm}')
 
         # Clean remove of direct v1beta1 package.
@@ -240,7 +243,10 @@ def main():
         assert_configmap_absent(cli, 'contract')
         assert_configmap_absent(cli, 'optional-addon')
 
-    print('PASS: live k3d signed Next-mode deploy, optional-component opt-out, v1alpha1 -> v1beta1 upgrade, and direct v1beta1 --components opt-in')
+    print(
+        'PASS: live k3d signed Next-mode deploy, optional-component opt-out, '
+        'v1alpha1 -> v1beta1 upgrade, and direct v1beta1 --components opt-in'
+    )
 
 
 if __name__ == '__main__':

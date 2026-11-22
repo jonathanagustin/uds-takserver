@@ -83,16 +83,16 @@ class ZarfNextLiveQualificationTests(unittest.TestCase):
         ])
         self.assertNotIn('--components', default_cmd)
 
-        optin_cmd = q.direct_deploy_args(
+        opt_in_cmd = q.direct_deploy_args(
             ['uds', 'zarf'], Path('pkg.tar.zst'), Path('good.pub'),
             components=('optional-addon', 'second-addon'),
-            set_values=('global.domain=optin.example', 'storage.cloudtakClass=ssd'),
+            set_values=('global.domain=opt-in.example', 'storage.cloudtakClass=ssd'),
         )
-        self.assertEqual(optin_cmd, [
+        self.assertEqual(opt_in_cmd, [
             'uds', 'zarf', 'package', 'deploy', 'pkg.tar.zst',
             '--confirm', '--key', 'good.pub', '--verify=always',
             '--components', 'optional-addon,second-addon',
-            '--set-values', 'global.domain=optin.example',
+            '--set-values', 'global.domain=opt-in.example',
             '--set-values', 'storage.cloudtakClass=ssd',
         ])
 
