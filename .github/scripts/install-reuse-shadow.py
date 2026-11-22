@@ -29,6 +29,15 @@ ALLOWED_RUNNERS = {
     'amd64': frozenset({'ubuntu-22.04', 'ubuntu-24.04', 'ubuntu-26.04'}),
     'arm64': frozenset({'ubuntu-22.04-arm', 'ubuntu-24.04-arm', 'ubuntu-26.04-arm'}),
 }
+REQUIRED_INSTALL_SCENARIOS = frozenset({
+    ('install-online', 'amd64'),
+    ('install-online', 'arm64'),
+    ('install-airgap', 'amd64'),
+})
+VERIFIER_SCENARIO_NAME = {
+    'install': 'install-online',
+    'install-airgap': 'install-airgap',
+}
 MAX_BYTES = 4 * 1024 * 1024
 MAX_PAGES = 10
 COMMAND_TIMEOUT = 45
@@ -426,6 +435,82 @@ def shadow(api, raw, verified, pr, target, policy, prospective=None, expected_ru
     except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
         result['blockers'].insert(0, 'evidence-malformed-or-unavailable')
     return result
+
+
+def evaluate_scenario_set(results):
+    """Aggregate per-scenario shadow results for cross-scenario consistency; never authorizes reuse."""
+    ordered_missing = lambda pairs: [
+        {'scenario': scenario, 'architecture': arch} for scenario, arch in sorted(pairs)
+    ]
+    summary = {
+        'schema_version': 1, 'mode': 'shadow-set', 'reuse_authorized': False,
+        'decision': 'execute-fresh', 'set_qualified': False, 'complete_install_set': False,
+        'qualified_scenarios': [], 'missing_scenarios': ordered_missing(REQUIRED_INSTALL_SCENARIOS),
+        'verifier_preview': {'schema_version': 1, 'reuse_authorized': False, 'scenarios': []},
+        'blockers': ['prospective-input-equivalence-not-proven',
+                     'execution-class-policy-not-established',
+                     'complete-producer-dependency-policy-not-established',
+                     'consumer-enforcement-not-enabled'],
+    }
+    try:
+        require(isinstance(results, list) and 1 <= len(results) <= len(REQUIRED_INSTALL_SCENARIOS),
+                'scenario-set-empty-or-oversized')
+        seen = set()
+        entries = []
+        binding = None
+        for item in results:
+            require(isinstance(item, dict) and item.get('schema_version') == 1 and
+                    item.get('mode') == 'shadow' and item.get('reuse_authorized') is False and
+                    item.get('decision') == 'execute-fresh' and item.get('evidence_qualified') is True,
+                    'scenario-set-entry-unqualified')
+            if 'prospective_comparison' in item:
+                comp = item['prospective_comparison']
+                require(isinstance(comp, dict) and comp.get('inputs_equal') is True and
+                        comp.get('reuse_authorized') is False, 'scenario-set-prospective-mismatch')
+            if 'execution_class_comparison' in item:
+                comp = item['execution_class_comparison']
+                require(isinstance(comp, dict) and comp.get('execution_class_equal') is True and
+                        comp.get('reuse_authorized') is False, 'scenario-set-execution-class-mismatch')
+            ev = item.get('evidence')
+            require(isinstance(ev, dict), 'scenario-set-evidence-invalid')
+            verifier_scenario = VERIFIER_SCENARIO_NAME.get(ev.get('scenario'))
+            arch = ev.get('architecture')
+            pair = (verifier_scenario, arch)
+            require(pair in REQUIRED_INSTALL_SCENARIOS, 'scenario-set-scenario-invalid')
+            require(pair not in seen, 'scenario-set-duplicate-scenario')
+            seen.add(pair)
+            for field in ('source_run', 'attempt', 'job_id', 'artifact_id'):
+                require(type(ev.get(field)) is int and ev[field] > 0, 'scenario-set-evidence-invalid')
+            for field in ('tested_commit', 'tested_tree', 'target_commit'):
+                val = ev.get(field)
+                require(isinstance(val, str) and SHA.fullmatch(val), 'scenario-set-evidence-invalid')
+            current_binding = (ev['tested_commit'], ev['tested_tree'], ev['target_commit'])
+            if binding is None:
+                binding = current_binding
+            else:
+                require(current_binding == binding, 'scenario-set-commit-or-tree-mismatch')
+            entries.append({
+                'scenario': verifier_scenario, 'architecture': arch,
+                'source_run': ev['source_run'], 'attempt': ev['attempt'],
+                'job_id': ev['job_id'], 'artifact_id': ev['artifact_id'],
+                'tested_commit': ev['tested_commit'], 'tested_tree': ev['tested_tree'],
+                'target_commit': ev['target_commit'],
+                'evidence_url': f"https://github.com/{REPO}/actions/runs/{ev['source_run']}/job/{ev['job_id']}",
+            })
+        missing = REQUIRED_INSTALL_SCENARIOS - seen
+        summary['set_qualified'] = True
+        summary['complete_install_set'] = not missing
+        summary['qualified_scenarios'] = ordered_missing(seen)
+        summary['missing_scenarios'] = ordered_missing(missing)
+        summary['verifier_preview']['scenarios'] = sorted(
+            entries, key=lambda row: (row['scenario'], row['architecture']))
+        if missing:
+            summary['blockers'].insert(0, 'scenario-set-incomplete')
+    except Unavailable as exc:
+        summary['blockers'].insert(0, str(exc))
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        summary['blockers'].insert(0, 'scenario-set-malformed')
+    return summary
 
 
 def bounded_file(path, maximum):
