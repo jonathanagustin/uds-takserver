@@ -6,9 +6,12 @@ import argparse
 import json
 import os
 from pathlib import Path
+import pty
+import select
 import shutil
 import subprocess
 import tempfile
+import time
 import yaml
 
 ROOT = Path(__file__).resolve().parent / 'fixtures/zarf-beta-contract'
@@ -26,7 +29,7 @@ OVERRIDES = dict(zip(DEFAULTS, ('example.test', 'reviewed-tag', 'false', 'api st
 def command(prefix, args, env=None):
     result = subprocess.run(prefix + args, capture_output=True, timeout=120, env=env)
     if result.returncode or len(result.stdout) > 1024*1024:
-        tail = ' | '.join(result.stderr.decode(errors='replace').strip().splitlines()[-5:])[:400]
+        tail = ' | '.join(result.stderr.decode(errors='replace').strip().splitlines()[-5:])[-400:]
         raise RuntimeError(f'contract command failed; exit={result.returncode}; stderr={tail}')
     return result.stdout
 
@@ -37,18 +40,47 @@ def expect_failure(prefix, args, message, env=None):
         raise RuntimeError(message)
 
 
-def generate_keypair(directory, name):
-    key = directory / f'{name}.key'
-    pub = directory / f'{name}.pub'
-    ec = subprocess.run(['openssl', 'ecparam', '-name', 'prime256v1', '-genkey', '-noout'],
-                        capture_output=True, check=True, timeout=30)
-    pkcs8 = subprocess.run(['openssl', 'pkcs8', '-topk8', '-nocrypt'],
-                           input=ec.stdout, capture_output=True, check=True, timeout=30)
-    # Cosign/Zarf require the COSIGN PRIVATE KEY PEM label for unencrypted PKCS#8 keys.
-    cosign_pem = pkcs8.stdout.decode().replace('PRIVATE KEY-----', 'COSIGN PRIVATE KEY-----')
-    key.write_text(cosign_pem)
-    subprocess.run(['openssl', 'pkey', '-pubout', '-out', str(pub)],
-                   input=pkcs8.stdout, capture_output=True, check=True, timeout=30)
+def generate_keypair(prefix, directory, name):
+    key_dir = directory / f'key-{name}'
+    key_dir.mkdir()
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(
+        prefix + ['tools', 'gen-key', '--no-color'],
+        cwd=key_dir, stdin=slave, stdout=slave, stderr=slave, close_fds=True,
+    )
+    os.close(slave)
+    buf = b''
+    sent = 0
+    deadline = time.monotonic() + 30
+    try:
+        while proc.poll() is None and time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.2)
+            if ready:
+                try:
+                    chunk = os.read(master, 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                buf += chunk
+                lower = buf.lower()
+                if sent == 0 and b'password' in lower:
+                    os.write(master, b'\r')
+                    sent = 1
+                    buf = b''
+                elif sent == 1 and (b'again' in lower or b'password' in lower):
+                    os.write(master, b'\r')
+                    sent = 2
+                    buf = b''
+        proc.wait(timeout=10)
+    finally:
+        os.close(master)
+    if proc.returncode != 0:
+        raise RuntimeError(f'gen-key failed; exit={proc.returncode}')
+    key = key_dir / 'cosign.key'
+    pub = key_dir / 'cosign.pub'
+    if not key.is_file() or not pub.is_file():
+        raise RuntimeError('gen-key did not create cosign.key and cosign.pub')
     return key, pub
 
 
@@ -187,8 +219,8 @@ def main():
     )
     with tempfile.TemporaryDirectory() as directory:
         tmp = Path(directory)
-        good_key, good_pub = generate_keypair(tmp, 'good')
-        _wrong_key, wrong_pub = generate_keypair(tmp, 'wrong')
+        good_key, good_pub = generate_keypair(prefix, tmp, 'good')
+        _wrong_key, wrong_pub = generate_keypair(prefix, tmp, 'wrong')
         sign_env = {**os.environ, 'COSIGN_PASSWORD': ''}
         unsigned_beta = None
         for mode in ('alpha', 'beta'):
