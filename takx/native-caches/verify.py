@@ -165,6 +165,14 @@ COMPONENTS = {
         "control_marker": "asyncplusplus_static_pic_control=true",
         "required_artifacts": ("lib/libasync++.a", "include/async++.h", "LICENSE"),
     },
+    "spdlog": {
+        "version": "1.14.1",
+        "archive_sha256": "1586508029a7d0670dfcb2d97575dcdc242d3868a259742b69f100801ab4e16b",
+        "license_sha256": "4ccecab18d1ff0b61174fe3d6c430541625d3ddb865b0d5887db296f883c76e7",
+        "control_file": "spdlog_control.cpp",
+        "control_marker": "spdlog_static_pic_control=true",
+        "required_artifacts": ("lib/libspdlog.a", "include/spdlog/spdlog.h", "LICENSE"),
+    },
 }
 
 
