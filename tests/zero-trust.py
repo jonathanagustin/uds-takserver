@@ -7,10 +7,12 @@
 Checks:
 1. Both active namespaces (takserver, and cloudtak if installed) are enrolled
    in Istio Ambient mode without sidecar injection.
-2. An unauthorized ServiceAccount pod carrying matching pod labels
-   (app: takserver-api) is denied east-west access to takserver-postgresql:5432
-   (SPIFFE identity enforcement) and denied plaintext port 8080 inside the
-   takserver mesh (takserver-deny-plaintext-8080).
+2. An unauthorized ServiceAccount pod carrying matching Postgres client pod
+   labels (batch.kubernetes.io/job-name: takserver-db-setup, which matches
+   the Postgres NetworkPolicy rule without triggering Pepr's TAK pod
+   init-container injection) is denied east-west access to
+   takserver-postgresql:5432 (SPIFFE identity enforcement) and denied
+   plaintext port 8080 inside the takserver mesh (takserver-deny-plaintext-8080).
 3. If CloudTAK is installed, an unauthorized ServiceAccount pod carrying
    matching pod labels (app: cloudtak) is denied east-west access to
    cloudtak-postgis:5432.
@@ -80,7 +82,7 @@ def verify_ambient_namespace(namespace):
 
 
 def build_takserver_probe_pod(image, api_pod_ip, namespace="takserver", name=DEFAULT_PROBE_SA):
-    """Build a Pepr-compliant probe pod claiming app=takserver-api under an unauthorized SA."""
+    """Build a Pepr-compliant probe pod claiming Postgres NetworkPolicy labels under an unauthorized SA."""
     script = f"""set -euo pipefail
 pg_bytes="$( (printf '\\x00\\x00\\x00\\x08\\x04\\xd2\\x16\\x2f' | ncat -w 5 takserver-postgresql 5432 2>/dev/null || true) | wc -c | tr -d '[:space:]' )"
 if [ "${{pg_bytes}}" -gt 0 ]; then
@@ -100,7 +102,9 @@ echo "denied: SA {name} rejected by takserver-postgresql:5432 (bytes=${{pg_bytes
         "metadata": {
             "name": name,
             "namespace": namespace,
-            "labels": {"app": "takserver-api"},
+            # Matches the Postgres client NetworkPolicy selector (takserver-db-setup -> default SA)
+            # without triggering Pepr's app=takserver-* wait-deps/render-oidc init-container injection.
+            "labels": {"batch.kubernetes.io/job-name": "takserver-db-setup"},
         },
         "spec": {
             "serviceAccountName": name,
