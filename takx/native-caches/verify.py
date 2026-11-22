@@ -271,6 +271,14 @@ COMPONENTS = {
         "control_marker": "s2geometry_static_pic_control=true",
         "required_artifacts": ("lib/libs2.a", "include/s2/s2cell_id.h", "LICENSE"),
     },
+    "mdbtools": {
+        "version": "1.0.0",
+        "archive_sha256": "3446e1d71abdeb98d41e252777e67e1909b186496fda59f98f67032f7fbcd955",
+        "license_sha256": "b7993225104d90ddd8024fd838faf300bea5e83d91203eab98e29512acebd69c",
+        "control_file": "mdbtools_control.c",
+        "control_marker": "mdbtools_static_pic_control=true",
+        "required_artifacts": ("lib/libmdb.a", "include/mdbtools.h", "COPYING.LIB"),
+    },
 }
 
 
