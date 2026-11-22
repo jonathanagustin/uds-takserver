@@ -114,23 +114,62 @@ def draw_tu_mark(
         img.alpha_composite(down, (px, py))
 
 
-def render_lockin_frame(t: float, duration: float, show_url: bool = False) -> Image.Image:
+def render_lockin_frame(
+    t: float,
+    duration: float,
+    show_url: bool = False,
+    backdrop: bool = False,
+    start_visible: bool = False,
+) -> Image.Image:
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     fade_out = 1.0 - clamp((t - (duration - 0.5)) / 0.5) if t > duration - 0.5 else 1.0
 
-    p_lock = clamp(t / 0.85)
-    e_lock = ease_out_back(p_lock, s=0.9)
-    t_dy = -86.0 * (1.0 - e_lock)
-    u_dy = 86.0 * (1.0 - e_lock)
-    mark_alpha = clamp(t / 0.22) * fade_out
+    if start_visible:
+        t_dy = 0.0
+        u_dy = 0.0
+        mark_alpha = fade_out
+        p_shift = 1.0
+        p_rule = 1.0
+        p_word = 1.0
+        ring_start = 0.25
+    else:
+        p_lock = clamp(t / 0.85)
+        e_lock = ease_out_back(p_lock, s=0.9)
+        t_dy = -86.0 * (1.0 - e_lock)
+        u_dy = 86.0 * (1.0 - e_lock)
+        mark_alpha = clamp(t / 0.22) * fade_out
+        p_shift = ease_out_cubic((t - 0.95) / 0.60)
+        p_rule = ease_out_cubic((t - 0.90) / 0.65)
+        p_word = ease_out_cubic((t - 1.10) / 0.65)
+        ring_start = 0.72
 
-    p_shift = ease_out_cubic((t - 0.95) / 0.60)
-    mark_cx = 960.0 - 430.0 * p_shift
+    shift_dx = 355.0 if show_url else 310.0
+    mark_cx = 960.0 - shift_dx * p_shift
     mark_cy = 520.0
+    wx = int(round(960.0 - shift_dx + 165.0))
 
-    if 0.72 <= t <= 1.45:
-        p_ring = (t - 0.72) / 0.73
+    if backdrop and mark_alpha > 0.005:
+        final_x0 = int(round(960.0 - shift_dx - 165.0))
+        final_x1 = wx + (685 if show_url else 590)
+        x0 = int(round(805 + (final_x0 - 805) * p_shift))
+        x1 = int(round(1115 + (final_x1 - 1115) * p_shift))
+        y0 = 368
+        y1 = 696 if show_url else 672
+        d.rounded_rectangle(
+            [x0, y0, x1, y1],
+            radius=14,
+            fill=(*OBSIDIAN, int(round(188 * mark_alpha))),
+            outline=(*BORDER, int(round(185 * mark_alpha))),
+            width=2,
+        )
+        d.rectangle(
+            [x0, y0 + 18, x0 + 6, y1 - 18],
+            fill=(*AMBER, int(round(240 * mark_alpha))),
+        )
+
+    if ring_start <= t <= ring_start + 0.73:
+        p_ring = (t - ring_start) / 0.73
         r = int(round(80 + 135 * ease_out_cubic(p_ring)))
         ring_a = int(round((1.0 - p_ring) * 235 * fade_out))
         ring_w = max(2, int(round(7 * (1.0 - p_ring))))
@@ -140,7 +179,6 @@ def render_lockin_frame(t: float, duration: float, show_url: bool = False) -> Im
             width=ring_w,
         )
 
-    p_rule = ease_out_cubic((t - 0.90) / 0.65)
     if p_rule > 0:
         half_len = int(round(680 * p_rule))
         ra = int(round(120 * fade_out))
@@ -149,11 +187,9 @@ def render_lockin_frame(t: float, duration: float, show_url: bool = False) -> Im
 
     draw_tu_mark(img, mark_cx, mark_cy, 2.05, t_dy, u_dy, mark_alpha)
 
-    p_word = ease_out_cubic((t - 1.10) / 0.65)
     if p_word > 0.01:
         text_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         td = ImageDraw.Draw(text_layer)
-        wx = 695
         a_main = int(round(255 * fade_out))
         a_sub = int(round(230 * fade_out))
         td.text((wx, 420), "ZERO-TRUST TACTICAL AWARENESS", font=FONT_MONO_MD, fill=(*AMBER, a_main))
@@ -313,7 +349,7 @@ def main() -> None:
         pipe_frames_to_webm(
             args.out_dir / "tu-lockin-stinger-alpha.webm",
             int(3.8 * FPS),
-            lambda t: render_lockin_frame(t, 3.8, show_url=False),
+            lambda t: render_lockin_frame(t, 3.8, show_url=False, backdrop=True),
         )
         pipe_frames_to_webm(
             args.out_dir / "tu-hud-lowerthird-alpha.webm",
@@ -338,7 +374,13 @@ def main() -> None:
             )
 
         intro_ov = work / "intro_5s.webm"
-        pipe_frames_to_webm(intro_ov, int(5.0 * FPS), lambda t: render_lockin_frame(t, 4.6, show_url=False))
+        pipe_frames_to_webm(
+            intro_ov,
+            int(5.0 * FPS),
+            lambda t: render_lockin_frame(
+                t, 4.6, show_url=False, backdrop=True, start_visible=True
+            ),
+        )
         overlay_on_clip(args.veo_clip, 0.0, 5.0, intro_ov, work / "seg1.mp4")
         overlay_on_clip(args.veo_clip, 5.0, 5.0, work / "hud1.webm", work / "seg2.mp4")
         overlay_on_clip(args.veo_clip, 10.0, 5.0, work / "hud2.webm", work / "seg3.mp4")

@@ -125,6 +125,18 @@ check_decide true $'.github/workflows/native-cache-pr.yaml\ncharts/takserver/val
 check_match ".github/workflows/native-cache-pr-extra.yaml" relevant
 check_match ".github/workflows/geos-local-qualification.yaml" ignore
 check_decide false ".github/workflows/geos-local-qualification.yaml"
+check_match ".github/workflows/takx-gl-qualification.yaml" ignore
+check_decide false ".github/workflows/takx-gl-qualification.yaml"
+check_match ".github/workflows/takx-gl-runner-image.yaml" ignore
+check_decide false ".github/workflows/takx-gl-runner-image.yaml"
+check_match ".github/workflows/proj-cache.yaml" ignore
+check_decide false ".github/workflows/proj-cache.yaml"
+check_match ".github/workflows/gles-cache.yaml" ignore
+check_decide false ".github/workflows/gles-cache.yaml"
+check_match ".github/workflows/mdbtools-cache.yaml" ignore
+check_decide false ".github/workflows/mdbtools-cache.yaml"
+check_match ".github/workflows/takx-native-caches.yaml" ignore
+check_decide false ".github/workflows/takx-native-caches.yaml"
 check_match ".github/workflows/native-cache-extra.yaml" relevant
 check_decide true $'.github/workflows/native-cache.yaml\ncharts/takserver/values.yaml'
 # Mutation tooling is isolated from the Pepr package used by cluster jobs.
