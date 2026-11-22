@@ -169,8 +169,11 @@ def qualify(official_source: Path, output: Path, cxx: str) -> dict:
         [
             str(prepared_root / "source" / "takkernel" / "engine" / "src" / "main" / "java"),
             str(official / "takkernel" / "engine" / "src" / "main" / "java"),
+            str(official / "takkernel" / "engine" / "src" / "jre" / "java"),
             str(official / "takkernel" / "port" / "src" / "main" / "java"),
+            str(official / "takkernel" / "port" / "src" / "jre" / "java"),
             str(official / "takkernel" / "annotation" / "src" / "main" / "java"),
+            str(REPO_ROOT / "takx" / "compat" / "src" / "main" / "java"),
         ]
     )
     java_home = os.environ.get("JAVA_HOME_17_X64") or os.environ.get("JAVA_HOME")
