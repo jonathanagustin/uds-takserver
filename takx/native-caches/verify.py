@@ -181,6 +181,19 @@ COMPONENTS = {
         "control_marker": "libjpeg_turbo_static_pic_control=true",
         "required_artifacts": ("lib/libjpeg.a", "include/jpeglib.h", "LICENSE.md"),
     },
+    "libwebp": {
+        "version": "1.4.0",
+        "archive_sha256": "12af50c45530f0a292d39a88d952637e43fb2d4ab1883c44ae729840f7273381",
+        "license_sha256": "5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf",
+        "control_file": "libwebp_control.c",
+        "control_marker": "libwebp_static_pic_control=true",
+        "required_artifacts": (
+            "lib/libwebp.a",
+            "lib/libsharpyuv.a",
+            "include/webp/encode.h",
+            "COPYING",
+        ),
+    },
     "spdlog": {
         "version": "1.14.1",
         "archive_sha256": "1586508029a7d0670dfcb2d97575dcdc242d3868a259742b69f100801ab4e16b",

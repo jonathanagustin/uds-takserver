@@ -20,6 +20,7 @@ Builds, qualifies, and publishes minimal `scratch` OCI artifacts for foundationa
   - `ghcr.io/jonathanagustin/uds-takserver/takx-native-asyncplusplus:1.1-amd64`
   - `ghcr.io/jonathanagustin/uds-takserver/takx-native-tinyxml2:10.0.0-amd64`
   - `ghcr.io/jonathanagustin/uds-takserver/takx-native-libjpeg-turbo:3.0.3-amd64`
+  - `ghcr.io/jonathanagustin/uds-takserver/takx-native-libwebp:1.4.0-amd64`
 - **Layer 1 (composed from Layer-0 GHCR caches):**
   - `ghcr.io/jonathanagustin/uds-takserver/takx-native-curl:8.23.0-amd64`
   - `ghcr.io/jonathanagustin/uds-takserver/takx-native-sqlcipher:4.5.7-amd64`
