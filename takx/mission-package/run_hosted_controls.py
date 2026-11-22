@@ -93,26 +93,47 @@ def verify_only() -> dict:
     }
 
 
+MAVEN_CENTRAL_PREFIXES = (
+    "https://repo.maven.apache.org/maven2/",
+    "https://repo1.maven.org/maven2/",
+)
+MAVEN_CENTRAL_MIRRORS = (
+    "https://maven-central.storage-download.googleapis.com/maven2/",
+    "https://repo1.maven.org/maven2/",
+    "https://repo.maven.apache.org/maven2/",
+)
+
+
+def candidate_urls(url: str) -> list[str]:
+    for prefix in MAVEN_CENTRAL_PREFIXES:
+        if url.startswith(prefix):
+            suffix = url[len(prefix):]
+            return [mirror + suffix for mirror in MAVEN_CENTRAL_MIRRORS]
+    return [url]
+
+
 def _download_with_retry(url: str, dest: Path, expected_bytes: int, expected_sha256: str) -> None:
+    urls = candidate_urls(url)
     last_error: Exception | None = None
     for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "uds-takserver-takx-mission-package/1"})
-            with urllib.request.urlopen(req, timeout=60) as resp, dest.open("wb") as out:
-                shutil.copyfileobj(resp, out)
-            if dest.stat().st_size != expected_bytes:
-                raise ValueError(f"{dest.name} byte size mismatch: {dest.stat().st_size} != {expected_bytes}")
-            actual_sha = sha256_file(dest)
-            if actual_sha != expected_sha256:
-                raise ValueError(f"{dest.name} SHA-256 mismatch: {actual_sha} != {expected_sha256}")
-            return
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
-            last_error = exc
-            if dest.exists():
-                dest.unlink()
-            if attempt < DOWNLOAD_ATTEMPTS:
-                time.sleep(2 * attempt)
-    raise RuntimeError(f"failed to download verified {dest.name} from {url}: {last_error}")
+        for candidate in urls:
+            try:
+                req = urllib.request.Request(candidate, headers={"User-Agent": "uds-takserver-takx-mission-package/1"})
+                with urllib.request.urlopen(req, timeout=60) as resp, dest.open("wb") as out:
+                    shutil.copyfileobj(resp, out)
+                if dest.stat().st_size != expected_bytes:
+                    raise ValueError(f"{dest.name} byte size mismatch: {dest.stat().st_size} != {expected_bytes}")
+                actual_sha = sha256_file(dest)
+                if actual_sha != expected_sha256:
+                    raise ValueError(f"{dest.name} SHA-256 mismatch: {actual_sha} != {expected_sha256}")
+                return
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+                last_error = exc
+                if dest.exists():
+                    dest.unlink()
+        if attempt < DOWNLOAD_ATTEMPTS:
+            time.sleep(2 * attempt)
+    raise RuntimeError(f"failed to download verified {dest.name} from {urls}: {last_error}")
 
 
 def qualify(takx_source: Path, output: Path, java_home: Path | None = None) -> dict:

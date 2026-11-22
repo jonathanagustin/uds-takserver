@@ -61,6 +61,22 @@ class HostedUiJavaControlsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "fresh output directory required"):
                 runner.main(["--phase", "qualify", "--output", tmp])
 
+    def test_maven_central_candidate_urls_include_google_mirror(self):
+        runner = load_runner()
+        urls = runner.candidate_urls("https://repo.maven.apache.org/maven2/org/apache/ant/ant/1.8.1/ant-1.8.1.jar")
+        self.assertEqual(
+            urls,
+            [
+                "https://maven-central.storage-download.googleapis.com/maven2/org/apache/ant/ant/1.8.1/ant-1.8.1.jar",
+                "https://repo1.maven.org/maven2/org/apache/ant/ant/1.8.1/ant-1.8.1.jar",
+                "https://repo.maven.apache.org/maven2/org/apache/ant/ant/1.8.1/ant-1.8.1.jar",
+            ],
+        )
+        self.assertEqual(
+            runner.candidate_urls("https://codeload.github.com/example/repo/tar.gz/abc"),
+            ["https://codeload.github.com/example/repo/tar.gz/abc"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

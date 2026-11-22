@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -340,6 +341,129 @@ class RunnerComparison(unittest.TestCase):
         self.assertEqual(json.loads(dict(line.split('=', 1) for line in result.stdout.splitlines())['pg15-matrix']),
                          {'include': [{'arch': 'amd64', 'runner': 'ubuntu-26.04'},
                                       {'arch': 'arm64', 'runner': 'ubuntu-26.04-arm'}]})
+
+
+class InstallReuseVerification(unittest.TestCase):
+    @staticmethod
+    def _scenario(scenario="install-online", arch="amd64", run_id=44361333753, attempt=1,
+                  job_id=1001, artifact_id=2001):
+        sha = "a" * 40
+        return {
+            "scenario": scenario,
+            "architecture": arch,
+            "source_run": run_id,
+            "attempt": attempt,
+            "job_id": job_id,
+            "artifact_id": artifact_id,
+            "tested_commit": sha,
+            "tested_tree": "b" * 40,
+            "target_commit": "c" * 40,
+            "evidence_url": f"https://github.com/jonathanagustin/uds-takserver/actions/runs/{run_id}/job/{job_id}",
+        }
+
+    def _payload(self, scenarios=None, authorized=True, schema_version=1):
+        if scenarios is None:
+            scenarios = [
+                self._scenario("install-online", "amd64", job_id=1001, artifact_id=2001),
+                self._scenario("install-online", "arm64", job_id=1002, artifact_id=2002),
+                self._scenario("install-airgap", "amd64", job_id=1003, artifact_id=2003),
+            ]
+        return {"schema_version": schema_version, "reuse_authorized": authorized, "scenarios": scenarios}
+
+    def test_non_push_and_manual_modes_reject_reuse_evidence(self):
+        evidence = self._payload()
+        for event, requested, selected in (
+            ("pull_request", "false", "none"),
+            ("workflow_dispatch", "false", "none"),
+            ("workflow_dispatch", "true", "none"),
+            ("workflow_dispatch", "false", "airgap-amd64"),
+            ("workflow_dispatch", "false", "upgrade-amd64"),
+            ("workflow_dispatch", "false", "pg15-both"),
+        ):
+            with self.subTest(event=event, requested=requested, selected=selected):
+                with self.assertRaisesRegex(ValueError, "ordinary push"):
+                    MODE.verify(event, requested, "skipped", "success", "success",
+                                selected=selected, reused_installs=evidence)
+
+    def test_malformed_or_unauthorized_evidence_fails_closed(self):
+        bad_cases = [
+            "not-json",
+            '{"schema_version":1,"schema_version":1,"reuse_authorized":true,"scenarios":[]}',
+            self._payload(authorized=False),
+            self._payload(schema_version=2),
+            self._payload(scenarios=[]),
+            self._payload(scenarios=[self._scenario("install-airgap", "arm64")]),
+            self._payload(scenarios=[self._scenario("install-online", "amd64"),
+                                     self._scenario("install-online", "amd64")]),
+            {**self._payload(), "extra": True},
+        ]
+        bad_url = self._scenario()
+        bad_url["evidence_url"] = "https://github.com/evil/fork/actions/runs/44361333753/job/1001"
+        bad_cases.append(self._payload(scenarios=[bad_url]))
+        bad_sha = self._scenario()
+        bad_sha["tested_tree"] = "not-a-sha"
+        bad_cases.append(self._payload(scenarios=[bad_sha]))
+        bad_bool = self._scenario()
+        bad_bool["source_run"] = True
+        bad_cases.append(self._payload(scenarios=[bad_bool]))
+        for case in bad_cases:
+            with self.subTest(case=case):
+                with self.assertRaises(ValueError):
+                    MODE.verify("push", "false", "skipped", "success", "success", reused_installs=case)
+
+    def test_push_with_reused_installs_still_requires_fresh_regular_and_pg15_upgrades(self):
+        full = self._payload()
+        MODE.verify("push", "false", "skipped", "success", "success", reused_installs=full)
+        MODE.verify("push", "false", "success", "success", "success", reused_installs=full)
+        for bad_upgrade in ("skipped", "failure", "cancelled"):
+            with self.assertRaisesRegex(ValueError, "Upgrade result"):
+                MODE.verify("push", "false", "skipped", bad_upgrade, "success", reused_installs=full)
+        for bad_pg15 in ("skipped", "failure", "cancelled"):
+            with self.assertRaisesRegex(ValueError, "PostgreSQL 15"):
+                MODE.verify("push", "false", "skipped", "success", bad_pg15, reused_installs=full)
+
+    def test_partial_install_reuse_requires_fresh_install_job_success(self):
+        partial = self._payload(scenarios=[self._scenario("install-online", "amd64")])
+        MODE.verify("push", "false", "success", "success", "success", reused_installs=partial)
+        with self.assertRaisesRegex(ValueError, "Install result skipped"):
+            MODE.verify("push", "false", "skipped", "success", "success", reused_installs=partial)
+
+    def test_cli_reports_reused_evidence_links_and_never_claims_all_tests_passed(self):
+        payload = json.dumps(self._payload())
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "summary.md"
+            env = {
+                **os.environ,
+                "EVENT_NAME": "push",
+                "TRUST_BUNDLE": "false",
+                "DIAGNOSTIC_CASE": "none",
+                "INSTALL_RESULT": "skipped",
+                "UPGRADE_RESULT": "success",
+                "PG15_RESULT": "success",
+                "REUSED_INSTALL_EVIDENCE": payload,
+                "GITHUB_STEP_SUMMARY": str(summary),
+            }
+            result = subprocess.run([sys.executable, str(SCRIPT), "verify"], env=env,
+                                    capture_output=True, text=True, check=True)
+            self.assertIn("3 of 3 installs reused", result.stdout)
+            self.assertIn("not seven newly executed paths", result.stdout)
+            self.assertIn("actions/runs/44361333753/job/1001", result.stdout)
+            self.assertIn("actions/runs/44361333753/job/1002", result.stdout)
+            self.assertIn("actions/runs/44361333753/job/1003", result.stdout)
+            self.assertNotIn("All tests passed", result.stdout)
+            summary_text = summary.read_text(encoding="utf-8")
+            self.assertIn("## Install reuse evidence", summary_text)
+            self.assertIn("actions/runs/44361333753/job/1003", summary_text)
+            self.assertNotIn("All tests passed", summary_text)
+
+            # Non-push CLI invocation with REUSED_INSTALL_EVIDENCE must fail closed.
+            env["EVENT_NAME"] = "pull_request"
+            env["INSTALL_RESULT"] = "success"
+            failed = subprocess.run([sys.executable, str(SCRIPT), "verify"], env=env,
+                                    capture_output=True, text=True)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("ordinary push", failed.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
