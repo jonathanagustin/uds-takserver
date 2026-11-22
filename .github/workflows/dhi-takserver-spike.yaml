@@ -50,9 +50,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Check out the TAK submodule
+        shell: bash
         run: git submodule update --init --depth 1 upstream/takserver
 
       - name: Free disk
+        shell: bash
         run: ./.github/scripts/free-runner-disk.sh
         env:
           PRUNE_DOCKER: "true"
@@ -68,6 +70,7 @@ jobs:
           password: ${{ secrets.DHI_TOKEN }}
 
       - name: Inspect the base images
+        shell: bash
         run: |
           set -euo pipefail
           for ref in "$BUILDER_IMAGE" "$RUNTIME_IMAGE"; do
@@ -76,6 +79,7 @@ jobs:
           done
 
       - name: Build takserver-api on DHI Temurin 17
+        shell: bash
         run: |
           set -euo pipefail
           src=upstream/takserver
@@ -95,6 +99,7 @@ jobs:
             .github/container-and-chart/docker
 
       - name: Smoke the toolchain the TAK entrypoints use
+        shell: bash
         run: |
           set -euo pipefail
           docker run --rm --entrypoint bash "dhi-spike/takserver-api:$TAG" -c '
