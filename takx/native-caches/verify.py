@@ -149,6 +149,22 @@ COMPONENTS = {
         "control_marker": "zstd_static_pic_control=true",
         "required_artifacts": ("lib/libzstd.a", "include/zstd.h", "LICENSE"),
     },
+    "meshoptimizer": {
+        "version": "0.20",
+        "archive_sha256": "cf1077a83958bed3d8da28a841ca53a6a42d871e49023edce64e37002a0f5a48",
+        "license_sha256": "af0399f6fe106205872fd58c25f5a33fdefd34754b6d96d3f6b4307eb17d05ed",
+        "control_file": "meshoptimizer_control.cpp",
+        "control_marker": "meshoptimizer_static_pic_control=true",
+        "required_artifacts": ("lib/libmeshoptimizer.a", "include/meshoptimizer.h", "LICENSE.md"),
+    },
+    "asyncplusplus": {
+        "version": "1.1",
+        "archive_sha256": "abca8bcdd423a0bccd677fe5e21d368a0e2310d466e208e147a0f033eab95c1e",
+        "license_sha256": "cfd9b9cfc85de17b05900d2870413ff80e7427bc9c156cd5d189b1ce9158b9ef",
+        "control_file": "asyncplusplus_control.cpp",
+        "control_marker": "asyncplusplus_static_pic_control=true",
+        "required_artifacts": ("lib/libasync++.a", "include/async++.h", "LICENSE"),
+    },
 }
 
 
