@@ -41,3 +41,22 @@ Do not weaken gates to pass. If it fails, keep this draft or close it.
 
 No fresh install, upgrade, airgap, Copa, or Pepr interoperability result exists for
 this base yet. Whether the free Community catalog stays free is outside our control.
+
+## First native qualification
+
+Run [45078250033](https://github.com/jonathanagustin/uds-takserver/actions/runs/45078250033) on the candidate head:
+
+- Both native builds with Copa, `images`, and package jobs passed.
+- Fresh install passed on amd64, arm64 and amd64 airgap, and the amd64 upgrade passed.
+- The first arm64 upgrade attempt failed in "Upgrade from the released package and
+  check retained state". GitHub returned no log for that job, so the cause is
+  unknown. Re-running only that job passed. One pass does not explain the first
+  failure, so it counts as an unresolved flake until another run shows otherwise.
+- `validate-full-core` and the PostgreSQL 15 upgrade were skipped in the PR. The
+  fresh installs exercise certificate generation and the controller that loads
+  the PKCS#8 keys, but there is no separate Pepr key interoperability control for
+  Debian 13 OpenSSL.
+
+Still open before acceptance: a second clean arm64 upgrade run, the full-core
+run, signature verification evidence, and the fork pull request and airgap
+mirroring decision.
