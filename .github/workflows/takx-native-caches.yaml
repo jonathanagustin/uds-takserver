@@ -104,6 +104,14 @@ jobs:
             tag: 2.1.5-amd64
             control: zlib_ng_control.c
             link_args: "/opt/cache/lib/libz-ng.a"
+          - component: modp-base64
+            tag: 2020-09-26-amd64
+            control: modp_base64_control.c
+            link_args: "/opt/cache/lib/libmodp_b64.a"
+          - component: abseil
+            tag: 20240116.2-amd64
+            control: abseil_control.cpp
+            link_args: "/opt/cache/lib/libabsl_strings.a /opt/cache/lib/libabsl_strings_internal.a /opt/cache/lib/libabsl_base.a /opt/cache/lib/libabsl_raw_logging_internal.a /opt/cache/lib/libabsl_throw_delegate.a /opt/cache/lib/libabsl_int128.a /opt/cache/lib/libabsl_spinlock_wait.a -lpthread"
     name: qualify (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -225,6 +233,10 @@ jobs:
             tag: 1.5.7-amd64
           - component: zlib-ng
             tag: 2.1.5-amd64
+          - component: modp-base64
+            tag: 2020-09-26-amd64
+          - component: abseil
+            tag: 20240116.2-amd64
     name: publish (${{ matrix.component }})
     steps:
       - name: Checkout source
