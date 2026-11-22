@@ -101,11 +101,15 @@ def stage_beta_tree(dest):
         "values": root_alpha["values"],
         "components": [_convert_component(c) for c in root_alpha["components"]],
     }
+    common_comp = _convert_component(common_alpha["components"][0])
+    common_comp.pop("name", None)
+    common_meta = dict(common_alpha["metadata"])
+    common_meta.setdefault("version", root_alpha["metadata"].get("version", "dev"))
     common_beta = {
         "apiVersion": "zarf.dev/v1beta1",
-        "kind": "ZarfPackageConfig",
-        "metadata": common_alpha["metadata"],
-        "components": [_convert_component(c) for c in common_alpha["components"]],
+        "kind": "ZarfComponentConfig",
+        "metadata": common_meta,
+        "component": common_comp,
     }
     (dest / "common").mkdir()
     (dest / "common/zarf.yaml").write_text(yaml.safe_dump(common_beta, sort_keys=False))
