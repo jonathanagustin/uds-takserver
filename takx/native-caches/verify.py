@@ -247,6 +247,14 @@ COMPONENTS = {
         "control_marker": "libiconv_static_pic_control=true",
         "required_artifacts": ("lib/libiconv.a", "include/iconv.h", "COPYING.LIB"),
     },
+    "sqlite3": {
+        "version": "3.46.0",
+        "archive_sha256": "6f8e6a7b335273748816f9b3b62bbdc372a889de8782d7f048c653a447417a7d",
+        "license_sha256": "409765acd2efdd885e9251f1aee9214969f9a82cb92bc7bcbb35fe5e71cea1ef",
+        "control_file": "sqlite3_control.c",
+        "control_marker": "sqlite3_static_pic_control=true",
+        "required_artifacts": ("lib/libsqlite3.a", "include/sqlite3.h", "README.txt"),
+    },
 }
 
 
