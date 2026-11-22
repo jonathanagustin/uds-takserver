@@ -239,6 +239,14 @@ COMPONENTS = {
             "LICENSE",
         ),
     },
+    "ktx": {
+        "version": "4.3.1",
+        "archive_sha256": "98f051c91e723f85f3a5136a75dfa0ee186d72cc93223fd0daa1b3c8077ccb69",
+        "license_sha256": "0f92b4ce771585dfebc963ede074a30b4431b9e327911db44097d83ccf372128",
+        "control_file": "ktx_control.c",
+        "control_marker": "ktx_static_pic_control=true",
+        "required_artifacts": ("lib/libktx.a", "include/ktx.h", "LICENSE.md"),
+    },
 }
 
 

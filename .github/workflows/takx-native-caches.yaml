@@ -306,6 +306,10 @@ jobs:
             tag: 1.14.1-amd64
             control: spdlog_control.cpp
             link_args: "/opt/cache/lib/libspdlog.a /opt/fmt/lib/libfmt.a -lpthread"
+          - component: ktx
+            tag: 4.3.1-amd64
+            control: ktx_control.c
+            link_args: "/opt/cache/lib/libktx.a /opt/zstd/lib/libzstd.a -lstdc++ -lpthread -ldl -lm"
     name: qualify (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -364,6 +368,10 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/dep-fmt"
           docker cp "${fmt_cid}:/fmt/." "${RUNNER_TEMP}/dep-fmt/"
           docker rm "${fmt_cid}"
+          zstd_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-zstd:1.5.6-amd64 /zstd)"
+          mkdir -p "${RUNNER_TEMP}/dep-zstd"
+          docker cp "${zstd_cid}:/zstd/." "${RUNNER_TEMP}/dep-zstd/"
+          docker rm "${zstd_cid}"
           extra_inc="-I/opt/openssl/include"
           if [ "${COMPONENT}" = "ngtcp2" ]; then
             extra_inc="-I/opt/quictls/include"
@@ -378,17 +386,18 @@ jobs:
             -v "${RUNNER_TEMP}/dep-quictls:/opt/quictls:ro" \
             -v "${RUNNER_TEMP}/dep-zlib:/opt/zlib:ro" \
             -v "${RUNNER_TEMP}/dep-fmt:/opt/fmt:ro" \
+            -v "${RUNNER_TEMP}/dep-zstd:/opt/zstd:ro" \
             ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
             bash -euo pipefail -c '
               # shellcheck disable=SC2086
               if [[ "${CONTROL}" == *.cpp ]]; then
                 g++ -std=c++17 -Wall -Wextra -Werror -O2 \
-                  -I/opt/cache/include ${EXTRA_INC} -I/opt/zlib/include -I/opt/fmt/include \
+                  -I/opt/cache/include ${EXTRA_INC} -I/opt/zlib/include -I/opt/fmt/include -I/opt/zstd/include \
                   "/src/${CONTROL}" ${LINK_ARGS} \
                   -o /tmp/control_bin
               else
                 gcc -std=c99 -Wall -Wextra -Werror -O2 \
-                  -I/opt/cache/include ${EXTRA_INC} -I/opt/zlib/include -I/opt/fmt/include \
+                  -I/opt/cache/include ${EXTRA_INC} -I/opt/zlib/include -I/opt/fmt/include -I/opt/zstd/include \
                   "/src/${CONTROL}" ${LINK_ARGS} \
                   -o /tmp/control_bin
               fi
@@ -429,6 +438,8 @@ jobs:
             tag: 1.6.0-amd64
           - component: spdlog
             tag: 1.14.1-amd64
+          - component: ktx
+            tag: 4.3.1-amd64
     name: publish (${{ matrix.component }})
     steps:
       - name: Checkout source
