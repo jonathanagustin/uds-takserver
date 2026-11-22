@@ -134,7 +134,8 @@ class BaselineChartOverrideTests(unittest.TestCase):
             self.assertFalse(node['additionalProperties']);self.assertEqual(set(node['properties']),set(charts))
             self.assertTrue(all(value['type']=='object' for value in node['properties'].values()))
         package=yaml.safe_load((ROOT/'common/zarf.yaml').read_text())
-        charts=[('takserver',chart) for component in package['components'] for chart in component.get('charts',[])]
+        common_components=[package['component']] if 'component' in package else package['components']
+        charts=[('takserver',chart) for component in common_components for chart in component.get('charts',[])]
         cloud=yaml.safe_load((ROOT/'zarf.yaml').read_text())
         charts += [('cloudtak',chart) for component in cloud['components'] if component['name']=='cloudtak' for chart in component.get('charts',[])]
         bridges=[(component,chart['name'],mapping) for component,chart in charts for mapping in chart.get('values',[])
