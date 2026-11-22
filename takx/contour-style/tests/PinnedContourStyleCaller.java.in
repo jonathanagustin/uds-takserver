@@ -1,0 +1,60 @@
+// Copyright 2026 uds-takserver authors
+// SPDX-License-Identifier: GPL-3.0-only
+package gov.takx.core.view.gui.maptools.elevationtools.contour;
+
+import com.atakmap.coremap.conversions.Span;
+import gov.tak.api.annotation.NonNull;
+import gov.tak.api.contour.ContourFunction;
+import gov.tak.api.contour.ContourStyle;
+import jakarta.annotation.Nonnull;
+import java.awt.Color;
+import java.util.ArrayList;
+import java.util.List;
+
+/** Executes the exact pinned nested gradient caller and unchanged ContourUnits. */
+public final class PinnedContourStyleCaller {
+    private static int checks;
+    private static void check(boolean condition, String reason) {
+        if (!condition) throw new AssertionError(reason);
+        checks++;
+    }
+    public static void main(String[] args) throws Exception {
+        check(java.nio.file.Path.of(ContourStyle.class.getProtectionDomain().getCodeSource().getLocation().toURI())
+                .toRealPath().equals(java.nio.file.Path.of(args[0]).toRealPath()), "project API loaded from packaged artifact");
+        ContourStyle style = new ContourStyle();
+        GradientColorFunction gradient = new GradientColorFunction(new Color(255, 0, 0, 240),
+                new Color(0, 0, 255, 16), 100, 0);
+        List<Integer> changed = new ArrayList<>(); style.addChangeListener(changed::add);
+        style.setContourLineColorMapper(gradient);
+        check(style.getContourColorMapper() == gradient, "real caller mapper identity");
+        check(style.getContourColorMapper().apply(0, true) == new Color(0, 0, 255, 16).getRGB(), "real caller lower endpoint");
+        check(style.getContourColorMapper().apply(100, false) == new Color(255, 0, 0, 240).getRGB(), "real caller upper endpoint");
+        check(style.getContourColorMapper().apply(50, true) == new Color(255, 0, 255, 128).getRGB(), "real caller hue/alpha midpoint");
+        check(style.getContourColorMapper().apply(-100, false).equals(style.getContourColorMapper().apply(0, false)), "real caller lower clamp");
+        check(style.getContourColorMapper().apply(200, true).equals(style.getContourColorMapper().apply(100, true)), "real caller upper clamp");
+        check(style.getContourColorMapper().apply(25, true).equals(style.getContourColorMapper().apply(25, false)), "real gradient ignores major flag");
+        GradientColorFunction flat = new GradientColorFunction(Color.RED, Color.BLUE, 0, 0);
+        style.setContourLineColorMapper(flat);
+        check(style.getContourColorMapper().apply(10, true) == Color.BLUE.getRGB(), "real caller flat-elevation fallback");
+        style.setContourColors(Color.WHITE.getRGB(), Color.GRAY.getRGB());
+        check(style.getContourColorMapper().apply(0, true) == Color.WHITE.getRGB(), "UI flat major transition");
+        check(style.getContourColorMapper().apply(0, false) == Color.GRAY.getRGB(), "UI flat minor transition");
+        check(changed.size() == 3 && changed.stream().allMatch(p -> p == ContourStyle.PROP_CONTOUR_COLOR_MAPPER), "UI preview notification class");
+        Span[] selected = {Span.METER, Span.FOOT, Span.YARD};
+        for (int index = 0; index < selected.length; index++) {
+            Span actual = ContourUnits.fromSelectionIndex(index);
+            check(actual == selected[index], "unchanged caller selection mapping");
+            style.setLabelUnits(actual);
+            check(ContourUnits.toIndex(style.getLabelUnits()) == index, "unchanged caller round trip through style");
+        }
+        check(ContourUnits.fromSelectionIndex(-1) == Span.METER, "unchanged caller invalid selection fallback");
+        check(ContourUnits.toIndex(Span.KILOMETER) == 0, "unchanged caller kilometre grouping");
+        check(ContourUnits.toIndex(Span.MILE) == 1, "unchanged caller mile grouping");
+        check(ContourUnits.toIndex(Span.NAUTICALMILE) == 1, "unchanged caller nautical grouping");
+        style.setLabelUnits(ContourUnits.fromSelectionIndex(1));
+        check(style.getContourLabelTextMapper().apply(-.3048, style.getLabelUnits()).equals("-1 ft"), "real caller unit drives label mapper");
+        System.out.println("pinned-contour-style-caller passed checks=" + checks);
+    }
+
+    // PINNED_GRADIENT_RECORD
+}
