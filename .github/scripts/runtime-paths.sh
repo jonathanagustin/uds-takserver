@@ -139,6 +139,11 @@ pepr/scripts/coverage-summary.mjs
 .github/workflows/codeql-extended.yaml
 .github/workflows/codeql-language.yaml
 .github/scripts/codeql-languages.py
+.github/workflows/zarf-next-qualification.yaml
+.github/workflows/dhi-takserver-spike.yaml
+tests/zarf_next_live_qualification.py
+tests/zarf_beta_contract.py
+tests/fixtures/zarf-beta-contract/**
 EOF
 }
 
