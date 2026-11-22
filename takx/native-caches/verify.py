@@ -165,6 +165,22 @@ COMPONENTS = {
         "control_marker": "asyncplusplus_static_pic_control=true",
         "required_artifacts": ("lib/libasync++.a", "include/async++.h", "LICENSE"),
     },
+    "tinyxml2": {
+        "version": "10.0.0",
+        "archive_sha256": "3bdf15128ba16686e69bce256cc468e76c7b94ff2c7f391cc5ec09e40bff3839",
+        "license_sha256": "9332252e9b9e46db8285d4a3f0bf25f139bf1dca6781b956d57f2302efca6432",
+        "control_file": "tinyxml2_control.cpp",
+        "control_marker": "tinyxml2_static_pic_control=true",
+        "required_artifacts": ("lib/libtinyxml2.a", "include/tinyxml2.h", "LICENSE.txt"),
+    },
+    "libjpeg-turbo": {
+        "version": "3.0.3",
+        "archive_sha256": "a649205a90e39a548863a3614a9576a3fb4465f8e8e66d54999f127957c25b21",
+        "license_sha256": "e548c96c0c09397c94b5c5531836c02ff2c403f1f2b130cad8e3ec9439b5a7cc",
+        "control_file": "libjpeg_turbo_control.c",
+        "control_marker": "libjpeg_turbo_static_pic_control=true",
+        "required_artifacts": ("lib/libjpeg.a", "include/jpeglib.h", "LICENSE.md"),
+    },
 }
 
 
