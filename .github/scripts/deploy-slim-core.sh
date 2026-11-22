@@ -140,7 +140,7 @@ fi
 echo "Deploying ${files[0]}"
 if [[ -n "${extra}" ]]; then
   echo "K3D_EXTRA_ARGS=${extra}"
-  "${zarf[@]}" package deploy "${files[0]}" --confirm --features values=true --set "K3D_EXTRA_ARGS=${extra}"
+  "${zarf[@]}" package deploy "${files[0]}" --confirm --features values=true --set-variables "K3D_EXTRA_ARGS=${extra}"
 else
   "${zarf[@]}" package deploy "${files[0]}" --confirm --features values=true
 fi

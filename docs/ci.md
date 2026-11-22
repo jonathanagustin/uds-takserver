@@ -6,9 +6,9 @@ Docs, device, benchmark, demo, unit-test-only, and repository metadata changes s
 
 ## Zarf CLI compatibility
 
-The pinned UDS CLI 0.41.0 embeds Zarf 0.89.0. Direct Zarf package commands avoid `--no-progress`, which Zarf 1.x removed. Package publication also omits the removed `--confirm` flag; these archive-publication calls do not supply inline signing-key credentials. Release signing remains a separate prior step. Deployment variables use `--set-variables`. Create-time `--set` still selects package templates, while `uds run --set` and `uds run --no-progress` are separate UDS task options.
+The pinned UDS CLI 0.42.0 embeds Zarf 1.0.1. Direct Zarf package commands avoid `--no-progress`, which Zarf 1.x removed. Package publication also omits the removed `--confirm` flag; these archive-publication calls do not supply inline signing-key credentials. Release signing remains a separate prior step. Deployment variables use `--set-variables`. Create-time `--set` still selects package templates, while `uds run --set` and `uds run --no-progress` are separate UDS task options.
 
-Package-schema migration remains separate. [Zarf 1.0 deprecates `v1alpha1`](https://github.com/zarf-dev/zarf/releases/tag/v1.0.0), which the authored packages currently use implicitly. Moving to `zarf.dev/v1beta1` requires replacing legacy package variables and validating bundle overrides and rendered resources; changing only `apiVersion` is insufficient. UDS 0.41.0 already supports beta schemas, so that migration can be qualified while retaining the production CLI pin. CLI argument checks and small local package creation do not establish deployment compatibility.
+Package-schema migration remains separate. [Zarf 1.0 deprecates `v1alpha1`](https://github.com/zarf-dev/zarf/releases/tag/v1.0.0), which the root and common authored packages currently use implicitly (`atak/zarf.yaml` and `tests/upgrade-agent-gate/zarf.yaml` already use `zarf.dev/v1beta1`). Moving the root and common packages to `zarf.dev/v1beta1` requires replacing legacy package variables and validating bundle overrides and rendered resources; changing only `apiVersion` is insufficient. CLI argument checks and small local package creation do not establish deployment compatibility.
 
 ## Pull request checks
 
@@ -301,10 +301,10 @@ Dev-package publication retains the existing archive, input key, repository and
 architecture checks. Existing input-key tags still skip publication before
 requiring a local archive. A missing tag invokes the publisher once with
 `--retries 3`; there is no outer rebuild or workflow retry. The pinned
-[UDS CLI 0.41.0 module](https://github.com/defenseunicorns/uds-cli/blob/v0.41.0/go.mod)
-embeds Zarf 0.89.0, whose
-[publish command](https://github.com/zarf-dev/zarf/blob/v0.89.0/src/cmd/package.go)
-accepts that flag. Its [Open Container Initiative (OCI) retry implementation](https://github.com/zarf-dev/zarf/blob/v0.89.0/src/pkg/zoci/retry.go)
+[UDS CLI 0.42.0 module](https://github.com/defenseunicorns/uds-cli/blob/v0.42.0/go.mod)
+embeds Zarf 1.0.1, whose
+[publish command](https://github.com/zarf-dev/zarf/blob/v1.0.1/src/cmd/package.go)
+accepts that flag. Its [Open Container Initiative (OCI) retry implementation](https://github.com/zarf-dev/zarf/blob/v1.0.1/src/pkg/zoci/retry.go)
 uses three total attempts for the same publication, not three additional jobs.
 
 The local wrapper owns the publication process group, allows 20 minutes, then

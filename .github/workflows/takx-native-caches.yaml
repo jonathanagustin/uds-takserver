@@ -120,6 +120,18 @@ jobs:
             tag: 3.46.0-amd64
             control: sqlite3_control.c
             link_args: "/opt/cache/lib/libsqlite3.a -lpthread -ldl -lm"
+          - component: proj
+            tag: 4.9.1-amd64
+            control: proj_control.c
+            link_args: "/opt/cache/lib/libproj.a -lm"
+          - component: geos
+            tag: 3.4.3-amd64
+            control: geos_control.c
+            link_args: "/opt/cache/lib/libgeos_c.a /opt/cache/lib/libgeos.a -lstdc++ -lm"
+          - component: mdbtools
+            tag: 1.0.0-amd64
+            control: mdbtools_control.c
+            link_args: "/opt/cache/lib/libmdb.a -lm"
     name: qualify (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -249,6 +261,12 @@ jobs:
             tag: 1.15-amd64
           - component: sqlite3
             tag: 3.46.0-amd64
+          - component: proj
+            tag: 4.9.1-amd64
+          - component: geos
+            tag: 3.4.3-amd64
+          - component: mdbtools
+            tag: 1.0.0-amd64
     name: publish (${{ matrix.component }})
     steps:
       - name: Checkout source

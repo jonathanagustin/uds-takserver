@@ -88,7 +88,7 @@ jobs:
         timeout-minutes: 1
         uses: defenseunicorns/setup-uds@d6add59d4c2ca789ed7c92741e91bd340b4e950b # v1.0.2
         with:
-          version: v0.41.0
+          version: v0.42.0
       - name: Check exact tested push reuse
         id: decide
         env:
@@ -209,7 +209,7 @@ jobs:
         uses: defenseunicorns/setup-uds@d6add59d4c2ca789ed7c92741e91bd340b4e950b # v1.0.2
         with:
           # renovate: datasource=github-tags depName=defenseunicorns/uds-cli versioning=semver
-          version: v0.41.0
+          version: v0.42.0
 
       - name: Trim the runner
         run: ./.github/scripts/trim-runner.sh finish
