@@ -707,9 +707,9 @@ def tool_identities(run=child):
     require(grype.get('version') == '0.120.1', 'unsupported_grype_version')
     require(run(['uds-pk', 'version'], timeout=30, limit=1024 * 1024).decode().strip() == '0.2.0',
             'unsupported_comparator_version')
-    require(run(['uds', 'version'], timeout=30, limit=1024 * 1024).decode().strip() == 'v0.41.0',
+    require(run(['uds', 'version'], timeout=30, limit=1024 * 1024).decode().strip() == 'v0.42.0',
             'unsupported_uds_version')
-    require(run(['uds', 'zarf', 'version'], timeout=30, limit=1024 * 1024).decode().strip() == 'v0.89.0',
+    require(run(['uds', 'zarf', 'version'], timeout=30, limit=1024 * 1024).decode().strip() == 'v1.0.1',
             'unsupported_zarf_version')
     result = {}
     for name in ('grype', 'uds-pk', 'uds', 'gh'):
@@ -719,7 +719,7 @@ def tool_identities(run=child):
             result[name] = hashlib.file_digest(stream, 'sha256').hexdigest()
     return {'binary_sha256': result, 'grype_version': grype['version'],
             'grype_build_commit': grype.get('gitCommit'), 'grype_platform': grype.get('platform'),
-            'comparator_version': '0.2.0', 'uds_version': '0.41.0', 'embedded_zarf_version': '0.89.0'}
+            'comparator_version': '0.2.0', 'uds_version': '0.42.0', 'embedded_zarf_version': '1.0.1'}
 
 
 def source_identity(root):
