@@ -306,7 +306,7 @@ jobs:
         if: steps.package_render.outcome != 'success' || steps.package_render.outputs.render != 'false'
         env:
           PYYAML_VERSION: 6.0.3
-        run: uv run --no-project --with "pyyaml==${PYYAML_VERSION}" python -B -m unittest tests.test_package_values.PackageValuesTests -v
+        run: uv run --no-project --with "pyyaml==${PYYAML_VERSION}" python -B -m unittest tests.test_package_values.PackageValuesTests tests.test_zarf_beta_production_parity -v
       - name: Encrypted staged diagnostic guards
         run: python3 -B -m unittest discover -s .github/test-infra -p test_staged_encrypted_diagnostic.py -v
       - name: Draft release readiness guards

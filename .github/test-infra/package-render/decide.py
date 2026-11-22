@@ -22,7 +22,8 @@ FORCE_FILES = {WORKFLOW, CLASSIFIER, 'tests/test_runtime_paths.sh',
     'tests/test_ephemeral_cluster.py', 'tests/test_velero_transfer.py', 'tests/test_velero_trial.py', 'tests/test_velero_source_provider.py', 'tests/test_velero_source_bundle.py', 'tests/test_velero_controller_state.py',
     'tests/test_staged_migrations.py', 'tests/test_upgrade_agent_watch.py', 'tests/test_identity_rollout_driver.py',
     'tests/test_package_identity_driver.py',
-    'tests/test_identity_cleanup_evidence.py', 'tests/test_identity_phase_evidence.py', 'tests/test_identity_public_evidence.py', 'tests/test_identity_configmap_authorities.py', 'tests/test_identity_retained_state.py', 'tests/test_identity_pvc_quiescence.py', 'tests/test_identity_render_inputs.py', 'tests/test_identity_failure_evidence.py'}
+    'tests/test_identity_cleanup_evidence.py', 'tests/test_identity_phase_evidence.py', 'tests/test_identity_public_evidence.py', 'tests/test_identity_configmap_authorities.py', 'tests/test_identity_retained_state.py', 'tests/test_identity_pvc_quiescence.py', 'tests/test_identity_render_inputs.py', 'tests/test_identity_failure_evidence.py',
+    'tests/test_zarf_beta_production_parity.py'}
 MAX_BYTES = 2 * 1024 * 1024
 
 
