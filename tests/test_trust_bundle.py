@@ -45,7 +45,7 @@ class TrustBundleChartTests(unittest.TestCase):
         self.assertEqual(bundle["configMap"], {"name": "uds-trust-bundle", "optional": True})
         init = spec["initContainers"][0]
         self.assertEqual(init["name"], "merge-trust")
-        self.assertEqual(init["command"], ["/bin/sh", "-ec"])
+        self.assertEqual(init["command"], ["node", "--input-type=module", "-e"])
         self.assertNotIn("tak-admin", {m["name"] for m in init["volumeMounts"]})
         for container in spec["containers"][:2]:
             env = {e["name"]: e.get("value") for e in container["env"]}
@@ -53,8 +53,14 @@ class TrustBundleChartTests(unittest.TestCase):
             mount = next(m for m in container["volumeMounts"] if m["name"] == "combined-trust")
             self.assertTrue(mount["readOnly"])
             self.assertNotIn("tak-admin", {m["name"] for m in container["volumeMounts"]})
+        sso = spec["containers"][1]
+        self.assertEqual(sso["name"], "sso")
+        probe = sso["readinessProbe"]
+        self.assertEqual(probe["exec"]["command"][0], "node")
+        self.assertNotIn("wget", probe["exec"]["command"])
+        self.assertGreaterEqual(probe["timeoutSeconds"], 3)
         self.assertEqual(init["args"][0].strip(),
-                         (ROOT / "charts/cloudtak/files/merge-trust.sh").read_text().strip())
+                         (ROOT / "charts/cloudtak/files/merge-trust.mjs").read_text().strip())
 
 
 class QuietHandler(http.server.BaseHTTPRequestHandler):
@@ -87,7 +93,8 @@ class TrustBundleTLS(unittest.TestCase):
                     server.socket = context.wrap_socket(server.socket, server_side=True)
                     threading.Thread(target=server.serve_forever, daemon=True).start()
                     servers.append(server)
-                merge = ROOT / "charts/cloudtak/files/merge-trust.sh"
+                merge = ROOT / "charts/cloudtak/files/merge-trust.mjs"
+                merge_script = merge.read_text()
                 output = root / "combined.pem"
                 request = """const https = require('node:https');
 https.get({host: '127.0.0.1', servername: 'localhost', port: +process.argv[1]},
@@ -101,11 +108,14 @@ https.get({host: '127.0.0.1', servername: 'localhost', port: +process.argv[1]},
                         capture_output=True, timeout=10,
                     ).returncode == 0
 
-                def assemble(bundle):
+                def assemble(bundle, tak_ca=None):
                     if output.exists():
                         output.chmod(0o644)
-                    subprocess.run(["sh", str(merge), str(root / "tak.pem"),
-                                    str(bundle), str(output)], check=True)
+                    subprocess.run([
+                        "node", "--input-type=module", "-e", merge_script,
+                        "merge-trust", str(tak_ca or (root / "tak.pem")),
+                        str(bundle), str(output),
+                    ], check=True)
 
                 assemble(root / "core.pem")
                 self.assertTrue(all(connects(server) for server in servers))
@@ -115,10 +125,15 @@ https.get({host: '127.0.0.1', servername: 'localhost', port: +process.argv[1]},
                     assemble(bundle)
                     self.assertTrue(connects(servers[0]))
                     self.assertFalse(connects(servers[1]))
-                # A missing TAK CA must fail the init container.
-                result = subprocess.run(["sh", str(merge), str(root / "missing.pem"),
-                                         str(root / "core.pem"), str(output)])
-                self.assertNotEqual(result.returncode, 0)
+                # A missing or empty TAK CA must fail the init container.
+                (root / "empty-tak.pem").touch()
+                for bad_tak in (root / "missing.pem", root / "empty-tak.pem"):
+                    result = subprocess.run([
+                        "node", "--input-type=module", "-e", merge_script,
+                        "merge-trust", str(bad_tak),
+                        str(root / "core.pem"), str(output),
+                    ], capture_output=True)
+                    self.assertNotEqual(result.returncode, 0)
             finally:
                 for server in servers:
                     server.shutdown()
