@@ -45,6 +45,7 @@ RUN set -x; \
     mkdir -p /modp-base64/lib /modp-base64/include; \
     gcc -O2 "${src}/src/modp_b64_gen.c" "${src}/src/arraytoc.c" -o /build/modp_b64_gen; \
     /build/modp_b64_gen > "${src}/src/modp_b64_data.h"; \
+    printf '#ifndef MODP_CONFIG_H\n#define MODP_CONFIG_H\n#endif\n' > "${src}/src/config.h"; \
     gcc -std=c99 -O2 -fPIC -march=x86-64 -mtune=generic \
       -I"${src}/src" -c "${src}/src/modp_b64.c" -o /build/modp_b64.o; \
     ar rcs /modp-base64/lib/libmodp_b64.a /build/modp_b64.o; \
