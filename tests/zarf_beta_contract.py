@@ -41,10 +41,13 @@ def generate_keypair(directory, name):
     pub = directory / f'{name}.pub'
     ec = subprocess.run(['openssl', 'ecparam', '-name', 'prime256v1', '-genkey', '-noout'],
                         capture_output=True, check=True, timeout=30)
-    subprocess.run(['openssl', 'pkcs8', '-topk8', '-nocrypt', '-out', str(key)],
-                   input=ec.stdout, capture_output=True, check=True, timeout=30)
-    subprocess.run(['openssl', 'pkey', '-in', str(key), '-pubout', '-out', str(pub)],
-                   capture_output=True, check=True, timeout=30)
+    pkcs8 = subprocess.run(['openssl', 'pkcs8', '-topk8', '-nocrypt'],
+                           input=ec.stdout, capture_output=True, check=True, timeout=30)
+    # Cosign/Zarf require the COSIGN PRIVATE KEY PEM label for unencrypted PKCS#8 keys.
+    cosign_pem = pkcs8.stdout.decode().replace('PRIVATE KEY-----', 'COSIGN PRIVATE KEY-----')
+    key.write_text(cosign_pem)
+    subprocess.run(['openssl', 'pkey', '-pubout', '-out', str(pub)],
+                   input=pkcs8.stdout, capture_output=True, check=True, timeout=30)
     return key, pub
 
 
@@ -127,7 +130,7 @@ def verify_next_bundles(cli, directory, signed_pkg, unsigned_pkg, good_key, good
         selector_bytes = f'optional_components = ["{selector}"]'.encode()
         found_selector = any(
             selector_bytes in blob.read_bytes()
-            for blob in (unpacked / 'blobs').rglob('*')
+            for blob in unpacked.rglob('*')
             if blob.is_file() and blob.stat().st_size <= 1024 * 1024
         )
         if not found_selector:
