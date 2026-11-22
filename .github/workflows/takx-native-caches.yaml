@@ -100,6 +100,10 @@ jobs:
             tag: 1.5.7-amd64
             control: draco_control.cpp
             link_args: "/opt/cache/lib/libdraco.a"
+          - component: zlib-ng
+            tag: 2.1.5-amd64
+            control: zlib_ng_control.c
+            link_args: "/opt/cache/lib/libz-ng.a"
     name: qualify (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -219,6 +223,8 @@ jobs:
             tag: 1.4.0-amd64
           - component: draco
             tag: 1.5.7-amd64
+          - component: zlib-ng
+            tag: 2.1.5-amd64
     name: publish (${{ matrix.component }})
     steps:
       - name: Checkout source

@@ -210,6 +210,14 @@ COMPONENTS = {
         "control_marker": "draco_static_pic_control=true",
         "required_artifacts": ("lib/libdraco.a", "include/draco/compression/decode.h", "LICENSE"),
     },
+    "zlib-ng": {
+        "version": "2.1.5",
+        "archive_sha256": "3f6576971397b379d4205ae5451ff5a68edf6c103b2f03c4188ed7075fbb5f04",
+        "license_sha256": "d3c80be055d94d798eaa786116e84fa0b010bc11420b5d2060d978ea77845436",
+        "control_file": "zlib_ng_control.c",
+        "control_marker": "zlib_ng_static_pic_control=true",
+        "required_artifacts": ("lib/libz-ng.a", "include/zlib-ng.h", "LICENSE.md"),
+    },
 }
 
 
