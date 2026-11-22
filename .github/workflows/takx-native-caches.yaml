@@ -312,6 +312,10 @@ jobs:
             tag: 1.14.1-amd64
             control: spdlog_control.cpp
             link_args: "/opt/cache/lib/libspdlog.a /opt/fmt/lib/libfmt.a -lpthread"
+          - component: libxml2
+            tag: 2.13.3-amd64
+            control: libxml2_control.c
+            link_args: "/opt/cache/lib/libxml2.a /opt/libiconv/lib/libiconv.a -lm -lpthread"
     name: qualify (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -370,9 +374,15 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/dep-fmt"
           docker cp "${fmt_cid}:/fmt/." "${RUNNER_TEMP}/dep-fmt/"
           docker rm "${fmt_cid}"
+          iconv_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-libiconv:1.15-amd64 /libiconv)"
+          mkdir -p "${RUNNER_TEMP}/dep-libiconv"
+          docker cp "${iconv_cid}:/libiconv/." "${RUNNER_TEMP}/dep-libiconv/"
+          docker rm "${iconv_cid}"
           extra_inc="-I/opt/openssl/include"
           if [ "${COMPONENT}" = "ngtcp2" ]; then
             extra_inc="-I/opt/quictls/include"
+          elif [ "${COMPONENT}" = "libxml2" ]; then
+            extra_inc="-I/opt/cache/include/libxml2 -I/opt/libiconv/include"
           fi
           docker run --rm \
             -e CONTROL="${CONTROL}" \
@@ -384,6 +394,7 @@ jobs:
             -v "${RUNNER_TEMP}/dep-quictls:/opt/quictls:ro" \
             -v "${RUNNER_TEMP}/dep-zlib:/opt/zlib:ro" \
             -v "${RUNNER_TEMP}/dep-fmt:/opt/fmt:ro" \
+            -v "${RUNNER_TEMP}/dep-libiconv:/opt/libiconv:ro" \
             ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
             bash -euo pipefail -c '
               # shellcheck disable=SC2086
@@ -435,6 +446,8 @@ jobs:
             tag: 1.6.0-amd64
           - component: spdlog
             tag: 1.14.1-amd64
+          - component: libxml2
+            tag: 2.13.3-amd64
     name: publish (${{ matrix.component }})
     steps:
       - name: Checkout source
