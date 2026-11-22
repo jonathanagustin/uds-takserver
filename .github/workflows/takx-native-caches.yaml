@@ -561,6 +561,10 @@ jobs:
             tag: 1.8.2-amd64
             control: liblas_control.cpp
             link_args: "-L/opt/cache/lib -Wl,--disable-new-dtags,-rpath,/opt/cache/lib -llas_c -llas -pthread -ldl"
+          - component: commoncommo
+            tag: 1.17.2-amd64
+            control: commoncommo_control.cpp
+            link_args: "/opt/cache/lib/libcommoncommo.a /opt/cache/lib/libcurl.a /opt/commo-deps/lib/libmicrohttpd.a /opt/commo-deps/lib/libxml2.a /opt/commo-deps/lib/libiconv.a /opt/commo-deps/lib/libprotobuf-lite.a /opt/commo-deps/lib/libngtcp2_crypto_quictls.a /opt/commo-deps/lib/libngtcp2.a /opt/commo-deps/lib/libnghttp2.a /opt/commo-deps/lib/libssl.a /opt/commo-deps/lib/libcrypto.a /opt/commo-deps/lib/libz.a -lpthread -ldl -lm"
     name: qualify (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -603,22 +607,51 @@ jobs:
           python3 -B takx/native-caches/verify.py \
             --phase check-prefix --component "${COMPONENT}" \
             --prefix "${RUNNER_TEMP}/restored-${COMPONENT}"
+          mkdir -p "${RUNNER_TEMP}/commo-deps/include" "${RUNNER_TEMP}/commo-deps/lib"
+          extra_flags=""
+          if [ "${COMPONENT}" = "commoncommo" ]; then
+            extra_flags="-DCURL_STATICLIB -isystem /opt/commo-deps/include -isystem /opt/commo-deps/include/libxml2"
+            for spec in \
+              "zlib:1.3.1-amd64" \
+              "libiconv:1.15-amd64" \
+              "libxml2:2.13.3-amd64" \
+              "quictls:3.0.14-quic1-amd64" \
+              "nghttp2:1.62.1-amd64" \
+              "ngtcp2:1.6.0-amd64" \
+              "libmicrohttpd:1.0.1-amd64" \
+              "protobuf:3.21.0-amd64"; do
+              dep_name="${spec%%:*}"
+              dep_tag="${spec#*:}"
+              dep_cid="$(docker create "ghcr.io/jonathanagustin/uds-takserver/takx-native-${dep_name}:${dep_tag}" "/${dep_name}")"
+              mkdir -p "${RUNNER_TEMP}/dep-${dep_name}"
+              docker cp "${dep_cid}:/${dep_name}/." "${RUNNER_TEMP}/dep-${dep_name}/"
+              docker rm "${dep_cid}"
+              if [ -d "${RUNNER_TEMP}/dep-${dep_name}/include" ]; then
+                cp -a "${RUNNER_TEMP}/dep-${dep_name}/include/." "${RUNNER_TEMP}/commo-deps/include/"
+              fi
+              if [ -d "${RUNNER_TEMP}/dep-${dep_name}/lib" ]; then
+                cp -a "${RUNNER_TEMP}/dep-${dep_name}/lib/." "${RUNNER_TEMP}/commo-deps/lib/"
+              fi
+            done
+          fi
           docker run --rm \
             -e CONTROL="${CONTROL}" \
+            -e EXTRA_FLAGS="${extra_flags}" \
             -e LINK_ARGS="${LINK_ARGS}" \
             -v "${GITHUB_WORKSPACE}/takx/native-caches/${COMPONENT}:/src:ro" \
             -v "${RUNNER_TEMP}/restored-${COMPONENT}:/opt/cache:ro" \
+            -v "${RUNNER_TEMP}/commo-deps:/opt/commo-deps:ro" \
             ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
             bash -euo pipefail -c '
               # shellcheck disable=SC2086
               if [[ "${CONTROL}" == *.cpp ]]; then
                 g++ -std=c++17 -Wall -Wextra -Werror -O2 \
-                  -isystem /opt/cache/include \
+                  -isystem /opt/cache/include ${EXTRA_FLAGS} \
                   "/src/${CONTROL}" ${LINK_ARGS} \
                   -o /tmp/control_bin
               else
                 gcc -std=c99 -Wall -Wextra -Werror -O2 \
-                  -isystem /opt/cache/include \
+                  -isystem /opt/cache/include ${EXTRA_FLAGS} \
                   "/src/${CONTROL}" ${LINK_ARGS} \
                   -o /tmp/control_bin
               fi
@@ -649,6 +682,8 @@ jobs:
         include:
           - component: liblas
             tag: 1.8.2-amd64
+          - component: commoncommo
+            tag: 1.17.2-amd64
     name: publish (${{ matrix.component }})
     steps:
       - name: Checkout source

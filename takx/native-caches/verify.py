@@ -339,6 +339,19 @@ COMPONENTS = {
             "LICENSE.txt",
         ),
     },
+    "commoncommo": {
+        "version": "1.17.2",
+        "archive_sha256": "b57285d9e18bf12a5f2309fc45244f6cf9cb14734e7454121099dd0a83d669a3",
+        "license_sha256": "3db8b919e1f1cb3dff5114ea875d3a758ff367e6490622780d0f7092daebd8f9",
+        "control_file": "commoncommo_control.cpp",
+        "control_marker": "commoncommo_static_pic_control=true",
+        "required_artifacts": (
+            "lib/libcommoncommo.a",
+            "lib/libcurl.a",
+            "include/commo.h",
+            "LICENSE.md",
+        ),
+    },
 }
 
 
