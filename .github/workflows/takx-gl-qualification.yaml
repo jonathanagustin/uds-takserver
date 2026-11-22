@@ -223,6 +223,8 @@ jobs:
 
   qualify-compat-java:
     runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64
     timeout-minutes: 10
     steps:
       - name: Checkout candidate source
