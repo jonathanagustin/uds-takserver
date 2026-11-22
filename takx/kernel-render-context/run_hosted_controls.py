@@ -266,7 +266,7 @@ def qualify(official_source: Path, output: Path, cxx: str) -> dict:
             "worker_retirement_control": "pass",
         },
         "digests": {
-            "prepare_receipt_sha256": sha256_file(prepared_root / "receipt.json"),
+            "prepare_receipt_sha256": sha256_file(prepared_root / "prepared.json"),
             "worker_receipt_sha256": sha256_file(worker_out / "receipt.json"),
             "binding_source_sha256": sha256_file(binding_src),
         },
