@@ -248,7 +248,7 @@ def qualify(official_source: Path, output: Path, cxx: str) -> dict:
         timeout=180,
     )
     worker_receipt = json.loads((worker_out / "receipt.json").read_text(encoding="utf-8"))
-    if worker_receipt.get("status") != "pass":
+    if worker_receipt.get("accepted") is not True:
         raise ValueError(f"worker_retirement_control did not pass: {worker_receipt}")
 
     java_ver = run_cmd([java, "-version"], timeout=30)
@@ -263,7 +263,7 @@ def qualify(official_source: Path, output: Path, cxx: str) -> dict:
         "controls": {
             "prepare_verified": True,
             "binding_state_assertions": assertions,
-            "worker_retirement_control": worker_receipt["status"],
+            "worker_retirement_control": "pass",
         },
         "digests": {
             "prepare_receipt_sha256": sha256_file(prepared_root / "receipt.json"),
