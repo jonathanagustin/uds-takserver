@@ -348,6 +348,10 @@ jobs:
             tag: 2.13.3-amd64
             control: libxml2_control.c
             link_args: "/opt/cache/lib/libxml2.a /opt/libiconv/lib/libiconv.a -lm -lpthread"
+          - component: libkml
+            tag: 1.3.0-amd64
+            control: libkml_control.cpp
+            link_args: "/opt/cache/lib/libkmlengine.a /opt/cache/lib/libkmldom.a /opt/cache/lib/libkmlbase.a /opt/cache/lib/libminizip.a /opt/expat/lib/libexpat.a /opt/uriparser/lib/liburiparser.a /opt/zlib/lib/libz.a -lm"
     name: qualify (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -418,11 +422,21 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/dep-libiconv"
           docker cp "${iconv_cid}:/libiconv/." "${RUNNER_TEMP}/dep-libiconv/"
           docker rm "${iconv_cid}"
+          expat_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-expat:2.10.0-amd64 /expat)"
+          mkdir -p "${RUNNER_TEMP}/dep-expat"
+          docker cp "${expat_cid}:/expat/." "${RUNNER_TEMP}/dep-expat/"
+          docker rm "${expat_cid}"
+          uriparser_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-uriparser:0.9.8-amd64 /uriparser)"
+          mkdir -p "${RUNNER_TEMP}/dep-uriparser"
+          docker cp "${uriparser_cid}:/uriparser/." "${RUNNER_TEMP}/dep-uriparser/"
+          docker rm "${uriparser_cid}"
           extra_inc="-I/opt/openssl/include"
           if [ "${COMPONENT}" = "ngtcp2" ]; then
             extra_inc="-I/opt/quictls/include"
           elif [ "${COMPONENT}" = "libxml2" ]; then
             extra_inc="-I/opt/cache/include/libxml2 -I/opt/libiconv/include"
+          elif [ "${COMPONENT}" = "libkml" ]; then
+            extra_inc="-I/opt/expat/include -I/opt/uriparser/include"
           fi
           docker run --rm \
             -e CONTROL="${CONTROL}" \
@@ -437,6 +451,8 @@ jobs:
             -v "${RUNNER_TEMP}/dep-zstd:/opt/zstd:ro" \
             -v "${RUNNER_TEMP}/dep-abseil:/opt/abseil:ro" \
             -v "${RUNNER_TEMP}/dep-libiconv:/opt/libiconv:ro" \
+            -v "${RUNNER_TEMP}/dep-expat:/opt/expat:ro" \
+            -v "${RUNNER_TEMP}/dep-uriparser:/opt/uriparser:ro" \
             ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
             bash -euo pipefail -c '
               # shellcheck disable=SC2086
@@ -494,6 +510,8 @@ jobs:
             tag: 0.11.1-amd64
           - component: libxml2
             tag: 2.13.3-amd64
+          - component: libkml
+            tag: 1.3.0-amd64
     name: publish (${{ matrix.component }})
     steps:
       - name: Checkout source
