@@ -6,6 +6,7 @@ name: TAKX Mesa Xvfb GL qualification
 on:
   pull_request:
     paths:
+      - "takx/contour-style/**"
       - "takx/gl-qualification/**"
       - "takx/kernel-render-context/**"
       - "takx/kernel-texture/**"
@@ -164,5 +165,57 @@ jobs:
         with:
           name: takx-contour-grid-hosted-receipt
           path: ${{ runner.temp }}/contour-grid-hosted/receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-contour-style:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline contour-style verifier tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/contour-style/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/contour-style -p 'test_*.py' -v
+
+      - name: Fetch pinned TAKX, ATAK Kernel, and Jakarta annotation inputs
+        timeout-minutes: 4
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/pinned-takx" "${RUNNER_TEMP}/pinned-kernel" "${RUNNER_TEMP}/pinned-deps"
+          git -C "${RUNNER_TEMP}/pinned-takx" init -q
+          git -C "${RUNNER_TEMP}/pinned-takx" remote add origin https://github.com/TAK-Product-Center/TAKX.git
+          git -C "${RUNNER_TEMP}/pinned-takx" fetch --depth 1 origin af54a3e1fe8796b6e109e2e5925dbef524ea7e31
+          git -C "${RUNNER_TEMP}/pinned-takx" checkout -q FETCH_HEAD
+
+          git -C "${RUNNER_TEMP}/pinned-kernel" init -q
+          git -C "${RUNNER_TEMP}/pinned-kernel" remote add origin https://github.com/TAK-Product-Center/atak-civ.git
+          git -C "${RUNNER_TEMP}/pinned-kernel" fetch --depth 1 origin 9f6893dd657feacc35ec5de03dad721c2e44170e
+          git -C "${RUNNER_TEMP}/pinned-kernel" checkout -q FETCH_HEAD
+
+          curl -fsSL \
+            https://repo1.maven.org/maven2/jakarta/annotation/jakarta.annotation-api/2.1.1/jakarta.annotation-api-2.1.1.jar \
+            -o "${RUNNER_TEMP}/pinned-deps/jakarta.annotation-api-2.1.1.jar"
+
+      - name: Run live contour-style 311 model and 23 pinned TAKX caller controls on Linux JDK 17
+        timeout-minutes: 4
+        run: |
+          python3 -B takx/contour-style/run_hosted_controls.py \
+            --phase qualify \
+            --takx "${RUNNER_TEMP}/pinned-takx" \
+            --kernel "${RUNNER_TEMP}/pinned-kernel" \
+            --annotations "${RUNNER_TEMP}/pinned-deps/jakarta.annotation-api-2.1.1.jar" \
+            --output "${RUNNER_TEMP}/takx-contour-style-hosted"
+
+      - name: Retain verified contour-style hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-contour-style-hosted-receipt
+          path: ${{ runner.temp }}/takx-contour-style-hosted/hosted-contour-style-receipt.json
           if-no-files-found: error
           retention-days: 14
