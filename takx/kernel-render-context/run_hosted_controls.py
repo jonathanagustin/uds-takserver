@@ -119,35 +119,62 @@ def run_cmd(argv: list[str], *, cwd: Path | None = None, timeout: int = 180) -> 
     return proc.stdout
 
 
+MAVEN_CENTRAL_PREFIXES = (
+    "https://repo.maven.apache.org/maven2/",
+    "https://repo1.maven.org/maven2/",
+)
+MAVEN_MIRROR_PREFIXES = (
+    "https://maven-central.storage-download.googleapis.com/maven2/",
+    "https://repo1.maven.org/maven2/",
+    "https://repo.maven.apache.org/maven2/",
+)
+
+
+def candidate_urls(url: str) -> list[str]:
+    for prefix in MAVEN_CENTRAL_PREFIXES:
+        if url.startswith(prefix):
+            suffix = url[len(prefix) :]
+            return [f"{mirror}{suffix}" for mirror in MAVEN_MIRROR_PREFIXES]
+    return [url]
+
+
 def fetch_with_retry(url: str, dest: Path, attempts: int = 5) -> None:
     curl = shutil.which("curl")
-    if curl:
-        run_cmd(
-            [
-                curl,
-                "-fsSL",
-                "--retry",
-                str(attempts),
-                "--retry-all-errors",
-                "--retry-delay",
-                "2",
-                url,
-                "-o",
-                str(dest),
-            ],
-            timeout=120,
-        )
-        return
-    req = urllib.request.Request(url, headers={"User-Agent": "uds-takserver-ci/1.0"})
-    for attempt in range(1, attempts + 1):
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                dest.write_bytes(resp.read())
-            return
-        except urllib.error.HTTPError:
-            if attempt == attempts:
-                raise
-            time.sleep(2 * attempt)
+    last_err: Exception | None = None
+    for candidate in candidate_urls(url):
+        if curl:
+            try:
+                run_cmd(
+                    [
+                        curl,
+                        "-fsSL",
+                        "--retry",
+                        str(attempts),
+                        "--retry-all-errors",
+                        "--retry-delay",
+                        "2",
+                        candidate,
+                        "-o",
+                        str(dest),
+                    ],
+                    timeout=120,
+                )
+                return
+            except RuntimeError as exc:
+                last_err = exc
+                continue
+        req = urllib.request.Request(candidate, headers={"User-Agent": "uds-takserver-ci/1.0"})
+        for attempt in range(1, attempts + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    dest.write_bytes(resp.read())
+                return
+            except urllib.error.HTTPError as exc:
+                last_err = exc
+                if attempt < attempts:
+                    time.sleep(2 * attempt)
+    assert last_err is not None
+    raise last_err
 
 
 def qualify(official_source: Path, output: Path, cxx: str) -> dict:
