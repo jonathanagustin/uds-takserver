@@ -325,6 +325,20 @@ COMPONENTS = {
             "COPYING",
         ),
     },
+    "liblas": {
+        "version": "1.8.2",
+        "archive_sha256": "8decbf40c5e7690a98a48d53c729f7c7670ff472290c2f46a26c7413ed53e641",
+        "license_sha256": "255ba531725caaed436a919896e69a1bcadefcc98eaa030b64710e33b4ea3f18",
+        "control_file": "liblas_control.cpp",
+        "control_marker": "liblas_static_pic_control=true",
+        "required_artifacts": (
+            "lib/liblas.so",
+            "lib/liblas_c.so",
+            "include/liblas/liblas.hpp",
+            "include/liblas/capi/liblas.h",
+            "LICENSE.txt",
+        ),
+    },
 }
 
 
