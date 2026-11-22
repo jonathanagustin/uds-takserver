@@ -219,7 +219,7 @@ Postgres, NATS, and Ignite are installed in the `takserver` namespace by the ups
 
 The list comes from `tests/flows.py`, which reads `/proc/net/tcp` in every pod and maps each connection to a client pod, a server pod, and a port. Task `test:flows` runs it after the other tests and fails when a connection has no rule. The config pod holds no Postgres or NATS connection, so it is not a client of either.
 
-Ignite also has explicit rules both ways between `takserver-ignite` and the API, messaging, config, and plugins pods on 47100, 47500, and 10800. A missing return path stalls until `igniteConnectionTimeoutSeconds` (300) before the client falls back.
+Ignite also has explicit rules both ways between `takserver-ignite` and the API, messaging, config, and plugins pods on 47100, 47500, and 10800. A missing return path stalls until `igniteConnectionTimeoutSeconds` (300) before the client falls back. The `takserver-oidc` admission module sets the safe pod sysctl `net.ipv4.ip_local_port_range` to `49152 60999` on `takserver-ignite` and the four TAK Deployments so Linux ephemeral source ports cannot occupy 47100 or 47500 at startup and force Ignite onto a fallback port outside the narrow peer policy.
 
 Keycloak is not in the namespace. The API and messaging selectors' only external allow is port 443 on the tenant gateway, which fronts discovery, the token endpoint, and JWKS. Messaging needs it because a certificate enrolled with a Keycloak token is checked against the issuer again when the client connects on 8089 (`X509Authenticator` calls the OAuth authenticator). Without it the TLS handshake completes and TAK then drops the client.
 

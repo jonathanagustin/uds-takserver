@@ -86,7 +86,12 @@ export interface StatefulSetDoc {
   spec?: {
     template?: {
       metadata?: { annotations?: Record<string, string> };
-      spec?: { automountServiceAccountToken?: boolean };
+      spec?: {
+        automountServiceAccountToken?: boolean;
+        securityContext?: {
+          sysctls?: { name: string; value: string }[];
+        };
+      };
     };
   };
 }
