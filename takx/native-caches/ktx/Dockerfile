@@ -79,6 +79,7 @@ RUN set -x; \
       -DKTX_FEATURE_LOADTEST_APPS=OFF \
       -DKTX_FEATURE_TOOLS=OFF \
       -DKTX_FEATURE_VK_UPLOAD=OFF \
+      -DASTCENC_ISA_SSE2=ON \
       -DCMAKE_C_FLAGS="-O2 -fPIC -march=x86-64 -mtune=generic" \
       -DCMAKE_CXX_FLAGS="-O2 -fPIC -march=x86-64 -mtune=generic"; \
     ninja -C /build/out -j4; \
@@ -87,11 +88,11 @@ RUN set -x; \
     gcc -std=c99 -Wall -Wextra -Werror -O2 \
       -I/ktx/include -I/opt/zstd/include \
       /build/ktx_control.c \
-      /ktx/lib/libktx.a /opt/zstd/lib/libzstd.a -lstdc++ -lpthread -ldl -lm \
+      /ktx/lib/libktx.a /ktx/lib/libastcenc-sse2-static.a /opt/zstd/lib/libzstd.a -lstdc++ -lpthread -ldl -lm \
       -o /build/ktx_control; \
     /build/ktx_control; \
     g++ -shared -o /build/libktx_whole.so \
-      -Wl,--whole-archive /ktx/lib/libktx.a -Wl,--no-whole-archive \
+      -Wl,--whole-archive /ktx/lib/libktx.a /ktx/lib/libastcenc-sse2-static.a -Wl,--no-whole-archive \
       /opt/zstd/lib/libzstd.a \
       -Wl,--no-undefined -lpthread -ldl -lm; \
     if readelf -d /build/libktx_whole.so | grep -q TEXTREL; then \
