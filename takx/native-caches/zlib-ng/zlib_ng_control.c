@@ -7,7 +7,7 @@
 #include <zlib-ng.h>
 
 int main(void) {
-    const char *ver = zng_zlibng_version();
+    const char *ver = zlibng_version();
     if (ver == NULL || strstr(ver, "2.1.5") == NULL) {
         fprintf(stderr, "unexpected zlib-ng version: %s\n", ver ? ver : "(null)");
         return 1;
