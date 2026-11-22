@@ -73,7 +73,7 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/gles" "${RUNNER_TEMP}/kernel-texture-gl"
           cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-gles:1.7.0-amd64 /nonexistent)"
           trap 'docker rm -f "${cid}" >/dev/null 2>&1 || true' EXIT
-          docker cp "${cid}:/gles/." "${RUNNER_TEMP}/gles/"
+          docker cp "${cid}:/glvnd/." "${RUNNER_TEMP}/gles/"
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/work:ro" \
             -v "${RUNNER_TEMP}/gles:/opt/gles:ro" \
