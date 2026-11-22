@@ -115,19 +115,35 @@ def draw_tu_mark(
 
 
 def render_lockin_frame(
-    t: float, duration: float, show_url: bool = False, backdrop: bool = False
+    t: float,
+    duration: float,
+    show_url: bool = False,
+    backdrop: bool = False,
+    start_visible: bool = False,
 ) -> Image.Image:
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     fade_out = 1.0 - clamp((t - (duration - 0.5)) / 0.5) if t > duration - 0.5 else 1.0
 
-    p_lock = clamp(t / 0.85)
-    e_lock = ease_out_back(p_lock, s=0.9)
-    t_dy = -86.0 * (1.0 - e_lock)
-    u_dy = 86.0 * (1.0 - e_lock)
-    mark_alpha = clamp(t / 0.22) * fade_out
+    if start_visible:
+        t_dy = 0.0
+        u_dy = 0.0
+        mark_alpha = fade_out
+        p_shift = 1.0
+        p_rule = 1.0
+        p_word = 1.0
+        ring_start = 0.25
+    else:
+        p_lock = clamp(t / 0.85)
+        e_lock = ease_out_back(p_lock, s=0.9)
+        t_dy = -86.0 * (1.0 - e_lock)
+        u_dy = 86.0 * (1.0 - e_lock)
+        mark_alpha = clamp(t / 0.22) * fade_out
+        p_shift = ease_out_cubic((t - 0.95) / 0.60)
+        p_rule = ease_out_cubic((t - 0.90) / 0.65)
+        p_word = ease_out_cubic((t - 1.10) / 0.65)
+        ring_start = 0.72
 
-    p_shift = ease_out_cubic((t - 0.95) / 0.60)
     shift_dx = 355.0 if show_url else 310.0
     mark_cx = 960.0 - shift_dx * p_shift
     mark_cy = 520.0
@@ -152,8 +168,8 @@ def render_lockin_frame(
             fill=(*AMBER, int(round(240 * mark_alpha))),
         )
 
-    if 0.72 <= t <= 1.45:
-        p_ring = (t - 0.72) / 0.73
+    if ring_start <= t <= ring_start + 0.73:
+        p_ring = (t - ring_start) / 0.73
         r = int(round(80 + 135 * ease_out_cubic(p_ring)))
         ring_a = int(round((1.0 - p_ring) * 235 * fade_out))
         ring_w = max(2, int(round(7 * (1.0 - p_ring))))
@@ -163,7 +179,6 @@ def render_lockin_frame(
             width=ring_w,
         )
 
-    p_rule = ease_out_cubic((t - 0.90) / 0.65)
     if p_rule > 0:
         half_len = int(round(680 * p_rule))
         ra = int(round(120 * fade_out))
@@ -172,7 +187,6 @@ def render_lockin_frame(
 
     draw_tu_mark(img, mark_cx, mark_cy, 2.05, t_dy, u_dy, mark_alpha)
 
-    p_word = ease_out_cubic((t - 1.10) / 0.65)
     if p_word > 0.01:
         text_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         td = ImageDraw.Draw(text_layer)
@@ -363,7 +377,9 @@ def main() -> None:
         pipe_frames_to_webm(
             intro_ov,
             int(5.0 * FPS),
-            lambda t: render_lockin_frame(t, 4.6, show_url=False, backdrop=True),
+            lambda t: render_lockin_frame(
+                t, 4.6, show_url=False, backdrop=True, start_visible=True
+            ),
         )
         overlay_on_clip(args.veo_clip, 0.0, 5.0, intro_ov, work / "seg1.mp4")
         overlay_on_clip(args.veo_clip, 5.0, 5.0, work / "hud1.webm", work / "seg2.mp4")

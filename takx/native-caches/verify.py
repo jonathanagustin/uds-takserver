@@ -83,6 +83,35 @@ COMPONENTS = {
         "control_marker": "assimp_static_pic_control=true",
         "required_artifacts": ("lib/libassimp.a", "lib/libIrrXML.a", "LICENSE"),
     },
+    "nghttp2": {
+        "version": "1.62.1",
+        "archive_sha256": "3966ec82fda7fc380506d372a260d8d9b6e946be4deaef1fecc1a74b4809ae3d",
+        "license_sha256": "6b94f3abc1aabd0c72a7c7d92a77f79dda7c8a0cb3df839a97890b4116a2de2a",
+        "control_file": "nghttp2_control.c",
+        "control_marker": "nghttp2_static_pic_control=true",
+        "required_artifacts": ("lib/libnghttp2.a", "include/nghttp2/nghttp2.h", "COPYING"),
+    },
+    "libmicrohttpd": {
+        "version": "1.0.1",
+        "archive_sha256": "a89e09fc9b4de34dde19f4fcb4faaa1ce10299b9908db1132bbfa1de47882b94",
+        "license_sha256": "7399547209438c93f9b90297954698773d4846cea44cde5ca982c84c45952a3b",
+        "control_file": "libmicrohttpd_control.c",
+        "control_marker": "libmicrohttpd_static_pic_control=true",
+        "required_artifacts": ("lib/libmicrohttpd.a", "include/microhttpd.h", "COPYING"),
+    },
+    "ngtcp2": {
+        "version": "1.6.0",
+        "archive_sha256": "3e40cfb92ab710295cb7c07721db28d16c6f251f61420a462c448cf39a59cc29",
+        "license_sha256": "542dd526d2ea23565f0571cc68df6f05ed11248a90ff0f32de19d8ba589db513",
+        "control_file": "ngtcp2_control.c",
+        "control_marker": "ngtcp2_static_pic_control=true",
+        "required_artifacts": (
+            "lib/libngtcp2.a",
+            "lib/libngtcp2_crypto_quictls.a",
+            "include/ngtcp2/ngtcp2.h",
+            "COPYING",
+        ),
+    },
 }
 
 
