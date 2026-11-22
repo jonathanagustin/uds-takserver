@@ -56,7 +56,7 @@ def clean_env(atak_source: Path | None = None) -> dict[str, str]:
         if k not in ("CLASSPATH", "BASH_ENV", "ENV", "TAKX_COMPAT_EXTRA_SOURCE_DIR", "TAKX_COMPAT_SUPPORT_ROOT")
         and not k.startswith(("LD_", "DYLD_", "JAVA_", "_JAVA_", "JDK_"))
     }
-    env["LC_ALL"] = "C"
+    env["LC_ALL"] = "C.UTF-8"
     if atak_source is not None:
         env["ATAK_SOURCE_DIR"] = str(atak_source)
     return env

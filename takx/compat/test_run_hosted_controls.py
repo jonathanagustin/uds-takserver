@@ -59,7 +59,7 @@ class HostedCompatJavaControlsTests(unittest.TestCase):
             clear=True,
         ):
             cleaned = runner.clean_env(Path("/opt/atak"))
-        self.assertEqual(cleaned["LC_ALL"], "C")
+        self.assertEqual(cleaned["LC_ALL"], "C.UTF-8")
         self.assertEqual(cleaned["ATAK_SOURCE_DIR"], "/opt/atak")
         for forbidden in ("CLASSPATH", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "LD_PRELOAD", "TAKX_COMPAT_EXTRA_SOURCE_DIR"):
             self.assertNotIn(forbidden, cleaned)
