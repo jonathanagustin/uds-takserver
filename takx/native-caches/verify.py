@@ -202,6 +202,14 @@ COMPONENTS = {
         "control_marker": "spdlog_static_pic_control=true",
         "required_artifacts": ("lib/libspdlog.a", "include/spdlog/spdlog.h", "LICENSE"),
     },
+    "draco": {
+        "version": "1.5.7",
+        "archive_sha256": "bf6b105b79223eab2b86795363dfe5e5356050006a96521477973aba8f036fe1",
+        "license_sha256": "d3709b0fb4b8a94bbb1d02b8a2e484f258b0d9c5c5a01f940391f3fe662cd1a4",
+        "control_file": "draco_control.cpp",
+        "control_marker": "draco_static_pic_control=true",
+        "required_artifacts": ("lib/libdraco.a", "include/draco/compression/decode.h", "LICENSE"),
+    },
 }
 
 

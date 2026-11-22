@@ -96,6 +96,10 @@ jobs:
             tag: 1.4.0-amd64
             control: libwebp_control.c
             link_args: "/opt/cache/lib/libwebp.a /opt/cache/lib/libsharpyuv.a -lm -lpthread"
+          - component: draco
+            tag: 1.5.7-amd64
+            control: draco_control.cpp
+            link_args: "/opt/cache/lib/libdraco.a"
     name: qualify (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -213,6 +217,8 @@ jobs:
             tag: 3.0.3-amd64
           - component: libwebp
             tag: 1.4.0-amd64
+          - component: draco
+            tag: 1.5.7-amd64
     name: publish (${{ matrix.component }})
     steps:
       - name: Checkout source
