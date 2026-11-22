@@ -38,7 +38,7 @@ pnpm = "12.18.0"
 # renovate: datasource=github-releases depName=google/go-containerregistry versioning=semver
 crane = "0.22.1"
 # renovate: datasource=github-tags depName=defenseunicorns/uds-cli versioning=semver
-"aqua:defenseunicorns/uds-cli" = "0.41.0"
+"aqua:defenseunicorns/uds-cli" = "0.42.0"
 # renovate: datasource=pypi depName=yamllint versioning=pep440
 "pypi:yamllint" = { version = "1.38.0", depends = "uv" }
 # renovate: datasource=github-releases depName=gitleaks/gitleaks versioning=semver

@@ -18,6 +18,7 @@ import {
   deploymentOps,
   desiredReplicas,
   enqueueIgnite,
+  IGNITE_EPHEMERAL_PORT_SYSCTL,
   issuerHost,
   PLUGINS_MEMORY,
   pluginsMemory,
@@ -574,6 +575,7 @@ const TAK_NAMES = ["takserver-plugins", "takserver-api", "takserver-messaging", 
 function igniteCluster(opts: {
   xml?: string;
   automount?: boolean;
+  securityContext?: { sysctls?: { name: string; value: string }[]; [key: string]: unknown } | null;
   annotations?: Record<string, string>;
   sts?: boolean;
   replicas?: number;
@@ -650,11 +652,22 @@ function igniteCluster(opts: {
       if (opts.sts === false) {
         return undefined;
       }
+      const securityContext =
+        opts.securityContext === null
+          ? undefined
+          : (opts.securityContext ?? (opts.automount === true ? { sysctls: [{ ...IGNITE_EPHEMERAL_PORT_SYSCTL }] } : undefined));
+      const spec: { automountServiceAccountToken?: boolean; securityContext?: { sysctls?: { name: string; value: string }[]; [key: string]: unknown } } = {};
+      if (opts.automount !== undefined) {
+        spec.automountServiceAccountToken = opts.automount;
+      }
+      if (securityContext !== undefined) {
+        spec.securityContext = securityContext;
+      }
       return {
         spec: {
           template: {
             metadata: opts.annotations ? { annotations: opts.annotations } : {},
-            spec: opts.automount === undefined ? {} : { automountServiceAccountToken: opts.automount },
+            spec,
           },
         },
       };
@@ -1197,3 +1210,88 @@ test("core-config with uds.dev/sso-enabled=false skips import-trust and takserve
   }
 });
 
+test("ephemeral port range sysctl is enforced on TAK deployments and Ignite StatefulSet without clobbering siblings", async () => {
+  const ctx = { image: IMAGE, issuerHost: "sso.uds.dev" };
+  for (const app of ["takserver-config", "takserver-messaging", "takserver-api", "takserver-plugins"] as const) {
+    const d = deploy(app);
+    const first = shapeDeployment(d, ctx);
+    assert.equal(first.changed, true);
+    assert.deepEqual(first.next.spec?.template?.spec?.securityContext?.sysctls, [IGNITE_EPHEMERAL_PORT_SYSCTL]);
+    assert.equal(shapeDeployment(first.next, ctx).changed, false);
+  }
+
+  // Preserves sibling securityContext fields and other sysctls, and corrects a drifted range.
+  const custom = deploy("takserver-config");
+  custom.spec!.template!.spec!.securityContext = {
+    fsGroup: 1000,
+    sysctls: [
+      { name: "net.ipv4.tcp_syncookies", value: "1" },
+      { name: IGNITE_EPHEMERAL_PORT_SYSCTL.name, value: "32768 60999" },
+    ],
+  };
+  const updated = shapeDeployment(custom, ctx);
+  assert.equal(updated.changed, true);
+  assert.equal(updated.next.spec?.template?.spec?.securityContext?.fsGroup, 1000);
+  assert.deepEqual(updated.next.spec?.template?.spec?.securityContext?.sysctls, [
+    { name: "net.ipv4.tcp_syncookies", value: "1" },
+    IGNITE_EPHEMERAL_PORT_SYSCTL,
+  ]);
+
+  // deploymentOps covers missing securityContext, missing sysctls, appended sysctl, matching sysctl, and drifted sysctl.
+  const target = shaped("takserver-config");
+  const noSecCtx = structuredClone(target);
+  delete noSecCtx.spec!.template!.spec!.securityContext;
+  assert.deepEqual(
+    deploymentOps(noSecCtx, target),
+    [{ op: "add", path: "/spec/template/spec/securityContext", value: { sysctls: [IGNITE_EPHEMERAL_PORT_SYSCTL] } }],
+  );
+
+  const emptySecCtx = structuredClone(target);
+  emptySecCtx.spec!.template!.spec!.securityContext = { fsGroup: 1000 };
+  assert.deepEqual(
+    deploymentOps(emptySecCtx, target),
+    [{ op: "add", path: "/spec/template/spec/securityContext/sysctls", value: [IGNITE_EPHEMERAL_PORT_SYSCTL] }],
+  );
+
+  const otherSysctl = structuredClone(target);
+  otherSysctl.spec!.template!.spec!.securityContext = { sysctls: [{ name: "net.ipv4.tcp_syncookies", value: "1" }] };
+  assert.deepEqual(
+    deploymentOps(otherSysctl, target),
+    [{ op: "add", path: "/spec/template/spec/securityContext/sysctls/-", value: IGNITE_EPHEMERAL_PORT_SYSCTL }],
+  );
+
+  const driftedSysctl = structuredClone(target);
+  driftedSysctl.spec!.template!.spec!.securityContext = {
+    sysctls: [
+      { name: "net.ipv4.tcp_syncookies", value: "1" },
+      { name: IGNITE_EPHEMERAL_PORT_SYSCTL.name, value: "32768 60999" },
+    ],
+  };
+  assert.deepEqual(
+    deploymentOps(driftedSysctl, target),
+    [{ op: "replace", path: "/spec/template/spec/securityContext/sysctls/1", value: IGNITE_EPHEMERAL_PORT_SYSCTL }],
+  );
+
+  assert.deepEqual(deploymentOps(target, target), []);
+
+  // prepareIgniteStatefulSet sets the sysctl idempotently.
+  const sts: { spec?: { template?: { spec?: { automountServiceAccountToken?: boolean; securityContext?: { sysctls?: { name: string; value: string }[] } } } } } = {};
+  prepareIgniteStatefulSet(sts);
+  assert.deepEqual(sts.spec?.template?.spec?.securityContext?.sysctls, [IGNITE_EPHEMERAL_PORT_SYSCTL]);
+  prepareIgniteStatefulSet(sts);
+  assert.deepEqual(sts.spec?.template?.spec?.securityContext?.sysctls, [IGNITE_EPHEMERAL_PORT_SYSCTL]);
+
+  // reconcileIgnite patches and restarts Ignite when automount is already true but the sysctl is missing.
+  const missingSysctl = igniteCluster({
+    xml: tuneIgniteXml(IGNITE_XML),
+    automount: true,
+    securityContext: null,
+  });
+  await reconcileIgnite("ADDED", missingSysctl.cluster);
+  assert.deepEqual(missingSysctl.ops, [
+    { op: "add", path: "/spec/template/spec/securityContext", value: { sysctls: [IGNITE_EPHEMERAL_PORT_SYSCTL] } },
+  ]);
+  assert.equal(missingSysctl.calls.includes("patch-sts"), true);
+  assert.equal(missingSysctl.calls.includes("restart false"), true);
+  assert.equal(missingSysctl.calls.includes("patch-xml"), false);
+});

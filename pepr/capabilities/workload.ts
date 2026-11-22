@@ -47,6 +47,27 @@ const SPI = '<bean class="org.apache.ignite.spi.discovery.tcp.TcpDiscoverySpi">'
 const DISCOVERY = '<property name="discoverySpi">';
 const TRUST_OPTS = "-Djavax.net.ssl.trustStore=/trust/cacerts -Djavax.net.ssl.trustStorePassword=changeit";
 
+// Exclude Ignite communication (47100) and discovery (47500) from Linux
+// ephemeral source port allocation (default 32768-60999). When an outbound
+// socket in the pod network namespace occupies 47100 at startup, Ignite's
+// TcpCommunicationSpi falls back to 47101, which the narrow Istio peer policy
+// rejects (#778). net.ipv4.ip_local_port_range is a Kubernetes safe sysctl
+// (RFC 6335 dynamic range start 49152).
+export const IGNITE_EPHEMERAL_PORT_SYSCTL = {
+  name: "net.ipv4.ip_local_port_range",
+  value: "49152 60999",
+} as const;
+
+export interface SysctlDoc {
+  name: string;
+  value: string;
+}
+
+export interface PodSecurityContextDoc {
+  sysctls?: SysctlDoc[];
+  fsGroup?: number;
+}
+
 export interface ContainerDoc {
   name?: string;
   image?: string;
@@ -69,6 +90,7 @@ export interface WorkloadPodSpec {
   automountServiceAccountToken?: boolean;
   serviceAccountName?: string;
   hostAliases?: unknown;
+  securityContext?: PodSecurityContextDoc;
   initContainers?: ContainerDoc[];
   containers?: ContainerDoc[];
   volumes?: VolumeDoc[];
@@ -147,11 +169,49 @@ export function prepareIgniteConfigMap(configMap: IgniteConfigMapDoc): void {
   data[IGNITE_XML] = tuneIgniteXml(xml);
 }
 
+function ensureSysctl(spec: { securityContext?: PodSecurityContextDoc }, want: SysctlDoc): boolean {
+  const securityContext = (spec.securityContext ??= {});
+  const sysctls = (securityContext.sysctls ??= []);
+  const existing = sysctls.find(entry => entry.name === want.name);
+  if (!existing) {
+    sysctls.push({ name: want.name, value: want.value });
+    return true;
+  }
+  if (existing.value === want.value) {
+    return false;
+  }
+  existing.value = want.value;
+  return true;
+}
+
+function hasSysctl(spec: { securityContext?: PodSecurityContextDoc } | undefined, want: SysctlDoc): boolean {
+  return spec?.securityContext?.sysctls?.some(entry => entry.name === want.name && entry.value === want.value) === true;
+}
+
+function sysctlOps(current: PodSecurityContextDoc | undefined, want: SysctlDoc): JsonOp[] {
+  const value = { name: want.name, value: want.value };
+  if (!current) {
+    return [{ op: "add", path: "/spec/template/spec/securityContext", value: { sysctls: [value] } }];
+  }
+  if (!current.sysctls) {
+    return [{ op: "add", path: "/spec/template/spec/securityContext/sysctls", value: [value] }];
+  }
+  const index = current.sysctls.findIndex(entry => entry.name === want.name);
+  if (index === -1) {
+    return [{ op: "add", path: "/spec/template/spec/securityContext/sysctls/-", value }];
+  }
+  if (current.sysctls[index].value === want.value) {
+    return [];
+  }
+  return [{ op: "replace", path: `/spec/template/spec/securityContext/sysctls/${index}`, value }];
+}
+
 export function prepareIgniteStatefulSet(sts: { spec?: StatefulSetDoc["spec"] }): void {
   const spec = (sts.spec ??= {});
   const template = (spec.template ??= {});
   const pod = (template.spec ??= {});
   pod.automountServiceAccountToken = true;
+  ensureSysctl(pod, IGNITE_EPHEMERAL_PORT_SYSCTL);
 }
 
 function covers(current: unknown, desired: unknown): boolean {
@@ -388,6 +448,9 @@ export function shapePodSpec(spec: WorkloadPodSpec, app: TakDeploy, ctx: Startup
   }
   if (spec.automountServiceAccountToken !== true) {
     spec.automountServiceAccountToken = true;
+    changed = true;
+  }
+  if (ensureSysctl(spec, IGNITE_EPHEMERAL_PORT_SYSCTL)) {
     changed = true;
   }
   if (app === "takserver-api" && spec.hostAliases !== undefined) {
@@ -722,6 +785,9 @@ function specOps(before: WorkloadDeploy["spec"], after: WorkloadDeploy["spec"]):
   pushValue(ops, "/spec/template/spec/serviceAccountName", current.serviceAccountName, next.serviceAccountName);
   pushValue(ops, "/spec/template/spec/automountServiceAccountToken", current.automountServiceAccountToken, next.automountServiceAccountToken);
   pushValue(ops, "/spec/template/spec/hostAliases", current.hostAliases, next.hostAliases);
+  if (hasSysctl(next, IGNITE_EPHEMERAL_PORT_SYSCTL)) {
+    ops.push(...sysctlOps(current.securityContext, IGNITE_EPHEMERAL_PORT_SYSCTL));
+  }
   ops.push(...volumeOps(current.volumes, next.volumes));
   ops.push(...initOps(current.initContainers, next.initContainers));
   ops.push(...containerOps(current.containers, next.containers));
@@ -995,15 +1061,18 @@ async function stampStartup(cluster: Cluster): Promise<void> {
   );
 }
 
-function automountOps(sts: StatefulSetDoc): JsonOp[] {
-  const current = sts.spec?.template?.spec?.automountServiceAccountToken;
-  return [
-    {
-      op: current === undefined ? "add" : "replace",
+function ignitePodOps(sts: StatefulSetDoc): JsonOp[] {
+  const ops: JsonOp[] = [];
+  const pod = sts.spec?.template?.spec;
+  if (pod?.automountServiceAccountToken !== true) {
+    ops.push({
+      op: pod?.automountServiceAccountToken === undefined ? "add" : "replace",
       path: "/spec/template/spec/automountServiceAccountToken",
       value: true,
-    },
-  ];
+    });
+  }
+  ops.push(...sysctlOps(pod?.securityContext, IGNITE_EPHEMERAL_PORT_SYSCTL));
+  return ops;
 }
 
 // Resolves with the db-setup Job's completion time once SchemaManager has
@@ -1106,8 +1175,8 @@ export async function reconcileIgnite(phase: string, cluster: Cluster, readyTime
   if (!sts) {
     return;
   }
-  const automount = sts.spec?.template?.spec?.automountServiceAccountToken === true;
-  if (tuned !== xml || !automount) {
+  const podOps = ignitePodOps(sts);
+  if (tuned !== xml || podOps.length > 0) {
     // Drop the marker before the restart so a Zarf wait cannot succeed on the
     // previous run's ConfigMap while these Deployments are scaled down.
     await cluster.deleteConfigMap("takserver", STARTUP_CONFIGMAP);
@@ -1115,8 +1184,8 @@ export async function reconcileIgnite(phase: string, cluster: Cluster, readyTime
     if (tuned !== xml) {
       await cluster.patchConfigMapKey("takserver", IGNITE_CONFIGMAP, IGNITE_XML, tuned, true);
     }
-    if (!automount) {
-      await cluster.patchStatefulSet("takserver", IGNITE_STATEFULSET, automountOps(sts));
+    if (podOps.length > 0) {
+      await cluster.patchStatefulSet("takserver", IGNITE_STATEFULSET, podOps);
     }
     const hasAnnotations = sts.spec?.template?.metadata?.annotations !== undefined;
     await cluster.restartStatefulSet("takserver", IGNITE_STATEFULSET, hasAnnotations);

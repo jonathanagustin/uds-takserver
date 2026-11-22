@@ -99,6 +99,45 @@
         }
       }
     },
+    "backup": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "filesystem": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^(true|false|###ZARF_VAR_FILESYSTEM_BACKUP###)$"
+                }
+              ]
+            },
+            "owner": {
+              "type": "string",
+              "pattern": "^(local|core|###ZARF_VAR_FILESYSTEM_BACKUP_OWNER###)$"
+            }
+          }
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "postgresClass": {
+          "type": "string"
+        },
+        "cloudtakClass": {
+          "type": "string"
+        }
+      }
+    },
     "chartOverrides": {
       "type": "object",
       "additionalProperties": false,

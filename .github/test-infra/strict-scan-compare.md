@@ -91,7 +91,7 @@ selected native digest does not invalidate that selection. Release identity,
 tag source and signed index, manifest inputs, consumer state and tool identities
 are also rechecked before publication.
 
-The adapter pins Grype 0.120.1, UDS CLI 0.41.0 with Zarf 0.89.0, and
+The adapter pins Grype 0.120.1, UDS CLI 0.42.0 with Zarf 1.0.1, and
 `uds-pk compare-scans` 0.2.0. Their actual executable hashes are recorded; the
 workflow's existing checked installers remain the binary-source authority.
 It updates the Grype database once, records its official source/checksum and

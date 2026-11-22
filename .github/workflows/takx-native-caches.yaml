@@ -64,6 +64,74 @@ jobs:
             tag: 3.21.0-amd64
             control: protobuf_control.cpp
             link_args: "/opt/cache/lib/libprotobuf-lite.a -lpthread"
+          - component: uriparser
+            tag: 0.9.8-amd64
+            control: uriparser_control.c
+            link_args: "/opt/cache/lib/liburiparser.a"
+          - component: fmt
+            tag: 10.2.1-amd64
+            control: fmt_control.cpp
+            link_args: "/opt/cache/lib/libfmt.a"
+          - component: zstd
+            tag: 1.5.6-amd64
+            control: zstd_control.c
+            link_args: "/opt/cache/lib/libzstd.a -lpthread"
+          - component: meshoptimizer
+            tag: 0.20-amd64
+            control: meshoptimizer_control.cpp
+            link_args: "/opt/cache/lib/libmeshoptimizer.a"
+          - component: asyncplusplus
+            tag: 1.1-amd64
+            control: asyncplusplus_control.cpp
+            link_args: "/opt/cache/lib/libasync++.a -lpthread"
+          - component: tinyxml2
+            tag: 10.0.0-amd64
+            control: tinyxml2_control.cpp
+            link_args: "/opt/cache/lib/libtinyxml2.a"
+          - component: libjpeg-turbo
+            tag: 3.0.3-amd64
+            control: libjpeg_turbo_control.c
+            link_args: "/opt/cache/lib/libjpeg.a -lm"
+          - component: libwebp
+            tag: 1.4.0-amd64
+            control: libwebp_control.c
+            link_args: "/opt/cache/lib/libwebp.a /opt/cache/lib/libsharpyuv.a -lm -lpthread"
+          - component: draco
+            tag: 1.5.7-amd64
+            control: draco_control.cpp
+            link_args: "/opt/cache/lib/libdraco.a"
+          - component: zlib-ng
+            tag: 2.1.5-amd64
+            control: zlib_ng_control.c
+            link_args: "/opt/cache/lib/libz-ng.a"
+          - component: modp-base64
+            tag: 2020-09-26-amd64
+            control: modp_base64_control.c
+            link_args: "/opt/cache/lib/libmodp_b64.a"
+          - component: abseil
+            tag: 20240116.2-amd64
+            control: abseil_control.cpp
+            link_args: "/opt/cache/lib/libabsl_strings.a /opt/cache/lib/libabsl_strings_internal.a /opt/cache/lib/libabsl_base.a /opt/cache/lib/libabsl_raw_logging_internal.a /opt/cache/lib/libabsl_throw_delegate.a /opt/cache/lib/libabsl_int128.a /opt/cache/lib/libabsl_spinlock_wait.a -lpthread"
+          - component: libiconv
+            tag: 1.15-amd64
+            control: libiconv_control.c
+            link_args: "/opt/cache/lib/libiconv.a"
+          - component: sqlite3
+            tag: 3.46.0-amd64
+            control: sqlite3_control.c
+            link_args: "/opt/cache/lib/libsqlite3.a -lpthread -ldl -lm"
+          - component: proj
+            tag: 4.9.1-amd64
+            control: proj_control.c
+            link_args: "/opt/cache/lib/libproj.a -lm"
+          - component: geos
+            tag: 3.4.3-amd64
+            control: geos_control.c
+            link_args: "/opt/cache/lib/libgeos_c.a /opt/cache/lib/libgeos.a -lstdc++ -lm"
+          - component: mdbtools
+            tag: 1.0.0-amd64
+            control: mdbtools_control.c
+            link_args: "/opt/cache/lib/libmdb.a -lm"
     name: qualify (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -119,7 +187,7 @@ jobs:
               # shellcheck disable=SC2086
               if [[ "${CONTROL}" == *.cpp ]]; then
                 g++ -std=c++17 -Wall -Wextra -Werror -O2 \
-                  -I/opt/cache/include "/src/${CONTROL}" ${LINK_ARGS} \
+                  -isystem /opt/cache/include "/src/${CONTROL}" ${LINK_ARGS} \
                   -o /tmp/control_bin
               else
                 gcc -std=c99 -Wall -Wextra -Werror -O2 \
@@ -165,6 +233,40 @@ jobs:
             tag: 1.0.1-amd64
           - component: protobuf
             tag: 3.21.0-amd64
+          - component: uriparser
+            tag: 0.9.8-amd64
+          - component: fmt
+            tag: 10.2.1-amd64
+          - component: zstd
+            tag: 1.5.6-amd64
+          - component: meshoptimizer
+            tag: 0.20-amd64
+          - component: asyncplusplus
+            tag: 1.1-amd64
+          - component: tinyxml2
+            tag: 10.0.0-amd64
+          - component: libjpeg-turbo
+            tag: 3.0.3-amd64
+          - component: libwebp
+            tag: 1.4.0-amd64
+          - component: draco
+            tag: 1.5.7-amd64
+          - component: zlib-ng
+            tag: 2.1.5-amd64
+          - component: modp-base64
+            tag: 2020-09-26-amd64
+          - component: abseil
+            tag: 20240116.2-amd64
+          - component: libiconv
+            tag: 1.15-amd64
+          - component: sqlite3
+            tag: 3.46.0-amd64
+          - component: proj
+            tag: 4.9.1-amd64
+          - component: geos
+            tag: 3.4.3-amd64
+          - component: mdbtools
+            tag: 1.0.0-amd64
     name: publish (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -230,6 +332,22 @@ jobs:
             tag: 1.6.0-amd64
             control: ngtcp2_control.c
             link_args: "/opt/cache/lib/libngtcp2_crypto_quictls.a /opt/cache/lib/libngtcp2.a /opt/quictls/lib/libssl.a /opt/quictls/lib/libcrypto.a -lpthread -ldl"
+          - component: spdlog
+            tag: 1.14.1-amd64
+            control: spdlog_control.cpp
+            link_args: "/opt/cache/lib/libspdlog.a /opt/fmt/lib/libfmt.a -lpthread"
+          - component: ktx
+            tag: 4.3.1-amd64
+            control: ktx_control.c
+            link_args: "/opt/cache/lib/libktx.a /opt/zstd/lib/libzstd.a -lstdc++ -lpthread -ldl -lm"
+          - component: s2geometry
+            tag: 0.11.1-amd64
+            control: s2geometry_control.cpp
+            link_args: "/opt/cache/lib/libs2.a -Wl,--start-group /opt/abseil/lib/libabsl_*.a -Wl,--end-group /opt/openssl/lib/libcrypto.a -lpthread -ldl -lm"
+          - component: libxml2
+            tag: 2.13.3-amd64
+            control: libxml2_control.c
+            link_args: "/opt/cache/lib/libxml2.a /opt/libiconv/lib/libiconv.a -lm -lpthread"
     name: qualify (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -284,9 +402,27 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/dep-zlib"
           docker cp "${zlib_cid}:/zlib/." "${RUNNER_TEMP}/dep-zlib/"
           docker rm "${zlib_cid}"
+          fmt_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-fmt:10.2.1-amd64 /fmt)"
+          mkdir -p "${RUNNER_TEMP}/dep-fmt"
+          docker cp "${fmt_cid}:/fmt/." "${RUNNER_TEMP}/dep-fmt/"
+          docker rm "${fmt_cid}"
+          zstd_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-zstd:1.5.6-amd64 /zstd)"
+          mkdir -p "${RUNNER_TEMP}/dep-zstd"
+          docker cp "${zstd_cid}:/zstd/." "${RUNNER_TEMP}/dep-zstd/"
+          docker rm "${zstd_cid}"
+          abseil_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-abseil:20240116.2-amd64 /abseil)"
+          mkdir -p "${RUNNER_TEMP}/dep-abseil"
+          docker cp "${abseil_cid}:/abseil/." "${RUNNER_TEMP}/dep-abseil/"
+          docker rm "${abseil_cid}"
+          iconv_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-libiconv:1.15-amd64 /libiconv)"
+          mkdir -p "${RUNNER_TEMP}/dep-libiconv"
+          docker cp "${iconv_cid}:/libiconv/." "${RUNNER_TEMP}/dep-libiconv/"
+          docker rm "${iconv_cid}"
           extra_inc="-I/opt/openssl/include"
           if [ "${COMPONENT}" = "ngtcp2" ]; then
             extra_inc="-I/opt/quictls/include"
+          elif [ "${COMPONENT}" = "libxml2" ]; then
+            extra_inc="-I/opt/cache/include/libxml2 -I/opt/libiconv/include"
           fi
           docker run --rm \
             -e CONTROL="${CONTROL}" \
@@ -297,13 +433,24 @@ jobs:
             -v "${RUNNER_TEMP}/dep-openssl:/opt/openssl:ro" \
             -v "${RUNNER_TEMP}/dep-quictls:/opt/quictls:ro" \
             -v "${RUNNER_TEMP}/dep-zlib:/opt/zlib:ro" \
+            -v "${RUNNER_TEMP}/dep-fmt:/opt/fmt:ro" \
+            -v "${RUNNER_TEMP}/dep-zstd:/opt/zstd:ro" \
+            -v "${RUNNER_TEMP}/dep-abseil:/opt/abseil:ro" \
+            -v "${RUNNER_TEMP}/dep-libiconv:/opt/libiconv:ro" \
             ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
             bash -euo pipefail -c '
               # shellcheck disable=SC2086
-              gcc -std=c99 -Wall -Wextra -Werror -O2 \
-                -I/opt/cache/include ${EXTRA_INC} -I/opt/zlib/include \
-                "/src/${CONTROL}" ${LINK_ARGS} \
-                -o /tmp/control_bin
+              if [[ "${CONTROL}" == *.cpp ]]; then
+                g++ -std=c++17 -Wall -Wextra -Werror -O2 \
+                  -I/opt/cache/include ${EXTRA_INC} -I/opt/zlib/include -I/opt/fmt/include -I/opt/zstd/include -I/opt/abseil/include \
+                  "/src/${CONTROL}" ${LINK_ARGS} \
+                  -o /tmp/control_bin
+              else
+                gcc -std=c99 -Wall -Wextra -Werror -O2 \
+                  -I/opt/cache/include ${EXTRA_INC} -I/opt/zlib/include -I/opt/fmt/include -I/opt/zstd/include -I/opt/abseil/include \
+                  "/src/${CONTROL}" ${LINK_ARGS} \
+                  -o /tmp/control_bin
+              fi
               /tmp/control_bin
             '
 
@@ -339,6 +486,14 @@ jobs:
             tag: 4.0.1-amd64
           - component: ngtcp2
             tag: 1.6.0-amd64
+          - component: spdlog
+            tag: 1.14.1-amd64
+          - component: ktx
+            tag: 4.3.1-amd64
+          - component: s2geometry
+            tag: 0.11.1-amd64
+          - component: libxml2
+            tag: 2.13.3-amd64
     name: publish (${{ matrix.component }})
     steps:
       - name: Checkout source

@@ -80,7 +80,7 @@ You need `python3` only to run `uds run test-install`, which runs the checks und
 
 The [UDS local demo requirements](https://docs.defenseunicorns.com/core/getting-started/local-demo/basic-requirements/) call for at least 4 processor cores, 10 GiB of memory, and 40 GiB of disk for Docker.
 
-The versions below match what this repository pins and tests with: k3d v5.9.0, UDS CLI v0.41.0 (`mise.toml`), and kubectl v1.37.1 for the k3s v1.37.1 cluster that `k3d-core-slim-dev` creates.
+The versions below match what this repository pins and tests with: k3d v5.9.0, UDS CLI v0.42.0 (`mise.toml`), and kubectl v1.37.1 for the k3s v1.37.1 cluster that `k3d-core-slim-dev` creates.
 
 #### Install with curl (Linux and macOS)
 
@@ -97,7 +97,7 @@ cd "$(mktemp -d)"
 UDS CLI:
 
 ```bash
-UDS_VERSION=v0.41.0
+UDS_VERSION=v0.42.0
 f="uds-cli_${UDS_VERSION}_${OS}_${ARCH}"
 curl -fsSLO "https://github.com/defenseunicorns/uds-cli/releases/download/${UDS_VERSION}/${f}" &&
   curl -fsSL "https://github.com/defenseunicorns/uds-cli/releases/download/${UDS_VERSION}/checksums.txt" | grep " ${f}\$" | sha &&
@@ -129,7 +129,7 @@ Then check them with `uds version`, `k3d version`, and `kubectl version --client
 
 | Tool | Homebrew (macOS and Linux) | apt / dnf |
 | --- | --- | --- |
-| UDS CLI | `brew tap defenseunicorns/tap && brew install uds` | No repository. Each [release](https://github.com/defenseunicorns/uds-cli/releases/tag/v0.41.0) has `.deb` and `.rpm` files for `apt install ./<file>.deb` or `dnf install ./<file>.rpm` |
+| UDS CLI | `brew tap defenseunicorns/tap && brew install uds` | No repository. Each [release](https://github.com/defenseunicorns/uds-cli/releases/tag/v0.42.0) has `.deb` and `.rpm` files for `apt install ./<file>.deb` or `dnf install ./<file>.rpm` |
 | k3d | `brew install k3d` | None |
 | kubectl | `brew install kubernetes-cli` | The official [pkgs.k8s.io repository](https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/#install-using-native-package-management) (`core:/stable:/v1.37`) |
 | Docker | [Docker Desktop](https://docs.docker.com/desktop/) | Docker's official repositories for [Ubuntu](https://docs.docker.com/engine/install/ubuntu/), [Debian](https://docs.docker.com/engine/install/debian/), and [Fedora](https://docs.docker.com/engine/install/fedora/) |

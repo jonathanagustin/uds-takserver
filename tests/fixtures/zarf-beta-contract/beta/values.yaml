@@ -17,3 +17,5 @@ backup:
 storage:
   postgresClass: ''
   cloudtakClass: ''
+chartOverrides:
+  contract: {}
