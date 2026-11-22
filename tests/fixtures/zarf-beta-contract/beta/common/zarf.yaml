@@ -32,3 +32,5 @@ component:
           targetPath: .record.POSTGRES_STORAGE_CLASS
         - sourcePath: .storage.cloudtakClass
           targetPath: .record.CLOUDTAK_STORAGE_CLASS
+        - sourcePath: .chartOverrides.contract
+          targetPath: .

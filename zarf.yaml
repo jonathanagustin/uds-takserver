@@ -144,6 +144,7 @@ components:
         # Sets the PostGIS StorageClass only when CLOUDTAK_STORAGE_CLASS is
         # not empty. An empty object otherwise.
         templatedValuesFiles:
+          - values/filesystem-backup-switch.yaml.tpl
           - values/cloudtak-storage.yaml.tpl
         values:
           - sourcePath: .global.domain
