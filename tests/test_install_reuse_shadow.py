@@ -649,5 +649,98 @@ class TransportTests(unittest.TestCase):
             SHADOW.command([sys.executable, '-c', 'import os; os.write(1, b"x" * (5 * 1024 * 1024))'])
 
 
+class ScenarioSetTests(unittest.TestCase):
+    def setUp(self):
+        self.tested, self.tree, self.target = [c * 40 for c in '364']
+
+    def shadow_entry(self, scenario='install', arch='amd64', job_id=30, artifact_id=40, **overrides):
+        entry = {
+            'schema_version': 1, 'mode': 'shadow', 'reuse_authorized': False,
+            'decision': 'execute-fresh', 'evidence_qualified': True,
+            'evidence': {
+                'source_run': 100, 'attempt': 2, 'job_id': job_id, 'artifact_id': artifact_id,
+                'scenario': scenario, 'architecture': arch,
+                'tested_commit': self.tested, 'tested_tree': self.tree, 'target_commit': self.target,
+            },
+            'blockers': ['prospective-input-equivalence-not-proven'],
+        }
+        entry.update(overrides)
+        return entry
+
+    def test_complete_three_scenario_set_matches_validation_mode_contract_and_stays_fresh(self):
+        results = [
+            self.shadow_entry('install-airgap', 'amd64', job_id=32, artifact_id=42),
+            self.shadow_entry('install', 'arm64', job_id=31, artifact_id=41),
+            self.shadow_entry('install', 'amd64', job_id=30, artifact_id=40,
+                              prospective_comparison={'inputs_equal': True, 'reuse_authorized': False},
+                              execution_class_comparison={'execution_class_equal': True, 'reuse_authorized': False}),
+        ]
+        summary = SHADOW.evaluate_scenario_set(results)
+        self.assertTrue(summary['set_qualified'])
+        self.assertTrue(summary['complete_install_set'])
+        self.assertEqual(summary['missing_scenarios'], [])
+        self.assertEqual(summary['decision'], 'execute-fresh')
+        self.assertFalse(summary['reuse_authorized'])
+        self.assertFalse(summary['verifier_preview']['reuse_authorized'])
+        self.assertNotIn('scenario-set-incomplete', summary['blockers'])
+
+        # Cross-contract check against .github/scripts/test-validation-mode.py.
+        mode_path = Path(__file__).resolve().parents[1] / '.github/scripts/test-validation-mode.py'
+        mode_spec = importlib.util.spec_from_file_location('test_validation_mode', mode_path)
+        mode = importlib.util.module_from_spec(mode_spec)
+        mode_spec.loader.exec_module(mode)
+
+        with self.assertRaisesRegex(ValueError, 'not authorized'):
+            mode.parse_reused_install_evidence('push', 'false', 'none', summary['verifier_preview'])
+
+        authorized_copy = copy.deepcopy(summary['verifier_preview'])
+        authorized_copy['reuse_authorized'] = True
+        parsed = mode.parse_reused_install_evidence('push', 'false', 'none', authorized_copy)
+        self.assertEqual(len(parsed), 3)
+        self.assertEqual({(row['scenario'], row['architecture']) for row in parsed},
+                         mode.REQUIRED_INSTALL_SCENARIOS)
+
+    def test_partial_set_reports_missing_scenarios_and_incomplete_blocker(self):
+        results = [
+            self.shadow_entry('install', 'amd64', job_id=30, artifact_id=40),
+            self.shadow_entry('install-airgap', 'amd64', job_id=32, artifact_id=42),
+        ]
+        summary = SHADOW.evaluate_scenario_set(results)
+        self.assertTrue(summary['set_qualified'])
+        self.assertFalse(summary['complete_install_set'])
+        self.assertEqual(summary['missing_scenarios'], [{'scenario': 'install-online', 'architecture': 'arm64'}])
+        self.assertEqual(summary['blockers'][0], 'scenario-set-incomplete')
+        self.assertFalse(summary['reuse_authorized'])
+
+    def test_scenario_set_rejects_duplicates_drift_and_mismatches_fail_closed(self):
+        cases = [
+            ([], 'scenario-set-empty-or-oversized'),
+            ([self.shadow_entry()] * 4, 'scenario-set-empty-or-oversized'),
+            ([self.shadow_entry(evidence_qualified=False)], 'scenario-set-entry-unqualified'),
+            ([self.shadow_entry(reuse_authorized=True)], 'scenario-set-entry-unqualified'),
+            ([self.shadow_entry('install', 'amd64'), self.shadow_entry('install', 'amd64', job_id=31)],
+             'scenario-set-duplicate-scenario'),
+            ([self.shadow_entry('install-airgap', 'arm64')], 'scenario-set-scenario-invalid'),
+            ([self.shadow_entry('install', 'amd64'),
+              self.shadow_entry('install', 'arm64', evidence={
+                  'source_run': 100, 'attempt': 2, 'job_id': 31, 'artifact_id': 41,
+                  'scenario': 'install', 'architecture': 'arm64',
+                  'tested_commit': self.tested, 'tested_tree': 'f' * 40, 'target_commit': self.target,
+              })], 'scenario-set-commit-or-tree-mismatch'),
+            ([self.shadow_entry(prospective_comparison={'inputs_equal': False, 'reuse_authorized': False})],
+             'scenario-set-prospective-mismatch'),
+            ([self.shadow_entry(execution_class_comparison={'execution_class_equal': False, 'reuse_authorized': False})],
+             'scenario-set-execution-class-mismatch'),
+        ]
+        for payload, reason in cases:
+            with self.subTest(reason=reason):
+                summary = SHADOW.evaluate_scenario_set(payload)
+                self.assertFalse(summary['set_qualified'])
+                self.assertFalse(summary['complete_install_set'])
+                self.assertEqual(summary['blockers'][0], reason)
+                self.assertEqual(summary['decision'], 'execute-fresh')
+                self.assertFalse(summary['reuse_authorized'])
+
+
 if __name__ == '__main__':
     unittest.main()
