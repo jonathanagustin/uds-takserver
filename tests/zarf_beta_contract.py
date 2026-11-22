@@ -43,8 +43,9 @@ def render(prefix, mode, override):
             extra += (['--deploy-set-variables', name + '=' + value] if mode == 'alpha'
                       else ['--set-values', path + '=' + value])
     by_name = render_docs(prefix, mode, extra)
-    if list(by_name) != ['contract']:
-        raise RuntimeError('unexpected default components for ' + mode + ': ' + str(list(by_name)))
+    expected_names = {'contract'} if mode == 'alpha' else {'contract', 'optional-addon'}
+    if set(by_name) != expected_names:
+        raise RuntimeError('unexpected components for ' + mode + ': ' + str(set(by_name)))
     return by_name['contract']
 
 
@@ -68,7 +69,10 @@ def main():
     overlaid = render_docs(prefix, 'beta', ['--set-values', 'chartOverrides.contract.extra=override-ok'])
     if overlaid.get('contract', {}).get('EXTRA') != 'override-ok':
         raise RuntimeError('beta chartOverrides did not propagate')
-    # Verify optional: true defaults off (checked above) and opts in with --components.
+    # Verify optional: true component can be excluded or selected via --components.
+    opted_out = render_docs(prefix, 'beta', ['--components', 'contract'])
+    if set(opted_out) != {'contract'}:
+        raise RuntimeError('beta optional component exclusion failed: ' + str(set(opted_out)))
     opted_in = render_docs(
         prefix,
         'beta',
