@@ -133,6 +133,14 @@ COMPONENTS = {
         "control_marker": "uriparser_static_pic_control=true",
         "required_artifacts": ("lib/liburiparser.a", "include/uriparser/Uri.h", "COPYING"),
     },
+    "fmt": {
+        "version": "10.2.1",
+        "archive_sha256": "1250e4cc58bf06ee631567523f48848dc4596133e163f02615c97f78bab6c811",
+        "license_sha256": "07580f2a3b35709ce703d523f447b242f6dfec7582a8c0df102c7fa2849375f8",
+        "control_file": "fmt_control.cpp",
+        "control_marker": "fmt_static_pic_control=true",
+        "required_artifacts": ("lib/libfmt.a", "include/fmt/core.h", "LICENSE"),
+    },
 }
 
 
