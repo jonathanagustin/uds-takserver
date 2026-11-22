@@ -271,6 +271,18 @@ COMPONENTS = {
         "control_marker": "s2geometry_static_pic_control=true",
         "required_artifacts": ("lib/libs2.a", "include/s2/s2cell_id.h", "LICENSE"),
     },
+    "libxml2": {
+        "version": "2.13.3",
+        "archive_sha256": "0805d7c180cf09caad71666c7a458a74f041561a532902454da5047d83948138",
+        "license_sha256": "c99aae1afe013e50b8b3701e089222b351258043c3025b64053a233fd25b4be7",
+        "control_file": "libxml2_control.c",
+        "control_marker": "libxml2_static_pic_control=true",
+        "required_artifacts": (
+            "lib/libxml2.a",
+            "include/libxml2/libxml/parser.h",
+            "Copyright",
+        ),
+    },
     "proj": {
         "version": "4.9.1",
         "archive_sha256": "fca0388f3f8bc5a1a803d2f6ff30017532367992b30cf144f2d39be88f36c319",
