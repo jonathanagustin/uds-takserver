@@ -11,18 +11,17 @@ uv run --no-project --with pyyaml==6.0.3 python -B tests/zarf_beta_contract.py -
 uv run --no-project --with pyyaml==6.0.3 python -B tests/zarf_beta_contract.py --cli /path/to/zarf
 ```
 
-Validated with UDS CLI 0.41.0 (embedded Zarf 0.89.0) and Zarf 1.0.1.
-Each invocation renders defaults and all ten overrides for both schemas, then
-creates both packages in temporary directories. The beta package imports a
-`ZarfComponentConfig` through `import.local`, exercising component-relative chart
-paths and package-value propagation across the import boundary. The chart is local; no cluster,
-registry, image, or production package build is required. The existing package
-values CI job runs this contract with the repository's pinned UDS CLI.
+Validated with UDS CLI 0.42.0 (embedded Zarf 1.0.1).
+Each invocation renders defaults and all ten overrides for both schemas, verifies
+`chartOverrides` root overlay propagation across `import.local`, checks that an
+`optional: true` component defaults off and opts in via `--components`, confirms
+`values.schema` rejects an invalid `backup.filesystem.owner` value, and creates
+both packages in temporary directories. The chart is local; no cluster, registry,
+image, or production package build is required. The existing `package-values` CI
+job runs this contract with the repository's pinned UDS CLI.
 
 The chart deliberately quotes every ConfigMap data value. Beta `--set-values`
 infers boolean types for `true` and `false`; legacy variables are strings. This
 proves equivalence at that explicit string consumer boundary. Production chart
-conditionals, template files, image references, real shared charts, optional
-components, ATAK build templates, and bundle overrides still need their own
-migration and acceptance checks. This fixture does not deploy the real package
-or complete #712. Production package schemas and defaults remain unchanged.
+conditionals, template files, image references, real shared charts, and live
+Next-bundle deployment/upgrade acceptance still remain separate gates for #712.
