@@ -16,6 +16,7 @@ on:
       - "takx/cot-conformance/**"
       - "takx/gis-java/data/**"
       - "takx/mission-package/**"
+      - "takx/native-las/**"
       - "takx/ui-java/**"
       - ".github/workflows/takx-gl-qualification.yaml"
   workflow_dispatch:
@@ -612,5 +613,52 @@ jobs:
         with:
           name: takx-kernel-scene-hosted-receipt
           path: ${{ runner.temp }}/takx-kernel-scene-hosted/hosted-kernel-scene-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-native-las:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline native-las verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/native-las/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/native-las -p 'test_run_hosted_controls.py' -v
+
+      - name: Extract prebuilt liblas 1.8.2 Layer-2 OCI cache
+        timeout-minutes: 3
+        run: |
+          set -eu
+          cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-liblas:1.8.2-amd64 /liblas)"
+          mkdir -p "${RUNNER_TEMP}/liblas-prefix"
+          docker cp "${cid}:/liblas/." "${RUNNER_TEMP}/liblas-prefix/"
+          docker rm "${cid}"
+
+      - name: Run LibLASSourceProbe plain and ASAN/UBSAN decoder controls live on Linux GCC 14
+        timeout-minutes: 5
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/takx-native-las-hosted"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work:ro" \
+            -v "${RUNNER_TEMP}/liblas-prefix:/liblas:ro" \
+            -v "${RUNNER_TEMP}/takx-native-las-hosted:/out" \
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
+            python3 -B /work/takx/native-las/run_hosted_controls.py \
+              --phase qualify \
+              --liblas-prefix /liblas \
+              --output /out
+
+      - name: Retain verified native-las hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-native-las-hosted-receipt
+          path: ${{ runner.temp }}/takx-native-las-hosted/hosted-native-las-receipt.json
           if-no-files-found: error
           retention-days: 14
