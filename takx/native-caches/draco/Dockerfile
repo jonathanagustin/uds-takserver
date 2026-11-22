@@ -55,7 +55,7 @@ RUN set -x; \
     cmake --install /build/out; \
     cp /build/draco-1.5.7/LICENSE /draco/LICENSE; \
     g++ -std=c++17 -Wall -Wextra -Werror -O2 \
-      -I/draco/include /build/draco_control.cpp /draco/lib/libdraco.a \
+      -isystem /draco/include /build/draco_control.cpp /draco/lib/libdraco.a \
       -o /build/draco_control; \
     /build/draco_control; \
     g++ -shared -o /build/libdraco_whole.so \
