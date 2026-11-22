@@ -155,7 +155,7 @@ jobs:
               # shellcheck disable=SC2086
               if [[ "${CONTROL}" == *.cpp ]]; then
                 g++ -std=c++17 -Wall -Wextra -Werror -O2 \
-                  -I/opt/cache/include "/src/${CONTROL}" ${LINK_ARGS} \
+                  -isystem /opt/cache/include "/src/${CONTROL}" ${LINK_ARGS} \
                   -o /tmp/control_bin
               else
                 gcc -std=c99 -Wall -Wextra -Werror -O2 \
