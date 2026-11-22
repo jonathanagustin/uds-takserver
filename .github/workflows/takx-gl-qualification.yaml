@@ -6,6 +6,7 @@ name: TAKX Mesa Xvfb GL qualification
 on:
   pull_request:
     paths:
+      - "takx/compat/**"
       - "takx/contour-style/**"
       - "takx/gl-qualification/**"
       - "takx/kernel-render-context/**"
@@ -217,5 +218,48 @@ jobs:
         with:
           name: takx-contour-style-hosted-receipt
           path: ${{ runner.temp }}/takx-contour-style-hosted/hosted-contour-style-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-compat-java:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64
+    timeout-minutes: 10
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline compat Java verifier tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/compat/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/compat -p 'test_run_hosted_controls.py' -v
+
+      - name: Fetch pinned upstream ATAK Kernel commit
+        timeout-minutes: 4
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/pinned-atak"
+          git -C "${RUNNER_TEMP}/pinned-atak" init -q
+          git -C "${RUNNER_TEMP}/pinned-atak" remote add origin https://github.com/TAK-Product-Center/atak-civ.git
+          git -C "${RUNNER_TEMP}/pinned-atak" fetch --depth 1 origin 9f6893dd657feacc35ec5de03dad721c2e44170e
+          git -C "${RUNNER_TEMP}/pinned-atak" checkout -q FETCH_HEAD
+
+      - name: Run all seven takx/compat Java compatibility suites live on Linux JDK 17
+        timeout-minutes: 5
+        run: |
+          python3 -B takx/compat/run_hosted_controls.py \
+            --phase qualify \
+            --atak-source "${RUNNER_TEMP}/pinned-atak" \
+            --output "${RUNNER_TEMP}/takx-compat-java-hosted"
+
+      - name: Retain verified compat Java hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-compat-java-hosted-receipt
+          path: ${{ runner.temp }}/takx-compat-java-hosted/hosted-compat-java-receipt.json
           if-no-files-found: error
           retention-days: 14
