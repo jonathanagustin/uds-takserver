@@ -239,6 +239,14 @@ COMPONENTS = {
             "LICENSE",
         ),
     },
+    "s2geometry": {
+        "version": "0.11.1",
+        "archive_sha256": "bdbeb8ebdb88fa934257caf81bb44b55711617a3ab4fdec2c3cfd6cc31b61734",
+        "license_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "control_file": "s2geometry_control.cpp",
+        "control_marker": "s2geometry_static_pic_control=true",
+        "required_artifacts": ("lib/libs2.a", "include/s2/s2cell_id.h", "LICENSE"),
+    },
 }
 
 

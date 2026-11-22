@@ -306,6 +306,10 @@ jobs:
             tag: 1.14.1-amd64
             control: spdlog_control.cpp
             link_args: "/opt/cache/lib/libspdlog.a /opt/fmt/lib/libfmt.a -lpthread"
+          - component: s2geometry
+            tag: 0.11.1-amd64
+            control: s2geometry_control.cpp
+            link_args: "/opt/cache/lib/libs2.a -Wl,--start-group /opt/abseil/lib/libabsl_*.a -Wl,--end-group /opt/openssl/lib/libcrypto.a -lpthread -ldl -lm"
     name: qualify (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -364,6 +368,10 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/dep-fmt"
           docker cp "${fmt_cid}:/fmt/." "${RUNNER_TEMP}/dep-fmt/"
           docker rm "${fmt_cid}"
+          abseil_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-abseil:20240116.2-amd64 /abseil)"
+          mkdir -p "${RUNNER_TEMP}/dep-abseil"
+          docker cp "${abseil_cid}:/abseil/." "${RUNNER_TEMP}/dep-abseil/"
+          docker rm "${abseil_cid}"
           extra_inc="-I/opt/openssl/include"
           if [ "${COMPONENT}" = "ngtcp2" ]; then
             extra_inc="-I/opt/quictls/include"
@@ -378,17 +386,18 @@ jobs:
             -v "${RUNNER_TEMP}/dep-quictls:/opt/quictls:ro" \
             -v "${RUNNER_TEMP}/dep-zlib:/opt/zlib:ro" \
             -v "${RUNNER_TEMP}/dep-fmt:/opt/fmt:ro" \
+            -v "${RUNNER_TEMP}/dep-abseil:/opt/abseil:ro" \
             ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
             bash -euo pipefail -c '
               # shellcheck disable=SC2086
               if [[ "${CONTROL}" == *.cpp ]]; then
                 g++ -std=c++17 -Wall -Wextra -Werror -O2 \
-                  -I/opt/cache/include ${EXTRA_INC} -I/opt/zlib/include -I/opt/fmt/include \
+                  -I/opt/cache/include ${EXTRA_INC} -I/opt/zlib/include -I/opt/fmt/include -I/opt/abseil/include \
                   "/src/${CONTROL}" ${LINK_ARGS} \
                   -o /tmp/control_bin
               else
                 gcc -std=c99 -Wall -Wextra -Werror -O2 \
-                  -I/opt/cache/include ${EXTRA_INC} -I/opt/zlib/include -I/opt/fmt/include \
+                  -I/opt/cache/include ${EXTRA_INC} -I/opt/zlib/include -I/opt/fmt/include -I/opt/abseil/include \
                   "/src/${CONTROL}" ${LINK_ARGS} \
                   -o /tmp/control_bin
               fi
@@ -429,6 +438,8 @@ jobs:
             tag: 1.6.0-amd64
           - component: spdlog
             tag: 1.14.1-amd64
+          - component: s2geometry
+            tag: 0.11.1-amd64
     name: publish (${{ matrix.component }})
     steps:
       - name: Checkout source
