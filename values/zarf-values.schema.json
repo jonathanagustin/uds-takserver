@@ -71,8 +71,15 @@
       ],
       "properties": {
         "inCluster": {
-          "type": "string",
-          "pattern": "^(true|false|###ZARF_VAR_IN_CLUSTER_DNS###)$"
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string",
+              "pattern": "^(true|false|###ZARF_VAR_IN_CLUSTER_DNS###)$"
+            }
+          ]
         },
         "passthroughHosts": {
           "type": "string"
