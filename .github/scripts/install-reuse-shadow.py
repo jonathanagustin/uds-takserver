@@ -524,18 +524,39 @@ def bounded_file(path, maximum):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--receipt', type=Path, required=True)
-    parser.add_argument('--bundle', type=Path, required=True)
-    parser.add_argument('--pr', type=int, required=True)
-    parser.add_argument('--target', required=True, help='Exact proposed pushed squash commit SHA')
-    parser.add_argument('--policy-ref', required=True, help='Exact independently reviewed producer/workflow commit')
+    parser.add_argument('--receipt', type=Path)
+    parser.add_argument('--bundle', type=Path)
+    parser.add_argument('--pr', type=int)
+    parser.add_argument('--target', help='Exact proposed pushed squash commit SHA')
+    parser.add_argument('--policy-ref', help='Exact independently reviewed producer/workflow commit')
     parser.add_argument('--prospective', type=Path, help='Actual acquired-input snapshot; never authorizes reuse')
     parser.add_argument('--expected-runner', help='Expected hosted runner label; never authorizes reuse')
+    parser.add_argument('--scenario-set', nargs='+', type=Path,
+                        help='Bounded per-scenario shadow JSON files to aggregate; never authorizes reuse')
     parser.add_argument('--gh', default='gh', help='GitHub CLI with attestation verification support')
     args = parser.parse_args()
     result = None
+    if args.scenario_set is not None:
+        try:
+            require(all(value is None for value in (
+                args.receipt, args.bundle, args.pr, args.target, args.policy_ref,
+                args.prospective, args.expected_runner)), 'scenario-set-arguments-invalid')
+            require(1 <= len(args.scenario_set) <= len(REQUIRED_INSTALL_SCENARIOS),
+                    'scenario-set-empty-or-oversized')
+            loaded = [json.loads(bounded_file(path, 64 * 1024), object_pairs_hook=unique_fields)
+                      for path in args.scenario_set]
+            result = evaluate_scenario_set(loaded)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, Unavailable):
+            result = {'schema_version': 1, 'mode': 'shadow-set', 'reuse_authorized': False,
+                      'decision': 'execute-fresh', 'set_qualified': False, 'complete_install_set': False,
+                      'blockers': ['scenario-set-input-unavailable']}
+        print(json.dumps(result, sort_keys=True))
+        return
     try:
-        require(args.pr > 0 and SHA.fullmatch(args.target) and SHA.fullmatch(args.policy_ref), 'arguments-invalid')
+        require(args.receipt is not None and args.bundle is not None and args.pr is not None and
+                args.target is not None and args.policy_ref is not None and
+                args.pr > 0 and SHA.fullmatch(args.target) and SHA.fullmatch(args.policy_ref),
+                'arguments-invalid')
         raw = bounded_file(args.receipt, 64 * 1024)
         bundle = bounded_file(args.bundle, MAX_BYTES)
         receipt = json.loads(raw, object_pairs_hook=unique_fields)
