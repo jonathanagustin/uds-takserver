@@ -24,6 +24,13 @@ dns:
   passthroughHosts: "###ZARF_VAR_PASSTHROUGH_HOSTS###"
 health:
   enabled: true
+backup:
+  filesystem:
+    enabled: "###ZARF_VAR_FILESYSTEM_BACKUP###"
+    owner: "###ZARF_VAR_FILESYSTEM_BACKUP_OWNER###"
+storage:
+  postgresClass: "###ZARF_VAR_POSTGRES_STORAGE_CLASS###"
+  cloudtakClass: "###ZARF_VAR_CLOUDTAK_STORAGE_CLASS###"
 # Optional chart-root overlays. Empty maps preserve ordinary package defaults.
 # The staged migration replays its reviewed baseline overlays through these.
 chartOverrides:

@@ -3,8 +3,11 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: values-contract
+  name: {{ .Release.Name }}
 data:
 {{- range $name, $value := .Values.record }}
   {{ $name }}: {{ $value | quote }}
+{{- end }}
+{{- if .Values.extra }}
+  EXTRA: {{ .Values.extra | quote }}
 {{- end }}

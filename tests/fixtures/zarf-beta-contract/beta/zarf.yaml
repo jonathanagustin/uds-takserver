@@ -8,8 +8,21 @@ metadata:
 values:
   files:
     - values.yaml
+  schema: values.schema.json
 components:
   - name: contract
     import:
       local:
         - path: common/zarf.yaml
+  - name: optional-addon
+    optional: true
+    charts:
+      - name: optional-addon
+        namespace: default
+        local:
+          path: ../chart
+        values:
+          - sourcePath: .global.domain
+            targetPath: .record.DOMAIN
+          - sourcePath: .storage.cloudtakClass
+            targetPath: .record.CLOUDTAK_STORAGE_CLASS

@@ -20,6 +20,8 @@ components:
         localPath: ../charts/takserver
         valuesFiles:
           - ../values/filesystem-backup-switch.yaml
+        templatedValuesFiles:
+          - ../values/filesystem-backup-switch.yaml.tpl
         values:
           - sourcePath: .global.domain
             targetPath: .domain

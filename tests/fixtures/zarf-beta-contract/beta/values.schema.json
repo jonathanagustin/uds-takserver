@@ -1,0 +1,107 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "global",
+    "tak",
+    "dns",
+    "backup",
+    "storage"
+  ],
+  "properties": {
+    "global": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain"],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "tak": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["imageTag", "plugins"],
+      "properties": {
+        "imageTag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plugins": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["memoryRequest", "memoryLimit"],
+          "properties": {
+            "memoryRequest": {
+              "type": "string",
+              "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$"
+            },
+            "memoryLimit": {
+              "type": "string",
+              "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|k|M|G|T)?$"
+            }
+          }
+        }
+      }
+    },
+    "dns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inCluster", "passthroughHosts"],
+      "properties": {
+        "inCluster": {
+          "oneOf": [
+            { "type": "boolean" },
+            { "type": "string", "enum": ["true", "false"] }
+          ]
+        },
+        "passthroughHosts": {
+          "type": "string"
+        }
+      }
+    },
+    "backup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filesystem"],
+      "properties": {
+        "filesystem": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "owner"],
+          "properties": {
+            "enabled": {
+              "oneOf": [
+                { "type": "boolean" },
+                { "type": "string", "enum": ["true", "false"] }
+              ]
+            },
+            "owner": {
+              "type": "string",
+              "enum": ["local", "core"]
+            }
+          }
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["postgresClass", "cloudtakClass"],
+      "properties": {
+        "postgresClass": { "type": "string" },
+        "cloudtakClass": { "type": "string" }
+      }
+    },
+    "chartOverrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contract": { "type": "object" }
+      }
+    }
+  }
+}
