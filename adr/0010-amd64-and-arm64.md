@@ -59,3 +59,36 @@ architectures, and deployment on the target platform with a representative
 capacity test. Both architectures remain supported. No Postgres defaults,
 JVM flags or probe settings change from this evidence. Issues 48, 49 and 51
 remain open for the heavier load and controlled startup comparisons.
+
+## Measurement note: matched 50-client counterbalanced study
+
+Date: 2026-11-21.
+
+[Run 44856472301's retained evidence](../bench/results/44856472301/README.md)
+(and [generated summary table](../bench/results/44856472301/report.md))
+compares `amd64` and `arm64` on the same Pareto-front axes across three
+PostgreSQL 18.6/PostGIS 3.6.4 configurations (`baseline`, `postgis-buffers`,
+and `postgis-wal`) at exact source `83c1262b9059de6fa512f357eff87d16f9adf93d`.
+Each architecture completed three counterbalanced repeats per configuration
+(18 sessions total) at 50 clients with at least 300 seconds warmup and
+1200 seconds measured, passing `bench.postgis_study.complete` with zero
+recorded collection caveats.
+
+Observed results on the GitHub hosted native runners:
+
+- **Throughput:** Received message rates overlap across both architectures and
+  all three configurations (`494.977`–`495.427` messages/s medians).
+- **Mean ping-pong latency:** Medians were lower on `amd64`
+  (`438.340`–`445.814` ms) than on `arm64` (`463.528`–`474.632` ms).
+- **Container startup:** Observed TAK container startup was faster on `arm64`
+  (`40.311` s messaging / `47.656` s API vs. `59.439` s / `70.298` s on `amd64`).
+
+These are hosted-runner session repeats sharing one retained database per
+architecture, not independent installs or an isolated ISA ranking. Both
+architectures remain supported with no change to production PostgreSQL
+defaults: use the host's native architecture for local development, keep both
+architectures in CI, and choose deployment architecture based on target
+infrastructure and representative workload testing. This satisfies the matched
+three-configuration comparison and ADR update for issue 51; issues 48 and 49
+remain open for startup tuning and representative-load validation.
+

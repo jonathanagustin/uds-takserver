@@ -19,8 +19,12 @@
 
 <!-- github-only:start -->
 <p align="center">
-  <a href="https://jonathanagustin.github.io/uds-takserver/">Read the documentation</a>
+  <a href="https://jonathanagustin.github.io/uds-takserver/">Read the documentation</a> ·
+  <a href="https://jonathanagustin.github.io/uds-takserver/#ui-preview">Watch the overview trailer</a>
 </p>
+
+https://github.com/user-attachments/assets/0643628a-e255-4ca2-8f91-9e6eb42a719b
+
 <!-- github-only:end -->
 
 TAK Server on the Unified Defense Stack (UDS) brings applications, identity, networking, security, and operations together in one integrated environment. [TAK Server](https://github.com/TAK-Product-Center/Server) provides the services that connect Team Awareness Kit (TAK) clients and exchange data. Deploying it on a shared platform also requires identity integration, client certificates, gateways, network rules, databases, and an upgrade process. Adding [CloudTAK](https://github.com/dfpc-coe/CloudTAK) introduces a browser application and its own database. Those pieces need to work together and stay aligned as the deployment changes.
@@ -214,7 +218,7 @@ After deployment, use the [Access](#access) table to choose a browser or certifi
 
 ## Demo
 
-[Watch the 26-second UI preview](https://jonathanagustin.github.io/uds-takserver/#ui-preview): CloudTAK mapping, marker creation, sharing and TAK Server status, edited from recorded demos.
+[Watch the overview trailer](https://jonathanagustin.github.io/uds-takserver/#ui-preview): civilian first-responder scenes combined with recorded CloudTAK mapping and sharing on TAK Server.
 
 ### Deploy
 

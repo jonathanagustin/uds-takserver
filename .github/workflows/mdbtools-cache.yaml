@@ -1,0 +1,134 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+name: TAKX MDBTools native cache
+
+on:
+  pull_request:
+    paths:
+      - "takx/mdbtools-cache/**"
+      - ".github/workflows/mdbtools-cache.yaml"
+  push:
+    branches:
+      - main
+    paths:
+      - "takx/mdbtools-cache/**"
+      - ".github/workflows/mdbtools-cache.yaml"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the prebuilt TAKX MDBTools 1.0.0 static PIC OCI cache to GHCR
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: takx-mdbtools-cache-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-and-qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline MDBTools cache verifier tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/mdbtools-cache/verify.py --phase verify
+          python3 -B -m unittest discover -s takx/mdbtools-cache -p test_verify.py -v
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build MDBTools 1.0.0 static PIC OCI artifact locally
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: takx/mdbtools-cache
+          file: takx/mdbtools-cache/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: takx-native-mdbtools:smoke
+          cache-from: type=gha,scope=takx-native-mdbtools
+          cache-to: type=gha,mode=max,scope=takx-native-mdbtools
+
+      - name: Extract and qualify restored MDBTools prefix inside prebuilt takx-gl-runner
+        timeout-minutes: 5
+        run: |
+          set -eu
+          cid="$(docker create takx-native-mdbtools:smoke /mdbtools)"
+          mkdir -p "${RUNNER_TEMP}/restored-mdbtools"
+          docker cp "${cid}:/mdbtools/." "${RUNNER_TEMP}/restored-mdbtools/"
+          docker rm "${cid}"
+          python3 -B takx/mdbtools-cache/verify.py --phase check-prefix --prefix "${RUNNER_TEMP}/restored-mdbtools"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}/takx/mdbtools-cache:/src:ro" \
+            -v "${RUNNER_TEMP}/restored-mdbtools:/opt/mdbtools:ro" \
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
+            bash -euo pipefail -c '
+              gcc -std=c99 -Wall -Wextra -Werror -O2 \
+                -I/opt/mdbtools/include /src/mdb_control.c /opt/mdbtools/lib/libmdb.a -lm \
+                -o /tmp/mdb_control
+              /tmp/mdb_control
+            '
+
+      - name: Retain verified MDBTools cache receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-mdbtools-cache-receipt
+          path: ${{ runner.temp }}/restored-mdbtools/mdbtools-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: build-and-qualify
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push prebuilt TAKX MDBTools 1.0.0 OCI cache
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: takx/mdbtools-cache
+          file: takx/mdbtools-cache/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/jonathanagustin/uds-takserver/takx-native-mdbtools:1.0.0-amd64
+            ghcr.io/jonathanagustin/uds-takserver/takx-native-mdbtools:sha-${{ github.sha }}
+          cache-from: type=gha,scope=takx-native-mdbtools
+          cache-to: type=gha,mode=max,scope=takx-native-mdbtools
+
+      - name: Attest OCI cache build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-name: ghcr.io/jonathanagustin/uds-takserver/takx-native-mdbtools
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
