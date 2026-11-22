@@ -64,16 +64,19 @@ def generate_keypair(prefix, directory, name):
                     break
                 buf += chunk
                 lower = buf.lower()
-                if sent == 0 and b'password' in lower:
+                if sent == 0 and b'password):' in lower:
                     os.write(master, b'\r')
                     sent = 1
                     buf = b''
-                elif sent == 1 and (b'again' in lower or b'password' in lower):
+                elif sent == 1 and b'again' in lower and b'password):' in lower:
                     os.write(master, b'\r')
                     sent = 2
                     buf = b''
         proc.wait(timeout=10)
     finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
         os.close(master)
     if proc.returncode != 0:
         raise RuntimeError(f'gen-key failed; exit={proc.returncode}')
