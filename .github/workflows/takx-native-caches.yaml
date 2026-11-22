@@ -84,6 +84,14 @@ jobs:
             tag: 1.1-amd64
             control: asyncplusplus_control.cpp
             link_args: "/opt/cache/lib/libasync++.a -lpthread"
+          - component: tinyxml2
+            tag: 10.0.0-amd64
+            control: tinyxml2_control.cpp
+            link_args: "/opt/cache/lib/libtinyxml2.a"
+          - component: libjpeg-turbo
+            tag: 3.0.3-amd64
+            control: libjpeg_turbo_control.c
+            link_args: "/opt/cache/lib/libjpeg.a -lm"
     name: qualify (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -195,6 +203,10 @@ jobs:
             tag: 0.20-amd64
           - component: asyncplusplus
             tag: 1.1-amd64
+          - component: tinyxml2
+            tag: 10.0.0-amd64
+          - component: libjpeg-turbo
+            tag: 3.0.3-amd64
     name: publish (${{ matrix.component }})
     steps:
       - name: Checkout source
