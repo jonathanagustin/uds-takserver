@@ -20,6 +20,7 @@ on:
       - "takx/native-las/**"
       - "takx/sqlite-jdbc/**"
       - "takx/ui-java/**"
+      - "takx/worldwind-java/**"
       - ".github/workflows/takx-gl-qualification.yaml"
   workflow_dispatch:
 
@@ -776,6 +777,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload verified gis-java build output for downstream Java qualification
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-gis-java-build-output
+          path: ${{ runner.temp }}/takx-gis-java-hosted/build
+          if-no-files-found: error
+          retention-days: 1
+
   qualify-native-gdal-jni:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -870,5 +879,56 @@ jobs:
         with:
           name: takx-native-gdal-jni-hosted-receipt
           path: ${{ runner.temp }}/takx-native-gdal-jni-hosted/hosted-native-gdal-jni-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-worldwind-java:
+    needs: qualify-gis-java
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline worldwind-java verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/worldwind-java/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/worldwind-java -p 'test_*.py' -v
+
+      - name: Download verified gis-java build output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-gis-java-build-output
+          path: ${{ runner.temp }}/gis-java-build
+
+      - name: Fetch pinned upstream NASA WorldWindJava commit
+        timeout-minutes: 4
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/pinned-worldwind"
+          git -C "${RUNNER_TEMP}/pinned-worldwind" init -q
+          git -C "${RUNNER_TEMP}/pinned-worldwind" remote add origin https://github.com/NASAWorldWind/WorldWindJava.git
+          git -C "${RUNNER_TEMP}/pinned-worldwind" fetch --depth 1 origin 9ccf6b8ed2ae452ef51e7b1739a7ffd4ef78a403
+          git -C "${RUNNER_TEMP}/pinned-worldwind" checkout -q FETCH_HEAD
+
+      - name: Build standard and interop WorldWind Java JARs live on Linux JDK 17
+        timeout-minutes: 10
+        run: |
+          python3 -B takx/worldwind-java/run_hosted_controls.py \
+            --phase qualify \
+            --worldwind-source "${RUNNER_TEMP}/pinned-worldwind" \
+            --gis-build "${RUNNER_TEMP}/gis-java-build" \
+            --output "${RUNNER_TEMP}/takx-worldwind-java-hosted"
+
+      - name: Retain verified worldwind-java hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-worldwind-java-hosted-receipt
+          path: ${{ runner.temp }}/takx-worldwind-java-hosted/hosted-worldwind-java-receipt.json
           if-no-files-found: error
           retention-days: 14
