@@ -112,6 +112,19 @@ COMPONENTS = {
             "COPYING",
         ),
     },
+    "protobuf": {
+        "version": "3.21.0",
+        "archive_sha256": "28e74a8a241a91c0a6aec997d0d6efda9bc0baa0ed7acfaf392555b88bca8b7c",
+        "license_sha256": "6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7a83130fea7d",
+        "control_file": "protobuf_control.cpp",
+        "control_marker": "protobuf_static_pic_control=true",
+        "required_artifacts": (
+            "lib/libprotobuf-lite.a",
+            "bin/protoc",
+            "include/google/protobuf/stubs/common.h",
+            "LICENSE",
+        ),
+    },
 }
 
 
