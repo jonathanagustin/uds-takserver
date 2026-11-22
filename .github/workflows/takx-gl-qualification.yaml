@@ -17,6 +17,7 @@ on:
       - "takx/gis-java/data/**"
       - "takx/mission-package/**"
       - "takx/native-las/**"
+      - "takx/sqlite-jdbc/**"
       - "takx/ui-java/**"
       - ".github/workflows/takx-gl-qualification.yaml"
   workflow_dispatch:
@@ -660,5 +661,62 @@ jobs:
         with:
           name: takx-native-las-hosted-receipt
           path: ${{ runner.temp }}/takx-native-las-hosted/hosted-native-las-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-sqlite-jdbc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline sqlite-jdbc verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/sqlite-jdbc/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/sqlite-jdbc -p 'test_*.py' -v
+
+      - name: Ensure tclsh, zip, and unzip are installed
+        timeout-minutes: 3
+        run: |
+          set -eu
+          if ! command -v tclsh >/dev/null || ! command -v zip >/dev/null || ! command -v unzip >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends tcl unzip zip
+          fi
+
+      - name: Extract prebuilt sqlcipher and openssl OCI caches
+        timeout-minutes: 3
+        run: |
+          set -eu
+          for spec in \
+            "sqlcipher:4.5.7-amd64" \
+            "openssl:3.5.9-amd64"; do
+            name="${spec%%:*}"
+            tag="${spec#*:}"
+            cid="$(docker create "ghcr.io/jonathanagustin/uds-takserver/takx-native-${name}:${tag}" "/${name}")"
+            mkdir -p "${RUNNER_TEMP}/${name}"
+            docker cp "${cid}:/${name}/." "${RUNNER_TEMP}/${name}/"
+            docker rm "${cid}"
+          done
+
+      - name: Run SQLite JDBC source build and SQLCipher load-order controls live on Linux x86_64
+        timeout-minutes: 10
+        run: |
+          python3 -B takx/sqlite-jdbc/run_hosted_controls.py \
+            --phase qualify \
+            --java-home "${JAVA_HOME_17_X64}" \
+            --sqlcipher-prefix "${RUNNER_TEMP}/sqlcipher" \
+            --openssl-prefix "${RUNNER_TEMP}/openssl" \
+            --output "${RUNNER_TEMP}/takx-sqlite-jdbc-hosted"
+
+      - name: Retain verified sqlite-jdbc hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-sqlite-jdbc-hosted-receipt
+          path: ${{ runner.temp }}/takx-sqlite-jdbc-hosted/hosted-sqlite-jdbc-receipt.json
           if-no-files-found: error
           retention-days: 14
