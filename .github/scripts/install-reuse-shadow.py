@@ -25,6 +25,10 @@ POLICY_FILES = (WORKFLOW, '.github/scripts/install-receipt.py',
                 '.github/scripts/collect-install-receipt.py',
                 '.github/scripts/install-artifact-inputs.py',
                 '.github/scripts/checkpoint-identity.py', '.github/scripts/dev-package.sh')
+ALLOWED_RUNNERS = {
+    'amd64': frozenset({'ubuntu-22.04', 'ubuntu-24.04', 'ubuntu-26.04'}),
+    'arm64': frozenset({'ubuntu-22.04-arm', 'ubuntu-24.04-arm', 'ubuntu-26.04-arm'}),
+}
 MAX_BYTES = 4 * 1024 * 1024
 MAX_PAGES = 10
 COMMAND_TIMEOUT = 45
@@ -287,7 +291,7 @@ def current_run(api, receipt, workflow, head):
     return run
 
 
-def qualify(api, receipt, raw, verified, pr_number, target, policy_ref):
+def _qualify_with_job(api, receipt, raw, verified, pr_number, target, policy_ref):
     """Pure read-only policy over injected API/crypto evidence; no skip output exists."""
     validate_receipt(receipt)
     validate_signature(verified, raw, receipt, pr_number)
@@ -340,10 +344,33 @@ def qualify(api, receipt, raw, verified, pr_number, target, policy_ref):
     # the selected attempt and all competing runs after authenticating bytes.
     # This is a point-in-time observation, never an atomic reuse authorization.
     current_run(api, receipt, workflow, pr['head']['sha'])
-    return {'source_run': run['id'], 'attempt': run['run_attempt'], 'job_id': selected[0]['id'],
-            'artifact_id': found[0]['id'], 'scenario': scenario['name'],
-            'architecture': scenario['architecture'], 'tested_commit': source['sha'],
-            'tested_tree': source['tree']['sha'], 'target_commit': target}
+    evidence = {'source_run': run['id'], 'attempt': run['run_attempt'], 'job_id': selected[0]['id'],
+                'artifact_id': found[0]['id'], 'scenario': scenario['name'],
+                'architecture': scenario['architecture'], 'tested_commit': source['sha'],
+                'tested_tree': source['tree']['sha'], 'target_commit': target}
+    return evidence, selected[0]
+
+
+def qualify(api, receipt, raw, verified, pr_number, target, policy_ref):
+    """Pure read-only policy over injected API/crypto evidence; no skip output exists."""
+    evidence, _ = _qualify_with_job(api, receipt, raw, verified, pr_number, target, policy_ref)
+    return evidence
+
+
+def compare_execution_class(job, architecture, expected_runner):
+    """Compare historical GitHub-hosted runner class against expected runner; never authorizes reuse."""
+    allowed = ALLOWED_RUNNERS.get(architecture)
+    require(allowed is not None and isinstance(expected_runner, str) and expected_runner in allowed,
+            'execution-class-expected-runner-invalid')
+    require(isinstance(job, dict) and job.get('runner_group_name') == 'GitHub Actions',
+            'execution-class-runner-group-invalid')
+    labels = job.get('labels')
+    require(isinstance(labels, list) and len(labels) == 1 and isinstance(labels[0], str) and
+            labels[0] in allowed, 'execution-class-job-labels-invalid')
+    return {'historical_runner': labels[0], 'expected_runner': expected_runner,
+            'runner_group': job['runner_group_name'],
+            'execution_class_equal': labels[0] == expected_runner,
+            'reuse_authorized': False}
 
 
 def compare_prospective(receipt, prospective, target):
@@ -373,7 +400,7 @@ def compare_prospective(receipt, prospective, target):
         raise Unavailable('prospective-schema-invalid') from None
 
 
-def shadow(api, raw, verified, pr, target, policy, prospective=None):
+def shadow(api, raw, verified, pr, target, policy, prospective=None, expected_runner=None):
     result = {'schema_version': 1, 'mode': 'shadow', 'reuse_authorized': False,
               'decision': 'execute-fresh', 'evidence_qualified': False,
               'blockers': ['prospective-input-equivalence-not-proven',
@@ -383,12 +410,17 @@ def shadow(api, raw, verified, pr, target, policy, prospective=None):
     try:
         require(len(raw) <= 64 * 1024, 'receipt-too-large')
         receipt = json.loads(raw, object_pairs_hook=unique_fields)
-        result['evidence'] = qualify(api, receipt, raw, verified, pr, target, policy)
+        result['evidence'], selected_job = _qualify_with_job(api, receipt, raw, verified, pr, target, policy)
         result['evidence_qualified'] = True
         if prospective is not None:
             result['prospective_comparison'] = compare_prospective(receipt, prospective, target)
             if not result['prospective_comparison']['inputs_equal']:
                 result['blockers'].insert(0, 'prospective-inputs-differ')
+        if expected_runner is not None:
+            result['execution_class_comparison'] = compare_execution_class(
+                selected_job, receipt['scenario']['architecture'], expected_runner)
+            if not result['execution_class_comparison']['execution_class_equal']:
+                result['blockers'].insert(0, 'execution-class-differs')
     except Unavailable as exc:
         result['blockers'].insert(0, str(exc))
     except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
@@ -413,6 +445,7 @@ def main():
     parser.add_argument('--target', required=True, help='Exact proposed pushed squash commit SHA')
     parser.add_argument('--policy-ref', required=True, help='Exact independently reviewed producer/workflow commit')
     parser.add_argument('--prospective', type=Path, help='Actual acquired-input snapshot; never authorizes reuse')
+    parser.add_argument('--expected-runner', help='Expected hosted runner label; never authorizes reuse')
     parser.add_argument('--gh', default='gh', help='GitHub CLI with attestation verification support')
     args = parser.parse_args()
     result = None
@@ -438,7 +471,8 @@ def main():
                                 '--signer-digest', receipt['source']['checkout_commit']])
         prospective = (json.loads(bounded_file(args.prospective, 16384), object_pairs_hook=unique_fields)
                        if args.prospective else None)
-        result = shadow(GitHub(args.gh), raw, verified, args.pr, args.target, args.policy_ref, prospective)
+        result = shadow(GitHub(args.gh), raw, verified, args.pr, args.target, args.policy_ref,
+                        prospective, args.expected_runner)
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, Unavailable):
         result = {'schema_version': 1, 'mode': 'shadow', 'reuse_authorized': False,
                   'decision': 'execute-fresh', 'evidence_qualified': False,
