@@ -125,6 +125,14 @@ COMPONENTS = {
             "LICENSE",
         ),
     },
+    "uriparser": {
+        "version": "0.9.8",
+        "archive_sha256": "d6289387eaf2495e38ed80d709ad673fe04d63fad707badfee96f3d2dabc7c35",
+        "license_sha256": "287f09e6546a9610f949f89e8fb937cacfeabd7bfaa8c8a0c18312193bf04ad3",
+        "control_file": "uriparser_control.c",
+        "control_marker": "uriparser_static_pic_control=true",
+        "required_artifacts": ("lib/liburiparser.a", "include/uriparser/Uri.h", "COPYING"),
+    },
 }
 
 
