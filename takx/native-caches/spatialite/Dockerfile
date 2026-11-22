@@ -72,6 +72,7 @@ pdest.write_bytes(norm)
 PY
 
 RUN set -x; \
+    rm -f /opt/*/lib/*.la /geos/lib/*.la; \
     patch -d /build/libspatialite-4.3.0a --fuzz=0 --batch --no-backup-if-mismatch -p1 -i /build/libspatialite-pgsc.patch; \
     gcc -O2 -o /build/connection-cache-generator \
       /build/libspatialite-4.3.0a/src/connection_cache/generator/code_generator.c; \
