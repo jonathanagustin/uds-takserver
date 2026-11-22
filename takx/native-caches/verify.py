@@ -239,6 +239,14 @@ COMPONENTS = {
             "LICENSE",
         ),
     },
+    "libiconv": {
+        "version": "1.15",
+        "archive_sha256": "ccf536620a45458d26ba83887a983b96827001e92a13847b45e4925cc8913178",
+        "license_sha256": "56bdea73b6145ef6ac5259b3da390b981d840c24cb03b8e1cbc678de7ecfa18d",
+        "control_file": "libiconv_control.c",
+        "control_marker": "libiconv_static_pic_control=true",
+        "required_artifacts": ("lib/libiconv.a", "include/iconv.h", "COPYING.LIB"),
+    },
     "sqlite3": {
         "version": "3.46.0",
         "archive_sha256": "6f8e6a7b335273748816f9b3b62bbdc372a889de8782d7f048c653a447417a7d",
