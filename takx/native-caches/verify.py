@@ -255,6 +255,50 @@ COMPONENTS = {
         "control_marker": "sqlite3_static_pic_control=true",
         "required_artifacts": ("lib/libsqlite3.a", "include/sqlite3.h", "README.txt"),
     },
+    "ktx": {
+        "version": "4.3.1",
+        "archive_sha256": "98f051c91e723f85f3a5136a75dfa0ee186d72cc93223fd0daa1b3c8077ccb69",
+        "license_sha256": "0f92b4ce771585dfebc963ede074a30b4431b9e327911db44097d83ccf372128",
+        "control_file": "ktx_control.c",
+        "control_marker": "ktx_static_pic_control=true",
+        "required_artifacts": ("lib/libktx.a", "include/ktx.h", "LICENSE.md"),
+    },
+    "s2geometry": {
+        "version": "0.11.1",
+        "archive_sha256": "bdbeb8ebdb88fa934257caf81bb44b55711617a3ab4fdec2c3cfd6cc31b61734",
+        "license_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "control_file": "s2geometry_control.cpp",
+        "control_marker": "s2geometry_static_pic_control=true",
+        "required_artifacts": ("lib/libs2.a", "include/s2/s2cell_id.h", "LICENSE"),
+    },
+    "libxml2": {
+        "version": "2.13.3",
+        "archive_sha256": "0805d7c180cf09caad71666c7a458a74f041561a532902454da5047d83948138",
+        "license_sha256": "c99aae1afe013e50b8b3701e089222b351258043c3025b64053a233fd25b4be7",
+        "control_file": "libxml2_control.c",
+        "control_marker": "libxml2_static_pic_control=true",
+        "required_artifacts": (
+            "lib/libxml2.a",
+            "include/libxml2/libxml/parser.h",
+            "Copyright",
+        ),
+    },
+    "proj": {
+        "version": "4.9.1",
+        "archive_sha256": "fca0388f3f8bc5a1a803d2f6ff30017532367992b30cf144f2d39be88f36c319",
+        "license_sha256": "2dcac4af6990093ef48b896bfb81452d46a31b08d46cce34b27e83f93b2e37f6",
+        "control_file": "proj_control.c",
+        "control_marker": "proj_static_pic_control=true",
+        "required_artifacts": ("lib/libproj.a", "include/proj_api.h", "COPYING"),
+    },
+    "geos": {
+        "version": "3.4.3",
+        "archive_sha256": "cfbf68079117c1c2b76411636444ff41d73c31093c4cab9dcc9a8c1bbe7e3897",
+        "license_sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+        "control_file": "geos_control.c",
+        "control_marker": "geos_static_pic_control=true",
+        "required_artifacts": ("lib/libgeos.a", "lib/libgeos_c.a", "include/geos_c.h", "COPYING"),
+    },
 }
 
 

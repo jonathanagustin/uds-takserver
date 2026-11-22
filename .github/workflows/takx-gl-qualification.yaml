@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - "takx/gl-qualification/**"
+      - "takx/kernel-texture/**"
       - ".github/workflows/takx-gl-qualification.yaml"
   workflow_dispatch:
 
@@ -47,5 +48,46 @@ jobs:
         with:
           name: takx-gl-qualification-receipt
           path: ${{ runner.temp }}/takx-gl-qualification/gl-qualification-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-kernel-texture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline kernel-texture unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/kernel-texture/run_hosted_gl.py --phase verify
+          python3 -B -m unittest discover -s takx/kernel-texture -p 'test_*.py' -v
+
+      - name: Extract prebuilt GLES cache and run hosted kernel-texture GL controls
+        timeout-minutes: 5
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/gles" "${RUNNER_TEMP}/kernel-texture-gl"
+          cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-gles:1.7.0-amd64 /nonexistent)"
+          trap 'docker rm -f "${cid}" >/dev/null 2>&1 || true' EXIT
+          docker cp "${cid}:/glvnd/." "${RUNNER_TEMP}/gles/"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work:ro" \
+            -v "${RUNNER_TEMP}/gles:/opt/gles:ro" \
+            -v "${RUNNER_TEMP}/kernel-texture-gl:/out" \
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
+            python3 -B /work/takx/kernel-texture/run_hosted_gl.py \
+              --phase run \
+              --gles-prefix /opt/gles \
+              --receipt /out/hosted-gl-receipt.json
+
+      - name: Retain verified kernel-texture hosted GL receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-kernel-texture-hosted-gl-receipt
+          path: ${{ runner.temp }}/kernel-texture-gl/hosted-gl-receipt.json
           if-no-files-found: error
           retention-days: 14
