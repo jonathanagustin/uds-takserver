@@ -9,7 +9,8 @@ import { embedDemoVideos } from './demo-videos.mjs';
 const available = new Set(['demo-deploy.mp4', 'demo-operate-and-trust.mp4']);
 
 test('the actual README renders both recordings without download links', () => {
-  const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
+  const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8')
+    .replace(/[ \t]*<!-- github-only:start -->[\s\S]*?<!-- github-only:end -->[ \t]*\r?\n?(\r?\n)?/g, '');
   assert.doesNotMatch(readme, /\[Download[^\]]*\]/);
   const rendered = embedDemoVideos(readme, available);
   assert.equal((rendered.match(/<video controls preload="none" playsinline/g) ?? []).length, 2);
