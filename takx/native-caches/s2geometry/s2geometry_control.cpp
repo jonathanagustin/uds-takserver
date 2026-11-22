@@ -2,8 +2,15 @@
  * SPDX-License-Identifier: GPL-3.0-only
  */
 
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wclass-memaccess"
+#endif
 #include <s2/s2cell_id.h>
 #include <s2/s2latlng.h>
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 #include <cmath>
 #include <cstdio>
