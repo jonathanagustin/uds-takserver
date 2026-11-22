@@ -198,7 +198,7 @@ jobs:
           git -C "${RUNNER_TEMP}/pinned-kernel" fetch --depth 1 origin 9f6893dd657feacc35ec5de03dad721c2e44170e
           git -C "${RUNNER_TEMP}/pinned-kernel" checkout -q FETCH_HEAD
 
-          curl -fsSL \
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
             https://repo1.maven.org/maven2/jakarta/annotation/jakarta.annotation-api/2.1.1/jakarta.annotation-api-2.1.1.jar \
             -o "${RUNNER_TEMP}/pinned-deps/jakarta.annotation-api-2.1.1.jar"
 

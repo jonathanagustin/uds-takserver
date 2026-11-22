@@ -13,6 +13,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 
 HERE = Path(__file__).resolve().parent
@@ -117,6 +119,37 @@ def run_cmd(argv: list[str], *, cwd: Path | None = None, timeout: int = 180) -> 
     return proc.stdout
 
 
+def fetch_with_retry(url: str, dest: Path, attempts: int = 5) -> None:
+    curl = shutil.which("curl")
+    if curl:
+        run_cmd(
+            [
+                curl,
+                "-fsSL",
+                "--retry",
+                str(attempts),
+                "--retry-all-errors",
+                "--retry-delay",
+                "2",
+                url,
+                "-o",
+                str(dest),
+            ],
+            timeout=120,
+        )
+        return
+    req = urllib.request.Request(url, headers={"User-Agent": "uds-takserver-ci/1.0"})
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                dest.write_bytes(resp.read())
+            return
+        except urllib.error.HTTPError:
+            if attempt == attempts:
+                raise
+            time.sleep(2 * attempt)
+
+
 def qualify(official_source: Path, output: Path, cxx: str) -> dict:
     official = official_source.resolve(strict=True)
     out = output.resolve()
@@ -190,7 +223,7 @@ def qualify(official_source: Path, output: Path, cxx: str) -> dict:
     cp_lock = json.loads(PORT_CLASSPATH_LOCK.read_text(encoding="utf-8"))
     slf4j_entry = cp_lock[SLF4J_JAR_NAME]
     slf4j_jar = out / SLF4J_JAR_NAME
-    urllib.request.urlretrieve(slf4j_entry["url"], slf4j_jar)
+    fetch_with_retry(slf4j_entry["url"], slf4j_jar)
     actual_slf4j_sha = sha256_file(slf4j_jar)
     if actual_slf4j_sha != slf4j_entry["sha256"]:
         raise ValueError(
