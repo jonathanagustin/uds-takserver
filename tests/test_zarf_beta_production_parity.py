@@ -245,6 +245,37 @@ class ProductionBetaRenderParityTests(unittest.TestCase):
         self.assertEqual(tak_ann.get("backup.velero.io/backup-volumes"), "data")
         self.assertEqual(cloud_ann.get("backup.velero.io/backup-volumes"), "data")
 
+    def test_chart_overrides_and_health_disabled_match_production_v1alpha1(self):
+        vals = [
+            "health.enabled=false",
+            "tak.imageTag=8.8-RELEASE-8",
+            "chartOverrides.takserver.uds-takserver-config.backup.dump.enabled=true",
+            "chartOverrides.cloudtak.uds-cloudtak.backup.dump.enabled=true",
+        ]
+        _alpha_out, alpha_docs = pv.render(values=vals)
+        beta_out, beta_docs = _render_dir(self.beta_dir, values=vals)
+        self.assertNotIn("###ZARF_VAR_", beta_out)
+        self.assertEqual(_identities(beta_docs), _identities(alpha_docs))
+        names = {(d.get("kind"), (d.get("metadata") or {}).get("name")) for d in beta_docs}
+        self.assertNotIn(("Deployment", "tak-health"), names)
+        self.assertIn(("CronJob", "tak-db-dump"), names)
+        self.assertIn(("CronJob", "cloudtak-db-dump"), names)
+        tak_dump = pv.find(beta_docs, "CronJob", "tak-db-dump")["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
+        cloud_dump = pv.find(beta_docs, "CronJob", "cloudtak-db-dump")["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
+        self.assertTrue(tak_dump["image"].endswith(":8.8-RELEASE-8"))
+        self.assertTrue(cloud_dump["image"].endswith(":8.8-RELEASE-8"))
+
+    def test_values_schema_rejects_invalid_backup_owner_in_v1beta1(self):
+        result = subprocess.run(
+            [
+                "uds", "zarf", "dev", "inspect", "manifests", ".", "--flavor", "upstream",
+                "--no-color", "--log-level", "warn",
+                "--set-values", "backup.filesystem.owner=invalid",
+            ],
+            cwd=self.beta_dir, check=False, capture_output=True, text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
