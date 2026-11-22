@@ -197,13 +197,23 @@ def run_hosted_qualification(gles_prefix: Path, receipt_path: Path | None) -> di
         env["LIBGL_ALWAYS_SOFTWARE"] = "1"
         env["GALLIUM_DRIVER"] = "llvmpipe"
         env["LD_LIBRARY_PATH"] = f"{gles_lib}:{env.get('LD_LIBRARY_PATH', '')}".rstrip(":")
+        vendor_dir = Path("/usr/share/glvnd/egl_vendor.d")
+        if vendor_dir.is_dir():
+            env.setdefault("__EGL_VENDOR_LIBRARY_DIRS", str(vendor_dir))
+            mesa_json = vendor_dir / "50_mesa.json"
+            if mesa_json.is_file():
+                env.setdefault("__EGL_VENDOR_LIBRARY_FILENAMES", str(mesa_json))
         pixel_proc = subprocess.run(
             [str(pixel_bin)],
             env=env,
             capture_output=True,
             text=True,
-            check=True,
         )
+        if pixel_proc.returncode != 0:
+            raise RuntimeError(
+                f"pixel-test failed (rc={pixel_proc.returncode}): "
+                f"stdout={pixel_proc.stdout!r} stderr={pixel_proc.stderr!r}"
+            )
 
     receipt = {
         "schema": SCHEMA,
