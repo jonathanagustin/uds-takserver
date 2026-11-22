@@ -59,6 +59,18 @@ class HostedMissionPackageControlsTests(unittest.TestCase):
                     "--output", str(takx / "nested"),
                 ])
 
+    def test_maven_central_candidate_urls_include_google_mirror(self):
+        runner = load_runner()
+        urls = runner.candidate_urls("https://repo1.maven.org/maven2/org/slf4j/slf4j-api/2.0.17/slf4j-api-2.0.17.jar")
+        self.assertEqual(
+            urls,
+            [
+                "https://maven-central.storage-download.googleapis.com/maven2/org/slf4j/slf4j-api/2.0.17/slf4j-api-2.0.17.jar",
+                "https://repo1.maven.org/maven2/org/slf4j/slf4j-api/2.0.17/slf4j-api-2.0.17.jar",
+                "https://repo.maven.apache.org/maven2/org/slf4j/slf4j-api/2.0.17/slf4j-api-2.0.17.jar",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
