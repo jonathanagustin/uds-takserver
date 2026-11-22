@@ -231,6 +231,34 @@ class PackageValuesTests(unittest.TestCase):
         self.assertEqual(tak["spec"]["storageClassName"], "tak-class")
         self.assertEqual(cloud["spec"]["storageClassName"], "cloudtak-class")
 
+    def test_storage_class_package_values_override_variables(self):
+        _out, docs = render(
+            variables=[
+                "POSTGRES_STORAGE_CLASS=legacy-tak",
+                "CLOUDTAK_STORAGE_CLASS=legacy-cloud",
+            ],
+            values=[
+                "storage.postgresClass=beta-tak",
+                "storage.cloudtakClass=beta-cloud",
+            ],
+        )
+        tak = find(docs, "StatefulSet", "takserver-postgresql")["spec"]["volumeClaimTemplates"][0]
+        cloud = find(docs, "StatefulSet", "cloudtak-postgis")["spec"]["volumeClaimTemplates"][0]
+        self.assertEqual(tak["spec"]["storageClassName"], "beta-tak")
+        self.assertEqual(cloud["spec"]["storageClassName"], "beta-cloud")
+
+    def test_filesystem_backup_package_values_enable_and_select_owner(self):
+        _out, docs = render(
+            variables=["FILESYSTEM_BACKUP=false", "FILESYSTEM_BACKUP_OWNER=local"],
+            values=["backup.filesystem.enabled=true", "backup.filesystem.owner=core"],
+        )
+        tak_ann = find(docs, "StatefulSet", "takserver-postgresql")["spec"]["template"]["metadata"]["annotations"]
+        cloud_ann = find(docs, "StatefulSet", "cloudtak-postgis")["spec"]["template"]["metadata"]["annotations"]
+        self.assertEqual(tak_ann.get("backup.velero.io/backup-volumes"), "data")
+        self.assertEqual(cloud_ann.get("backup.velero.io/backup-volumes"), "data")
+        daemonsets = [d for d in docs if d.get("kind") == "DaemonSet" and d.get("metadata", {}).get("name") == "node-agent"]
+        self.assertEqual(daemonsets, [])
+
     def test_a_package_value_overrides_the_variable(self):
         out, docs = render(variables=["DOMAIN=example.com"], values=["global.domain=values.example"])
         self.assert_domain(out, docs, "values.example")
