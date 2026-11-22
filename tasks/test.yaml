@@ -23,6 +23,7 @@ tasks:
       - task: cloudtak
       - task: ui
       - task: flows
+      - task: zero-trust
       - task: usage
       - task: cert-rotation
       - task: nats
@@ -656,6 +657,16 @@ tasks:
           if uds zarf tools kubectl get package cloudtak -n cloudtak >/dev/null 2>&1; then
             TAK_NAMESPACE=cloudtak python3 ./tests/flows.py --check
           fi
+
+  - name: zero-trust
+    description: Verify UDS-native east-west SPIFFE identity and plaintext 8080 denial live in the cluster
+    actions:
+      - shell:
+          linux: bash
+          darwin: bash
+        cmd: |
+          set -euo pipefail
+          python3 ./tests/zero-trust.py
 
   # @lulaStart b1f7cb05-0c51-51e0-a1ed-7c7633245bd6
   - name: logs

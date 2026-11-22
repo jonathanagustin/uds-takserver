@@ -348,6 +348,10 @@ jobs:
             tag: 2.13.3-amd64
             control: libxml2_control.c
             link_args: "/opt/cache/lib/libxml2.a /opt/libiconv/lib/libiconv.a -lm -lpthread"
+          - component: libkml
+            tag: 1.3.0-amd64
+            control: libkml_control.cpp
+            link_args: "/opt/cache/lib/libkmlengine.a /opt/cache/lib/libkmldom.a /opt/cache/lib/libkmlbase.a /opt/cache/lib/libminizip.a /opt/expat/lib/libexpat.a /opt/uriparser/lib/liburiparser.a /opt/zlib/lib/libz.a -lm"
     name: qualify (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -418,11 +422,21 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/dep-libiconv"
           docker cp "${iconv_cid}:/libiconv/." "${RUNNER_TEMP}/dep-libiconv/"
           docker rm "${iconv_cid}"
+          expat_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-expat:2.10.0-amd64 /expat)"
+          mkdir -p "${RUNNER_TEMP}/dep-expat"
+          docker cp "${expat_cid}:/expat/." "${RUNNER_TEMP}/dep-expat/"
+          docker rm "${expat_cid}"
+          uriparser_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-uriparser:0.9.8-amd64 /uriparser)"
+          mkdir -p "${RUNNER_TEMP}/dep-uriparser"
+          docker cp "${uriparser_cid}:/uriparser/." "${RUNNER_TEMP}/dep-uriparser/"
+          docker rm "${uriparser_cid}"
           extra_inc="-I/opt/openssl/include"
           if [ "${COMPONENT}" = "ngtcp2" ]; then
             extra_inc="-I/opt/quictls/include"
           elif [ "${COMPONENT}" = "libxml2" ]; then
             extra_inc="-I/opt/cache/include/libxml2 -I/opt/libiconv/include"
+          elif [ "${COMPONENT}" = "libkml" ]; then
+            extra_inc="-I/opt/expat/include -I/opt/uriparser/include"
           fi
           docker run --rm \
             -e CONTROL="${CONTROL}" \
@@ -437,6 +451,8 @@ jobs:
             -v "${RUNNER_TEMP}/dep-zstd:/opt/zstd:ro" \
             -v "${RUNNER_TEMP}/dep-abseil:/opt/abseil:ro" \
             -v "${RUNNER_TEMP}/dep-libiconv:/opt/libiconv:ro" \
+            -v "${RUNNER_TEMP}/dep-expat:/opt/expat:ro" \
+            -v "${RUNNER_TEMP}/dep-uriparser:/opt/uriparser:ro" \
             ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
             bash -euo pipefail -c '
               # shellcheck disable=SC2086
@@ -494,6 +510,191 @@ jobs:
             tag: 0.11.1-amd64
           - component: libxml2
             tag: 2.13.3-amd64
+          - component: libkml
+            tag: 1.3.0-amd64
+    name: publish (${{ matrix.component }})
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push prebuilt ${{ matrix.component }} OCI cache
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: takx/native-caches/${{ matrix.component }}
+          file: takx/native-caches/${{ matrix.component }}/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/jonathanagustin/uds-takserver/takx-native-${{ matrix.component }}:${{ matrix.tag }}
+            ghcr.io/jonathanagustin/uds-takserver/takx-native-${{ matrix.component }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=takx-native-${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=takx-native-${{ matrix.component }}
+
+      - name: Attest OCI cache build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-name: ghcr.io/jonathanagustin/uds-takserver/takx-native-${{ matrix.component }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  build-and-qualify-layer2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: liblas
+            tag: 1.8.2-amd64
+            control: liblas_control.cpp
+            link_args: "-L/opt/cache/lib -Wl,--disable-new-dtags,-rpath,/opt/cache/lib -llas_c -llas -pthread -ldl"
+          - component: commoncommo
+            tag: 1.17.2-amd64
+            control: commoncommo_control.cpp
+            link_args: "/opt/cache/lib/libcommoncommo.a /opt/cache/lib/libcurl.a /opt/commo-deps/lib/libmicrohttpd.a /opt/commo-deps/lib/libxml2.a /opt/commo-deps/lib/libiconv.a /opt/commo-deps/lib/libprotobuf-lite.a /opt/commo-deps/lib/libngtcp2_crypto_quictls.a /opt/commo-deps/lib/libngtcp2.a /opt/commo-deps/lib/libnghttp2.a /opt/commo-deps/lib/libssl.a /opt/commo-deps/lib/libcrypto.a /opt/commo-deps/lib/libz.a -lpthread -ldl -lm"
+          - component: gdal
+            tag: 2.4.4-amd64
+            control: gdal_control.cpp
+            link_args: "/opt/cache/lib/libgdal.a -Wl,--start-group /opt/commo-deps/lib/libproj.a /opt/commo-deps/lib/libkmlengine.a /opt/commo-deps/lib/libkmldom.a /opt/commo-deps/lib/libkmlbase.a /opt/commo-deps/lib/libkmlconvenience.a /opt/commo-deps/lib/libkmlregionator.a /opt/commo-deps/lib/libkmlxsd.a /opt/commo-deps/lib/libminizip.a /opt/commo-deps/lib/liburiparser.a /opt/commo-deps/lib/libexpat.a /opt/commo-deps/lib/libz.a -Wl,--end-group -lpthread -ldl -lm"
+          - component: spatialite
+            tag: 4.3.0a-amd64
+            control: spatialite_control.c
+            link_args: "/opt/cache/lib/libspatialite.a /opt/commo-deps/lib/libxml2.a /opt/commo-deps/lib/libiconv.a /opt/commo-deps/lib/libz.a /opt/commo-deps/lib/libgeos_c.a /opt/commo-deps/lib/libgeos.a /opt/commo-deps/lib/libproj.a /opt/commo-deps/lib/libsqlite3.a /opt/commo-deps/lib/libcrypto.a -lstdc++ -lpthread -ldl -lm"
+    name: qualify (${{ matrix.component }})
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline native cache verifier tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/native-caches/verify.py --phase verify --component "${{ matrix.component }}"
+          python3 -B -m unittest discover -s takx/native-caches -p test_verify.py -v
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build ${{ matrix.component }} OCI cache locally
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: takx/native-caches/${{ matrix.component }}
+          file: takx/native-caches/${{ matrix.component }}/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: takx-native-${{ matrix.component }}:smoke
+          cache-from: type=gha,scope=takx-native-${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=takx-native-${{ matrix.component }}
+
+      - name: Extract and qualify restored prefix inside prebuilt takx-gl-runner
+        timeout-minutes: 5
+        env:
+          COMPONENT: ${{ matrix.component }}
+          CONTROL: ${{ matrix.control }}
+          LINK_ARGS: ${{ matrix.link_args }}
+        run: |
+          set -eu
+          cid="$(docker create "takx-native-${COMPONENT}:smoke" "/${COMPONENT}")"
+          mkdir -p "${RUNNER_TEMP}/restored-${COMPONENT}"
+          docker cp "${cid}:/${COMPONENT}/." "${RUNNER_TEMP}/restored-${COMPONENT}/"
+          docker rm "${cid}"
+          python3 -B takx/native-caches/verify.py \
+            --phase check-prefix --component "${COMPONENT}" \
+            --prefix "${RUNNER_TEMP}/restored-${COMPONENT}"
+          mkdir -p "${RUNNER_TEMP}/commo-deps/include" "${RUNNER_TEMP}/commo-deps/lib"
+          extra_flags=""
+          dep_specs=""
+          if [ "${COMPONENT}" = "commoncommo" ]; then
+            extra_flags="-DCURL_STATICLIB -isystem /opt/commo-deps/include -isystem /opt/commo-deps/include/libxml2"
+            dep_specs="zlib:1.3.1-amd64 libiconv:1.15-amd64 libxml2:2.13.3-amd64 quictls:3.0.14-quic1-amd64 nghttp2:1.62.1-amd64 ngtcp2:1.6.0-amd64 libmicrohttpd:1.0.1-amd64 protobuf:3.21.0-amd64"
+          elif [ "${COMPONENT}" = "gdal" ]; then
+            dep_specs="zlib:1.3.1-amd64 proj:4.9.1-amd64 expat:2.10.0-amd64 uriparser:0.9.8-amd64 libkml:1.3.0-amd64"
+          elif [ "${COMPONENT}" = "spatialite" ]; then
+            extra_flags="-isystem /opt/commo-deps/include"
+            dep_specs="sqlcipher:4.5.7-amd64 openssl:3.5.9-amd64 proj:4.9.1-amd64 geos:3.4.3-amd64 libiconv:1.15-amd64 libxml2:2.13.3-amd64 zlib:1.3.1-amd64"
+          fi
+          for spec in ${dep_specs}; do
+            dep_name="${spec%%:*}"
+            dep_tag="${spec#*:}"
+            dep_cid="$(docker create "ghcr.io/jonathanagustin/uds-takserver/takx-native-${dep_name}:${dep_tag}" "/${dep_name}")"
+            mkdir -p "${RUNNER_TEMP}/dep-${dep_name}"
+            docker cp "${dep_cid}:/${dep_name}/." "${RUNNER_TEMP}/dep-${dep_name}/"
+            docker rm "${dep_cid}"
+            if [ -d "${RUNNER_TEMP}/dep-${dep_name}/include" ]; then
+              cp -a "${RUNNER_TEMP}/dep-${dep_name}/include/." "${RUNNER_TEMP}/commo-deps/include/"
+            fi
+            if [ -d "${RUNNER_TEMP}/dep-${dep_name}/lib" ]; then
+              cp -a "${RUNNER_TEMP}/dep-${dep_name}/lib/." "${RUNNER_TEMP}/commo-deps/lib/"
+            fi
+          done
+          docker run --rm \
+            -e CONTROL="${CONTROL}" \
+            -e EXTRA_FLAGS="${extra_flags}" \
+            -e LINK_ARGS="${LINK_ARGS}" \
+            -v "${GITHUB_WORKSPACE}/takx/native-caches/${COMPONENT}:/src:ro" \
+            -v "${RUNNER_TEMP}/restored-${COMPONENT}:/opt/cache:ro" \
+            -v "${RUNNER_TEMP}/commo-deps:/opt/commo-deps:ro" \
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
+            bash -euo pipefail -c '
+              # shellcheck disable=SC2086
+              if [[ "${CONTROL}" == *.cpp ]]; then
+                g++ -std=c++17 -Wall -Wextra -Werror -O2 \
+                  -isystem /opt/cache/include ${EXTRA_FLAGS} \
+                  "/src/${CONTROL}" ${LINK_ARGS} \
+                  -o /tmp/control_bin
+              else
+                gcc -std=c99 -Wall -Wextra -Werror -O2 \
+                  -isystem /opt/cache/include ${EXTRA_FLAGS} \
+                  "/src/${CONTROL}" ${LINK_ARGS} \
+                  -o /tmp/control_bin
+              fi
+              /tmp/control_bin
+            '
+
+      - name: Retain verified cache receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-native-${{ matrix.component }}-receipt
+          path: ${{ runner.temp }}/restored-${{ matrix.component }}/cache-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-layer2:
+    needs: [build-and-qualify-layer2, publish-layer1]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: liblas
+            tag: 1.8.2-amd64
+          - component: commoncommo
+            tag: 1.17.2-amd64
+          - component: gdal
+            tag: 2.4.4-amd64
+          - component: spatialite
+            tag: 4.3.0a-amd64
     name: publish (${{ matrix.component }})
     steps:
       - name: Checkout source

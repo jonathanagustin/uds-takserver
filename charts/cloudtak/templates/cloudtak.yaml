@@ -57,14 +57,17 @@ spec:
       initContainers:
         - name: merge-trust
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          command: ["/bin/sh", "-ec"]
+          command: ["node", "--input-type=module", "-e"]
           args:
             - |
-              {{- .Files.Get "files/merge-trust.sh" | nindent 14 }}
+              {{- .Files.Get "files/merge-trust.mjs" | nindent 14 }}
             - merge-trust
             - /var/run/tak-ca/ca.pem
             - /var/run/uds-trust/ca-bundle.pem
             - /var/run/combined-trust/ca-bundle.pem
+          env:
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=64"
           resources:
             {{- toYaml .Values.resources.bootstrap | nindent 12 }}
           securityContext:
@@ -196,8 +199,12 @@ spec:
           # It listens on 127.0.0.1 only, out of reach of an httpGet probe.
           readinessProbe:
             exec:
-              command: ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5002/healthz"]
+              command:
+                - node
+                - -e
+                - "fetch('http://127.0.0.1:5002/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
             periodSeconds: 10
+            timeoutSeconds: 3
           resources:
             {{- toYaml .Values.resources.sso | nindent 12 }}
           securityContext:

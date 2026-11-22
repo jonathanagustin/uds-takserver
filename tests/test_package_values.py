@@ -188,6 +188,24 @@ class PackageValuesTests(unittest.TestCase):
         self.assertTrue(env["RENDER_IMAGE"].endswith(":9.9-RELEASE-9"))
         self.assertEqual(tak_tags(docs), {"9.9-RELEASE-9"})
 
+    def test_tak_image_tag_package_value_overrides_all_rendered_tak_workloads(self):
+        _out, docs = render(
+            variables=["TAK_IMAGE_TAG=7.7-RELEASE-7"],
+            values=[
+                "tak.imageTag=8.8-RELEASE-8",
+                "chartOverrides.cloudtak.uds-cloudtak.backup.dump.enabled=true",
+            ],
+        )
+        self.assertEqual(tak_tags(docs), {"8.8-RELEASE-8"})
+        self.assertTrue(watcher_env(docs)["RENDER_IMAGE"].endswith(":8.8-RELEASE-8"))
+        self.assertTrue(admission_env(docs)["RENDER_IMAGE"].endswith(":8.8-RELEASE-8"))
+        cert_init = find(docs, "Job", "takserver-cert-init")["spec"]["template"]["spec"]["containers"][0]
+        self.assertTrue(cert_init["image"].endswith(":8.8-RELEASE-8"))
+        health = find(docs, "Deployment", "tak-health")["spec"]["template"]["spec"]["containers"][0]
+        self.assertTrue(health["image"].endswith(":8.8-RELEASE-8"))
+        dump = find(docs, "CronJob", "cloudtak-db-dump")["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
+        self.assertTrue(dump["image"].endswith(":8.8-RELEASE-8"))
+
     def test_plugins_memory_reaches_admission_and_the_watcher(self):
         _out, docs = render()
         admission = admission_env(docs)

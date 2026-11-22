@@ -109,9 +109,11 @@ public final class Canvas {
         Graphics2D g = graphics(paint, false);
         try {
             if (start == end || paint.getTextSize() == 0f) { return; }
-            TextLayout layout = new TextLayout(text.substring(start, end), paint.awtFont(), paint.fontContext());
-            float offset = paint.getTextAlign() == Paint.Align.CENTER ? layout.getAdvance() / 2f
-                    : paint.getTextAlign() == Paint.Align.RIGHT ? layout.getAdvance() : 0f;
+            String slice = text.substring(start, end);
+            TextLayout layout = new TextLayout(slice, paint.awtFont(), paint.fontContext());
+            float advance = paint.measureText(slice);
+            float offset = paint.getTextAlign() == Paint.Align.CENTER ? advance / 2f
+                    : paint.getTextAlign() == Paint.Align.RIGHT ? advance : 0f;
             draw(g, layout.getOutline(AffineTransform.getTranslateInstance(x - offset, y)), paint);
         } finally { g.dispose(); }
     }

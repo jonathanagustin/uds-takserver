@@ -64,7 +64,7 @@ LABEL org.opencontainers.image.title="cloudtak" \
       org.opencontainers.image.source="https://github.com/jonathanagustin/uds-takserver"
 
 COPY --chmod=0755 start.sh /home/etl/uds/start.sh
-COPY --chmod=0644 bootstrap.mjs bootstrap-server.mjs basemap.mjs /home/etl/uds/
+COPY --chmod=0644 render-nginx-conf.mjs bootstrap.mjs bootstrap-server.mjs basemap.mjs /home/etl/uds/
 COPY --chmod=0644 nginx-sso.conf nginx-sso-head.conf /home/etl/uds/
 # Next to dist/ and node_modules/ so its imports resolve like CloudTAK's.
 COPY --chmod=0644 sso.mjs /home/etl/api/uds-sso.mjs
