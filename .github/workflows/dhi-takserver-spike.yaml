@@ -1,0 +1,103 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Evaluation only (#852). Builds the takserver-api image on Docker Hardened
+# Images Temurin 17 (Debian 13 -dev variants, which keep a shell and apt) and
+# smoke-tests the toolchain the TAK entrypoints need. This is NOT the ADR 0025
+# qualification: it does not run fresh install, airgap, upgrade, Copa, or
+# Pepr/OpenSSL interop, and nothing here changes the shipped images.
+name: dhi-takserver-spike
+
+on:
+  workflow_dispatch:
+    inputs:
+      builder_image:
+        description: Builder image
+        default: dhi.io/eclipse-temurin:17-jdk-debian13-dev
+      runtime_image:
+        description: Runtime image
+        default: dhi.io/eclipse-temurin:17-jdk-debian13-dev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dhi-takserver-spike-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spike:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    name: spike (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    env:
+      BUILDER_IMAGE: ${{ inputs.builder_image }}
+      RUNTIME_IMAGE: ${{ inputs.runtime_image }}
+      TAG: dhi-spike-${{ matrix.arch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check out the TAK submodule
+        run: git submodule update --init --depth 1 upstream/takserver
+
+      - name: Free disk
+        run: ./.github/scripts/free-runner-disk.sh
+        env:
+          PRUNE_DOCKER: "true"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to dhi.io
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: dhi.io
+          username: ${{ secrets.DHI_USERNAME }}
+          password: ${{ secrets.DHI_TOKEN }}
+
+      - name: Inspect the base images
+        run: |
+          set -euo pipefail
+          for ref in "$BUILDER_IMAGE" "$RUNTIME_IMAGE"; do
+            echo "== $ref"
+            docker buildx imagetools inspect "$ref" | sed -n 1,12p
+          done
+
+      - name: Build takserver-api on DHI Temurin 17
+        run: |
+          set -euo pipefail
+          src=upstream/takserver
+          mkdir -p "$RUNNER_TEMP/gradle-seed"
+          docker buildx build \
+            --platform "linux/${{ matrix.arch }}" \
+            --load \
+            --target takserver-api \
+            --file .github/container-and-chart/docker/Dockerfile \
+            --build-context "gradle-seed=$RUNNER_TEMP/gradle-seed" \
+            --build-context "takserver-src=$src" \
+            --build-arg "BUILDER_IMAGE=$BUILDER_IMAGE" \
+            --build-arg "RUNTIME_IMAGE=$RUNTIME_IMAGE" \
+            --build-arg "UPSTREAM_SHA=$(git -C "$src" rev-parse HEAD)" \
+            --build-arg "UPSTREAM_TREE=$(git -C "$src" rev-parse 'HEAD^{tree}')" \
+            --tag "dhi-spike/takserver-api:$TAG" \
+            .github/container-and-chart/docker
+
+      - name: Smoke the toolchain the TAK entrypoints use
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint bash "dhi-spike/takserver-api:$TAG" -c '
+            set -e
+            java -version
+            command -v keytool curl nc ps openssl
+            openssl version
+            ls -l /takserver.war /takserver-api-cluster.sh
+            id'
