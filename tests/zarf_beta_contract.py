@@ -26,7 +26,8 @@ OVERRIDES = dict(zip(DEFAULTS, ('example.test', 'reviewed-tag', 'false', 'api st
 def command(prefix, args, env=None):
     result = subprocess.run(prefix + args, capture_output=True, timeout=120, env=env)
     if result.returncode or len(result.stdout) > 1024*1024:
-        raise RuntimeError('contract command failed; exit=' + str(result.returncode))
+        tail = ' | '.join(result.stderr.decode(errors='replace').strip().splitlines()[-5:])[:400]
+        raise RuntimeError(f'contract command failed; exit={result.returncode}; stderr={tail}')
     return result.stdout
 
 
