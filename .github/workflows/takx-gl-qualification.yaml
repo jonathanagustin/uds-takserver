@@ -13,6 +13,7 @@ on:
       - "takx/kernel-texture/**"
       - "takx/contour-grid/**"
       - "takx/cot-conformance/**"
+      - "takx/gis-java/data/**"
       - "takx/mission-package/**"
       - "takx/ui-java/**"
       - ".github/workflows/takx-gl-qualification.yaml"
@@ -417,5 +418,37 @@ jobs:
         with:
           name: takx-cot-conformance-hosted-receipt
           path: ${{ runner.temp }}/takx-cot-conformance-hosted/hosted-cot-conformance-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-gdal-data:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64
+    timeout-minutes: 10
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline gdal-data verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/gis-java/data/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/gis-java/data -p 'test_*.py' -v
+
+      - name: Build deterministic GDAL data JAR and run 93 JDK 17 resource lookups
+        timeout-minutes: 5
+        run: |
+          python3 -B takx/gis-java/data/run_hosted_controls.py \
+            --phase qualify \
+            --output "${RUNNER_TEMP}/takx-gdal-data-hosted"
+
+      - name: Retain verified gdal-data hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-gdal-data-hosted-receipt
+          path: ${{ runner.temp }}/takx-gdal-data-hosted/hosted-gdal-data-receipt.json
           if-no-files-found: error
           retention-days: 14
