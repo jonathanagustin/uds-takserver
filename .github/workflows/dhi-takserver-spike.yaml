@@ -9,6 +9,9 @@
 name: dhi-takserver-spike
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/dhi-takserver-spike.yaml
   workflow_dispatch:
     inputs:
       builder_image:
@@ -39,8 +42,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     env:
-      BUILDER_IMAGE: ${{ inputs.builder_image }}
-      RUNTIME_IMAGE: ${{ inputs.runtime_image }}
+      BUILDER_IMAGE: ${{ inputs.builder_image || 'dhi.io/eclipse-temurin:17-jdk-debian13-dev' }}
+      RUNTIME_IMAGE: ${{ inputs.runtime_image || 'dhi.io/eclipse-temurin:17-jdk-debian13-dev' }}
       TAG: dhi-spike-${{ matrix.arch }}
     steps:
       - name: Checkout
