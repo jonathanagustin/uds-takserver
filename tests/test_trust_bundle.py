@@ -56,7 +56,8 @@ class TrustBundleChartTests(unittest.TestCase):
         sso = spec["containers"][1]
         self.assertEqual(sso["name"], "sso")
         probe = sso["readinessProbe"]
-        self.assertEqual(probe["exec"]["command"][0], "node")
+        self.assertTrue(all(isinstance(arg, str) for arg in probe["exec"]["command"]))
+        self.assertEqual(probe["exec"]["command"][:2], ["node", "-e"])
         self.assertNotIn("wget", probe["exec"]["command"])
         self.assertGreaterEqual(probe["timeoutSeconds"], 3)
         self.assertEqual(init["args"][0].strip(),
