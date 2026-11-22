@@ -47,6 +47,9 @@ jobs:
           set -euo pipefail
           k3d cluster create next-qual --servers 1 --agents 0 --wait --timeout 180s
           uds zarf tools kubectl wait --for=condition=Ready node --all --timeout=120s
+          uds zarf tools kubectl create namespace zarf
+          uds zarf tools kubectl create secret generic zarf-state -n zarf \
+            --from-literal=state='{"zarfAppliance":false,"distro":"k3s","architecture":"amd64","storageClass":"local-path"}'
 
       - name: Qualify signed Next-mode deploy, opt-out, and v1alpha1 to v1beta1 upgrade
         run: uv run --no-project --with pyyaml==6.0.3 python -B -m tests.zarf_next_live_qualification --cli uds
