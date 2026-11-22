@@ -22,6 +22,7 @@ components:
           - ../values/filesystem-backup-switch.yaml
         templatedValuesFiles:
           - ../values/filesystem-backup-switch.yaml.tpl
+          - ../values/certs-image.yaml.tpl
         values:
           - sourcePath: .global.domain
             targetPath: .domain

@@ -307,6 +307,38 @@ COMPONENTS = {
         "control_marker": "mdbtools_static_pic_control=true",
         "required_artifacts": ("lib/libmdb.a", "include/mdbtools.h", "COPYING.LIB"),
     },
+    "libkml": {
+        "version": "1.3.0",
+        "archive_sha256": "39692c0184933424e35ef69e5101f1ff0d664f2b50b972887cfc15fda032d1cb",
+        "license_sha256": "e7952c5e1745f629c235c7aacd066fc36034d37571a964b9142d7fb95b5523eb",
+        "control_file": "libkml_control.cpp",
+        "control_marker": "libkml_static_pic_control=true",
+        "required_artifacts": (
+            "lib/libkmlbase.a",
+            "lib/libkmldom.a",
+            "lib/libkmlengine.a",
+            "lib/libkmlconvenience.a",
+            "lib/libkmlregionator.a",
+            "lib/libkmlxsd.a",
+            "lib/libminizip.a",
+            "include/kml/dom.h",
+            "COPYING",
+        ),
+    },
+    "liblas": {
+        "version": "1.8.2",
+        "archive_sha256": "8decbf40c5e7690a98a48d53c729f7c7670ff472290c2f46a26c7413ed53e641",
+        "license_sha256": "255ba531725caaed436a919896e69a1bcadefcc98eaa030b64710e33b4ea3f18",
+        "control_file": "liblas_control.cpp",
+        "control_marker": "liblas_static_pic_control=true",
+        "required_artifacts": (
+            "lib/liblas.so",
+            "lib/liblas_c.so",
+            "include/liblas/liblas.hpp",
+            "include/liblas/capi/liblas.h",
+            "LICENSE.txt",
+        ),
+    },
 }
 
 

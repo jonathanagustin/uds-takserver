@@ -29,9 +29,9 @@ The flavor is `upstream`. `uds run create-dev-package` passes `--flavor upstream
 
 ### Package values
 
-`values/zarf-values.yaml` is the package values file, checked by `values/zarf-values.schema.json`. Zarf Values is beta. Chart mappings copy `global.domain` onto the config chart and CloudTAK, `health.enabled` onto the config chart, and `tak.imageTag` onto each upstream TAK image tag. Templated values files feed `global.domain`, `tak.imageTag`, `dns.inCluster`, `dns.passthroughHosts`, `tak.plugins.memoryRequest`, and `tak.plugins.memoryLimit` into the Pepr admission/watcher env, and bridge `backup.filesystem.enabled`, `backup.filesystem.owner`, `storage.postgresClass`, and `storage.cloudtakClass` into the config, TAK, and CloudTAK charts before Helm renders.
+`values/zarf-values.yaml` is the package values file, checked by `values/zarf-values.schema.json`. Zarf Values is beta. Chart mappings copy `global.domain` onto the config chart and CloudTAK, `health.enabled` onto the config chart, and `tak.imageTag` onto each upstream TAK image tag. Templated values files feed `global.domain`, `tak.imageTag`, `dns.inCluster`, `dns.passthroughHosts`, `tak.plugins.memoryRequest`, and `tak.plugins.memoryLimit` into the Pepr admission/watcher env, feed `tak.imageTag` into `certs.image` and CloudTAK's dump publisher image, and bridge `backup.filesystem.enabled`, `backup.filesystem.owner`, `storage.postgresClass`, and `storage.cloudtakClass` into the config, TAK, and CloudTAK charts before Helm renders.
 
-Each default is the placeholder of the matching variable, for example `global.domain: "###ZARF_VAR_DOMAIN###"`. With no package value set the variable decides, exactly as before. `--set-variables DOMAIN=`, a bundle's `uds-config.yaml`, and Unified Defense Stack (UDS) command-line interface (CLI) bundles keep working unchanged. A package value only overrides its variable, for that key: `uds zarf package deploy --set-values global.domain=example.com`, or `--values`. The `images:` list and `certs.image` in `charts/takserver/values.yaml` read only `TAK_IMAGE_TAG`. `health.enabled` is the exception: it has no variable and defaults to `true`, so Helm sees a real value.
+Each default is the placeholder of the matching variable, for example `global.domain: "###ZARF_VAR_DOMAIN###"`. With no package value set the variable decides, exactly as before. `--set-variables DOMAIN=`, a bundle's `uds-config.yaml`, and Unified Defense Stack (UDS) command-line interface (CLI) bundles keep working unchanged. A package value only overrides its variable, for that key: `uds zarf package deploy --set-values global.domain=example.com`, or `--values`. The `images:` list in `zarf.yaml` uses a literal tag. `health.enabled` is the exception: it has no variable and defaults to `true`, so Helm sees a real value.
 
 A file passed to `--values` sets the same keys:
 
@@ -43,7 +43,7 @@ global:
 | Package value | Defaults to | Overrides |
 | --- | --- | --- |
 | `global.domain` | `DOMAIN` | TAK, CloudTAK, and watcher hosts |
-| `tak.imageTag` | `TAK_IMAGE_TAG` | the upstream TAK image tags and the watcher render image |
+| `tak.imageTag` | `TAK_IMAGE_TAG` | the upstream TAK image tags, `certs.image`, CloudTAK's dump publisher image, and the watcher render image |
 | `dns.inCluster` | `IN_CLUSTER_DNS` | the watcher's CoreDNS rewrite switch |
 | `dns.passthroughHosts` | `PASSTHROUGH_HOSTS` | the watcher's passthrough host list |
 | `tak.plugins.memoryRequest` | `PLUGINS_MEMORY_REQUEST` | the plugins memory request |
