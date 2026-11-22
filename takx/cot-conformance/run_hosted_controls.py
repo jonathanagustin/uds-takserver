@@ -166,6 +166,22 @@ def qualify(atak_source: Path, deps_prefix: Path, output: Path) -> dict:
         shutil.rmtree(work_commo)
     shutil.copytree(atak_source / "commoncommo", work_commo)
 
+    sources_lock = json.loads((TAKX_ROOT / "sources.lock.json").read_text(encoding="utf-8"))
+    lock_patches = {
+        Path(entry["path"]).name: entry["sha256"]
+        for entry in sources_lock.get("patches", [])
+        if Path(entry["path"]).name.startswith(("0100-", "0101-"))
+    }
+    for patch_name in sorted(lock_patches):
+        patch_file = TAKX_ROOT / "patches" / patch_name
+        got = sha256_file(patch_file)
+        if got != lock_patches[patch_name]:
+            raise ValueError(f"source patch SHA-256 mismatch for {patch_name}: {got} != {lock_patches[patch_name]}")
+        run_cmd(
+            ["patch", "--fuzz=0", "--batch", "--no-backup-if-mismatch", "-p1", "-i", str(patch_file)],
+            cwd=output,
+        )
+
     for rel, expected in jni_patch_spec["files"].items():
         got = sha256_file(work_commo / rel)
         if got != expected["before"]:
@@ -175,6 +191,31 @@ def qualify(atak_source: Path, deps_prefix: Path, output: Path) -> dict:
         got = sha256_file(work_commo / rel)
         if got != expected["after"]:
             raise ValueError(f"post-patch SHA-256 mismatch for {rel}: {got} != {expected['after']}")
+
+    patched_commo_a = output / "libcommoncommo.a"
+    shutil.copyfile(deps_prefix / "lib" / "libcommoncommo.a", patched_commo_a)
+    core_impl = work_commo / "core" / "impl"
+    core_cxx_flags = [
+        "g++",
+        "-std=c++11",
+        "-O2",
+        "-fPIC",
+        "-Wall",
+        "-Werror",
+        "-D__STDC_FORMAT_MACROS",
+        "-DCURL_STATICLIB",
+        "-fstack-protector-all",
+        f"-I{work_commo / 'core' / 'include'}",
+        f"-I{deps_prefix / 'include'}",
+        f"-I{deps_prefix / 'include' / 'libxml2'}",
+    ]
+    patched_objs: list[str] = []
+    for name in ("commo.cpp", "contactmanager.cpp", "streamingsocketmanagement.cpp"):
+        src = core_impl / name
+        obj = src.with_suffix(".o")
+        run_cmd([*core_cxx_flags, "-c", str(src), "-o", str(obj)], cwd=core_impl, timeout=90)
+        patched_objs.append(str(obj))
+    run_cmd(["ar", "rcs", str(patched_commo_a), *patched_objs], timeout=60)
 
     jni_root = work_commo / "jni"
     java_classes = output / "jcommoncommo-classes"
@@ -250,21 +291,23 @@ def qualify(atak_source: Path, deps_prefix: Path, output: Path) -> dict:
     jni_so = lib_dir / "libcommoncommojni.so"
 
     static_libs = [
-        deps_prefix / "lib" / name
-        for name in (
-            "libcommoncommo.a",
-            "libcurl.a",
-            "libmicrohttpd.a",
-            "libxml2.a",
-            "libiconv.a",
-            "libprotobuf-lite.a",
-            "libngtcp2_crypto_quictls.a",
-            "libngtcp2.a",
-            "libnghttp2.a",
-            "libssl.a",
-            "libcrypto.a",
-            "libz.a",
-        )
+        patched_commo_a,
+        *(
+            deps_prefix / "lib" / name
+            for name in (
+                "libcurl.a",
+                "libmicrohttpd.a",
+                "libxml2.a",
+                "libiconv.a",
+                "libprotobuf-lite.a",
+                "libngtcp2_crypto_quictls.a",
+                "libngtcp2.a",
+                "libnghttp2.a",
+                "libssl.a",
+                "libcrypto.a",
+                "libz.a",
+            )
+        ),
     ]
     for lib in static_libs:
         if not lib.is_file():
