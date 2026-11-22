@@ -16,6 +16,7 @@ on:
       - "takx/cot-conformance/**"
       - "takx/gis-java/**"
       - "takx/mission-package/**"
+      - "takx/native-gdal-jni/**"
       - "takx/native-las/**"
       - "takx/sqlite-jdbc/**"
       - "takx/ui-java/**"
@@ -772,5 +773,102 @@ jobs:
         with:
           name: takx-gis-java-hosted-receipt
           path: ${{ runner.temp }}/takx-gis-java-hosted/hosted-gis-java-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-native-gdal-jni:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline native-gdal-jni verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/native-gdal-jni/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/native-gdal-jni -p 'test_run_hosted_controls.py' -v
+
+      - name: Build pinned SWIG 4.3.0 and qualify GIS Java wrappers
+        timeout-minutes: 8
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libpcre2-dev
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            "https://downloads.sourceforge.net/project/swig/swig/swig-4.3.0/swig-4.3.0.tar.gz" \
+            -o "${RUNNER_TEMP}/swig-4.3.0.tar.gz"
+          printf '%s  %s\n' "f7203ef796f61af986c70c05816236cbd0d31b7aa9631e5ab53020ab7804aa9e" "${RUNNER_TEMP}/swig-4.3.0.tar.gz" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/swig-4.3.0.tar.gz" -C "${RUNNER_TEMP}"
+          (
+            cd "${RUNNER_TEMP}/swig-4.3.0"
+            PATH="${JAVA_HOME_17_X64}/bin:${PATH}" ./configure \
+              --prefix="${RUNNER_TEMP}/swig-install" \
+              --without-alllang \
+              --with-java
+            make -j4
+            make install
+          )
+          python3 -B takx/gis-java/run_hosted_controls.py \
+            --phase qualify \
+            --java-home "${JAVA_HOME_17_X64}" \
+            --swig-bin "${RUNNER_TEMP}/swig-install/bin/swig" \
+            --swig-lib "${RUNNER_TEMP}/swig-install/share/swig/4.3.0" \
+            --output "${RUNNER_TEMP}/gis-java"
+
+      - name: Extract prebuilt GDAL and static transitive OCI caches
+        timeout-minutes: 4
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/gdal-deps/include" "${RUNNER_TEMP}/gdal-deps/lib" "${RUNNER_TEMP}/gdal-deps/share"
+          for spec in \
+            "gdal:2.4.4-amd64" \
+            "proj:4.9.1-amd64" \
+            "libkml:1.3.0-amd64" \
+            "uriparser:0.9.8-amd64" \
+            "expat:2.10.0-amd64" \
+            "zlib:1.3.1-amd64"; do
+            dep_name="${spec%%:*}"
+            dep_tag="${spec#*:}"
+            dep_cid="$(docker create "ghcr.io/jonathanagustin/uds-takserver/takx-native-${dep_name}:${dep_tag}" "/${dep_name}")"
+            mkdir -p "${RUNNER_TEMP}/dep-${dep_name}"
+            docker cp "${dep_cid}:/${dep_name}/." "${RUNNER_TEMP}/dep-${dep_name}/"
+            docker rm "${dep_cid}"
+            if [ -d "${RUNNER_TEMP}/dep-${dep_name}/include" ]; then
+              cp -a "${RUNNER_TEMP}/dep-${dep_name}/include/." "${RUNNER_TEMP}/gdal-deps/include/"
+            fi
+            if [ -d "${RUNNER_TEMP}/dep-${dep_name}/lib" ]; then
+              cp -a "${RUNNER_TEMP}/dep-${dep_name}/lib/." "${RUNNER_TEMP}/gdal-deps/lib/"
+            fi
+            if [ -d "${RUNNER_TEMP}/dep-${dep_name}/share" ]; then
+              cp -a "${RUNNER_TEMP}/dep-${dep_name}/share/." "${RUNNER_TEMP}/gdal-deps/share/"
+            fi
+          done
+
+      - name: Run live GDAL 2.4.4 JNI and exception controls under JDK 17 -Xcheck:jni
+        timeout-minutes: 8
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/takx-native-gdal-jni-hosted"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work:ro" \
+            -v "${RUNNER_TEMP}/gis-java/build:/gis:ro" \
+            -v "${RUNNER_TEMP}/gdal-deps:/deps:ro" \
+            -v "${RUNNER_TEMP}/takx-native-gdal-jni-hosted:/out" \
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
+            python3 -B /work/takx/native-gdal-jni/run_hosted_controls.py \
+              --phase qualify \
+              --gis-build /gis \
+              --deps-prefix /deps \
+              --java-home /usr/lib/jvm/java-17-openjdk-amd64 \
+              --output /out
+
+      - name: Retain verified native-gdal-jni hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-native-gdal-jni-hosted-receipt
+          path: ${{ runner.temp }}/takx-native-gdal-jni-hosted/hosted-native-gdal-jni-receipt.json
           if-no-files-found: error
           retention-days: 14
