@@ -60,6 +60,10 @@ jobs:
             tag: 1.0.1-amd64
             control: libmicrohttpd_control.c
             link_args: "/opt/cache/lib/libmicrohttpd.a -lpthread"
+          - component: protobuf
+            tag: 3.21.0-amd64
+            control: protobuf_control.cpp
+            link_args: "/opt/cache/lib/libprotobuf-lite.a -lpthread"
     name: qualify (${{ matrix.component }})
     steps:
       - name: Checkout source
@@ -109,10 +113,19 @@ jobs:
             -v "${RUNNER_TEMP}/restored-${COMPONENT}:/opt/cache:ro" \
             ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
             bash -euo pipefail -c '
+              if [ -x /opt/cache/bin/protoc ]; then
+                /opt/cache/bin/protoc --version
+              fi
               # shellcheck disable=SC2086
-              gcc -std=c99 -Wall -Wextra -Werror -O2 \
-                -I/opt/cache/include "/src/${CONTROL}" ${LINK_ARGS} \
-                -o /tmp/control_bin
+              if [[ "${CONTROL}" == *.cpp ]]; then
+                g++ -std=c++17 -Wall -Wextra -Werror -O2 \
+                  -I/opt/cache/include "/src/${CONTROL}" ${LINK_ARGS} \
+                  -o /tmp/control_bin
+              else
+                gcc -std=c99 -Wall -Wextra -Werror -O2 \
+                  -I/opt/cache/include "/src/${CONTROL}" ${LINK_ARGS} \
+                  -o /tmp/control_bin
+              fi
               /tmp/control_bin
             '
 
@@ -150,6 +163,8 @@ jobs:
             tag: 1.62.1-amd64
           - component: libmicrohttpd
             tag: 1.0.1-amd64
+          - component: protobuf
+            tag: 3.21.0-amd64
     name: publish (${{ matrix.component }})
     steps:
       - name: Checkout source
