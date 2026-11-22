@@ -3,9 +3,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Live Kubernetes qualification of signed Zarf v1beta1 and UDS Next-mode bundles.
 
-Exercises four live cluster gates tracked by #712 against a disposable k3d
-cluster using the local zarf-beta-contract ConfigMap fixture (no container
-images or registry required):
+Exercises five live cluster gates tracked by #712 against a disposable k3d
+cluster using local ConfigMap fixtures (no container images or registry):
   1. Signed Next-mode bundle deploy with deploy-time `--set` values and
      `optional_components = ["optional-addon"]` (plus wrong-key rejection).
   2. Clean opt-out deploy with `optional_components = ["-optional-addon"]`.
@@ -14,6 +13,8 @@ images or registry required):
   4. Signed direct `v1beta1` `uds zarf package deploy` optional-component
      default OFF vs `--components optional-addon` opt-in with `--set-values`,
      followed by clean `package remove`.
+  5. Mixed signed Next-mode bundle combining a `v1alpha1` package and a
+     `v1beta1` package with `--set` values and clean `bundle remove`.
 """
 
 import argparse
@@ -51,7 +52,7 @@ def assert_configmap_absent(cli, name, namespace='default'):
         raise RuntimeError(f'expected ConfigMap/{name} in namespace {namespace} to be absent, but it exists')
 
 
-def write_live_bundle(bundle_dir, name, pkg_path, pub_path, selector):
+def _write_bundle_scaffold(bundle_dir, name, pub_path, packages_hcl):
     bundle_dir.mkdir()
     shutil.copyfile(pub_path, bundle_dir / 'pkg.pub')
     (bundle_dir / 'defaults.uds.hcl').write_text(
@@ -74,8 +75,14 @@ def write_live_bundle(bundle_dir, name, pkg_path, pub_path, selector):
         f'  name    = "{name}"\n'
         '  version = "0.1.0"\n'
         '}\n\n'
+        f'{packages_hcl}'
+    )
+
+
+def _contract_package_hcl(pkg_path, selector):
+    return (
         'package "contract" {\n'
-        f'  source              = "{pkg_path}"\n'
+        f'  source              = "{Path(pkg_path).as_posix()}"\n'
         '  values_files        = ["./bundle-values.yaml"]\n'
         f'  optional_components = ["{selector}"]\n'
         '  signature_verification {\n'
@@ -83,6 +90,10 @@ def write_live_bundle(bundle_dir, name, pkg_path, pub_path, selector):
         '  }\n'
         '}\n'
     )
+
+
+def write_live_bundle(bundle_dir, name, pkg_path, pub_path, selector):
+    _write_bundle_scaffold(bundle_dir, name, pub_path, _contract_package_hcl(pkg_path, selector))
 
 
 def build_bundle(cli, bundle_dir, signing_key, env):
@@ -104,6 +115,50 @@ def direct_deploy_args(zarf_prefix, pkg_path, pub_path, *, components=(), set_va
     for pair in set_values:
         args += ['--set-values', pair]
     return args
+
+
+def write_alpha_standin_package(pkg_dir):
+    pkg_dir.mkdir()
+    (pkg_dir / 'core-cm.yaml').write_text(
+        'apiVersion: v1\n'
+        'kind: ConfigMap\n'
+        'metadata:\n'
+        '  name: core-standin\n'
+        '  namespace: default\n'
+        'data:\n'
+        '  CORE_SETTING: "###ZARF_VAR_CORE_SETTING###"\n'
+    )
+    (pkg_dir / 'zarf.yaml').write_text(
+        'kind: ZarfPackageConfig\n'
+        'metadata:\n'
+        '  name: core-standin\n'
+        '  version: 0.1.0\n'
+        'variables:\n'
+        '  - name: CORE_SETTING\n'
+        '    default: core-default\n'
+        'components:\n'
+        '  - name: core-baseline\n'
+        '    required: true\n'
+        '    manifests:\n'
+        '      - name: core-standin\n'
+        '        files:\n'
+        '          - core-cm.yaml\n'
+    )
+
+
+def write_mixed_live_bundle(bundle_dir, name, alpha_pkg, beta_pkg, pub_path):
+    core_hcl = (
+        'package "core-standin" {\n'
+        f'  source = "{Path(alpha_pkg).as_posix()}"\n'
+        '  signature_verification {\n'
+        '    public_key = file("pkg.pub")\n'
+        '  }\n'
+        '}\n\n'
+    )
+    _write_bundle_scaffold(
+        bundle_dir, name, pub_path,
+        core_hcl + _contract_package_hcl(beta_pkg, 'optional-addon'),
+    )
 
 
 def main():
@@ -243,9 +298,49 @@ def main():
         assert_configmap_absent(cli, 'contract')
         assert_configmap_absent(cli, 'optional-addon')
 
+        # Gate 5: mixed signed Next-mode bundle (v1alpha1 + v1beta1) deploys with --set and removes cleanly.
+        alpha_standin_src = tmp / 'core-standin-src'
+        alpha_standin_out = tmp / 'core-standin-signed'
+        alpha_standin_out.mkdir()
+        write_alpha_standin_package(alpha_standin_src)
+        run_cmd(zarf_prefix + [
+            'package', 'create', str(alpha_standin_src), '--confirm', '--skip-sbom',
+            '--signing-key', str(good_key), '--output', str(alpha_standin_out), '--architecture', 'amd64',
+        ], env=sign_env)
+        alpha_standin_pkg = next(alpha_standin_out.glob('zarf-package-*.tar.zst'))
+
+        mixed_dir = tmp / 'next-mixed'
+        write_mixed_live_bundle(mixed_dir, 'contract-mixed', alpha_standin_pkg, beta_pkg, good_pub)
+        mixed_bundle = build_bundle(cli, mixed_dir, good_key, next_env)
+
+        run_cmd([
+            cli, 'bundle', 'deploy', str(mixed_bundle),
+            '--public-key', str(good_pub),
+            '--set', 'domain=mixed-live.example',
+            '--set', 'cloudtak_class=mixed-ssd',
+        ], env=next_env)
+        mixed_core_cm = get_configmap(cli, 'core-standin')
+        if mixed_core_cm != {'CORE_SETTING': 'core-default'}:
+            raise RuntimeError(f'Gate 5 core-standin ConfigMap mismatch: {mixed_core_cm}')
+        mixed_contract_cm = get_configmap(cli, 'contract')
+        if (
+            mixed_contract_cm.get('DOMAIN') != 'mixed-live.example'
+            or mixed_contract_cm.get('CLOUDTAK_STORAGE_CLASS') != 'mixed-ssd'
+        ):
+            raise RuntimeError(f'Gate 5 contract ConfigMap mismatch: {mixed_contract_cm}')
+        mixed_addon_cm = get_configmap(cli, 'optional-addon')
+        if mixed_addon_cm != {'DOMAIN': 'mixed-live.example', 'CLOUDTAK_STORAGE_CLASS': 'mixed-ssd'}:
+            raise RuntimeError(f'Gate 5 optional-addon ConfigMap mismatch: {mixed_addon_cm}')
+
+        run_cmd([cli, 'bundle', 'remove', str(mixed_bundle), '--public-key', str(good_pub)], env=next_env)
+        assert_configmap_absent(cli, 'core-standin')
+        assert_configmap_absent(cli, 'contract')
+        assert_configmap_absent(cli, 'optional-addon')
+
     print(
         'PASS: live k3d signed Next-mode deploy, optional-component opt-out, '
-        'v1alpha1 -> v1beta1 upgrade, and direct v1beta1 --components opt-in'
+        'v1alpha1 -> v1beta1 upgrade, direct v1beta1 --components opt-in, '
+        'and mixed v1alpha1 + v1beta1 bundle qualification'
     )
 
 

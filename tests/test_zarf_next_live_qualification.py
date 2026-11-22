@@ -96,6 +96,40 @@ class ZarfNextLiveQualificationTests(unittest.TestCase):
             '--set-values', 'storage.cloudtakClass=ssd',
         ])
 
+    def test_write_alpha_standin_and_mixed_live_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            alpha_dir = root / 'core-standin-src'
+            q.write_alpha_standin_package(alpha_dir)
+            zarf_yaml = (alpha_dir / 'zarf.yaml').read_text()
+            core_cm = (alpha_dir / 'core-cm.yaml').read_text()
+            self.assertIn('kind: ZarfPackageConfig', zarf_yaml)
+            self.assertIn('name: core-standin', zarf_yaml)
+            self.assertIn('CORE_SETTING', zarf_yaml)
+            self.assertIn('default: core-default', zarf_yaml)
+            self.assertIn('###ZARF_VAR_CORE_SETTING###', core_cm)
+
+            pub = root / 'good.pub'
+            pub.write_text('-----BEGIN PUBLIC KEY-----\nTEST\n-----END PUBLIC KEY-----\n')
+            alpha_pkg = root / 'zarf-package-core-standin-amd64-0.1.0.tar.zst'
+            beta_pkg = root / 'zarf-package-values-contract-amd64-0.1.0.tar.zst'
+            bundle_dir = root / 'next-mixed'
+            q.write_mixed_live_bundle(bundle_dir, 'contract-mixed', alpha_pkg, beta_pkg, pub)
+
+            self.assertEqual((bundle_dir / 'pkg.pub').read_text(), pub.read_text())
+            self.assertIn('domain         = "default.example"', (bundle_dir / 'defaults.uds.hcl').read_text())
+            self.assertIn('{{ .vars.domain }}', (bundle_dir / 'bundle-values.yaml').read_text())
+            hcl = (bundle_dir / 'bundle.uds.hcl').read_text()
+            self.assertIn('bundle_api_version = "uds.dev/v1alpha1"', hcl)
+            self.assertIn('name    = "contract-mixed"', hcl)
+            self.assertIn('package "core-standin"', hcl)
+            self.assertIn(alpha_pkg.as_posix(), hcl)
+            self.assertIn('package "contract"', hcl)
+            self.assertIn(beta_pkg.as_posix(), hcl)
+            self.assertIn('values_files        = ["./bundle-values.yaml"]', hcl)
+            self.assertIn('optional_components = ["optional-addon"]', hcl)
+            self.assertEqual(hcl.count('public_key = file("pkg.pub")'), 2)
+
 
 if __name__ == '__main__':
     unittest.main()
