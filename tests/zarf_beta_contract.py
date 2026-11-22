@@ -43,6 +43,21 @@ def expect_failure(prefix, args, message, env=None):
 def generate_keypair(prefix, directory, name):
     key_dir = directory / f'key-{name}'
     key_dir.mkdir()
+    key = key_dir / 'cosign.key'
+    pub = key_dir / 'cosign.pub'
+    cosign_bin = shutil.which('cosign')
+    if cosign_bin:
+        result = subprocess.run(
+            [cosign_bin, 'generate-key-pair'],
+            cwd=key_dir, capture_output=True, timeout=30,
+            env={**os.environ, 'COSIGN_PASSWORD': ''},
+        )
+        if result.returncode != 0:
+            tail = ' | '.join(result.stderr.decode(errors='replace').strip().splitlines()[-3:])[-300:]
+            raise RuntimeError(f'cosign generate-key-pair failed; exit={result.returncode}; stderr={tail}')
+        if not key.is_file() or not pub.is_file():
+            raise RuntimeError('cosign generate-key-pair did not create cosign.key and cosign.pub')
+        return key, pub
     master, slave = pty.openpty()
     proc = subprocess.Popen(
         prefix + ['tools', 'gen-key', '--no-color'],
@@ -62,6 +77,8 @@ def generate_keypair(prefix, directory, name):
                     break
                 if not chunk:
                     break
+                if b'\x1b[6n' in chunk:
+                    os.write(master, b'\x1b[1;1R')
                 buf += chunk
                 lower = buf.lower()
                 if sent == 0 and b'password):' in lower:
@@ -80,8 +97,6 @@ def generate_keypair(prefix, directory, name):
         os.close(master)
     if proc.returncode != 0:
         raise RuntimeError(f'gen-key failed; exit={proc.returncode}')
-    key = key_dir / 'cosign.key'
-    pub = key_dir / 'cosign.pub'
     if not key.is_file() or not pub.is_file():
         raise RuntimeError('gen-key did not create cosign.key and cosign.pub')
     return key, pub
