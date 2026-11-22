@@ -194,14 +194,33 @@ def verify_next_bundles(cli, directory, signed_pkg, unsigned_pkg, good_key, good
                    'next bundle create accepted an unsigned package under public_key policy', env=env)
 
 
+def _value_at_path(mapping, dotted):
+    node = mapping
+    for part in dotted.split('.'):
+        node = node[part]
+    if isinstance(node, bool):
+        return 'true' if node else 'false'
+    if node is None:
+        return ''
+    return str(node)
+
+
+def production_defaults(repo_root):
+    """Read legacy Zarf variable defaults or staged v1beta1 values defaults."""
+    production = yaml.safe_load((repo_root / 'zarf.yaml').read_text())
+    if 'variables' in production:
+        return {item['name']: item.get('default', '') for item in production['variables']}
+    values = yaml.safe_load((repo_root / 'values/zarf-values.yaml').read_text())
+    return {name: _value_at_path(values, path) for name, path in zip(DEFAULTS, PATHS)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cli', required=True)
     parser.add_argument('--uds', action='store_true')
     args = parser.parse_args()
     # Fail when production adds or changes a legacy input without updating this fixture.
-    production = yaml.safe_load((ROOT.parents[2] / 'zarf.yaml').read_text())
-    actual = {item['name']: item.get('default', '') for item in production['variables']}
+    actual = production_defaults(ROOT.parents[2])
     if actual != DEFAULTS:
         raise RuntimeError('production variable defaults changed; review the migration fixture')
     prefix = [args.cli] + (['zarf'] if args.uds else [])
