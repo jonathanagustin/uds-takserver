@@ -13,9 +13,12 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import urllib.request
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
+PORT_CLASSPATH_LOCK = REPO_ROOT / "takx" / "compat" / "port-classpath.lock.json"
+SLF4J_JAR_NAME = "slf4j-api-1.7.30.jar"
 SCHEMA = "uds-takx-render-context-hosted-v1"
 EXPECTED_REVISION = "9f6893dd657feacc35ec5de03dad721c2e44170e"
 EXPECTED_BINDING_ASSERTIONS = 88
@@ -183,11 +186,24 @@ def qualify(official_source: Path, output: Path, cxx: str) -> dict:
     else:
         javac = shutil.which("javac") or "javac"
         java = shutil.which("java") or "java"
+    # Fetch the SHA-256-pinned slf4j-api jar required by takkernel's JRE Log.java.
+    cp_lock = json.loads(PORT_CLASSPATH_LOCK.read_text(encoding="utf-8"))
+    slf4j_entry = cp_lock[SLF4J_JAR_NAME]
+    slf4j_jar = out / SLF4J_JAR_NAME
+    urllib.request.urlretrieve(slf4j_entry["url"], slf4j_jar)
+    actual_slf4j_sha = sha256_file(slf4j_jar)
+    if actual_slf4j_sha != slf4j_entry["sha256"]:
+        raise ValueError(
+            f"{SLF4J_JAR_NAME} SHA-256 mismatch: expected {slf4j_entry['sha256']}, got {actual_slf4j_sha}"
+        )
+
     run_cmd(
         [
             javac,
             "-encoding",
             "UTF-8",
+            "-cp",
+            str(slf4j_jar),
             "-sourcepath",
             sourcepath,
             "-d",
@@ -198,7 +214,13 @@ def qualify(official_source: Path, output: Path, cxx: str) -> dict:
         timeout=120,
     )
     binding_stdout = run_cmd(
-        [java, "-ea", "-cp", str(classes_dir), "com.atakmap.map.opengl.BindingStateTest"],
+        [
+            java,
+            "-ea",
+            "-cp",
+            os.pathsep.join([str(classes_dir), str(slf4j_jar)]),
+            "com.atakmap.map.opengl.BindingStateTest",
+        ],
         timeout=60,
     )
     assertions = parse_binding_assertions(binding_stdout)
