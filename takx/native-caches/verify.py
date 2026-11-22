@@ -352,6 +352,18 @@ COMPONENTS = {
             "LICENSE.md",
         ),
     },
+    "gdal": {
+        "version": "2.4.4",
+        "archive_sha256": "a170207c0548cadec57e3a6e57727f66d4b64bf4a9a3ddd6c6bd0bf2479260e2",
+        "license_sha256": "b82e6cca0b13f5db2f22ab667f22254fb1f4b135ea73d5bd6238ef89aff31f6c",
+        "control_file": "gdal_control.cpp",
+        "control_marker": "gdal_static_pic_control=true",
+        "required_artifacts": (
+            "lib/libgdal.a",
+            "include/gdal.h",
+            "LICENSE.TXT",
+        ),
+    },
 }
 
 
