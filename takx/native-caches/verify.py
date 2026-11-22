@@ -218,6 +218,27 @@ COMPONENTS = {
         "control_marker": "zlib_ng_static_pic_control=true",
         "required_artifacts": ("lib/libz-ng.a", "include/zlib-ng.h", "LICENSE.md"),
     },
+    "modp-base64": {
+        "version": "2020-09-26",
+        "archive_sha256": "8c26f89672c6a5343ba8ed58200207e67530bc5a318130442069204068b1585c",
+        "license_sha256": "1fecc108ae7078aab437014074370f3a8a58bcb231596e5c4e59f6cc4083b10d",
+        "control_file": "modp_base64_control.c",
+        "control_marker": "modp_base64_static_pic_control=true",
+        "required_artifacts": ("lib/libmodp_b64.a", "include/modp_b64.h", "COPYING"),
+    },
+    "abseil": {
+        "version": "20240116.2",
+        "archive_sha256": "733726b8c3a6d39a4120d7e45ea8b41a434cdacde401cba500f14236c49b39dc",
+        "license_sha256": "c79a7fea0e3cac04cd43f20e7b648e5a0ff8fa5344e644b0ee09ca1162b62747",
+        "control_file": "abseil_control.cpp",
+        "control_marker": "abseil_static_pic_control=true",
+        "required_artifacts": (
+            "lib/libabsl_strings.a",
+            "lib/libabsl_base.a",
+            "include/absl/strings/str_cat.h",
+            "LICENSE",
+        ),
+    },
     "sqlite3": {
         "version": "3.46.0",
         "archive_sha256": "6f8e6a7b335273748816f9b3b62bbdc372a889de8782d7f048c653a447417a7d",
