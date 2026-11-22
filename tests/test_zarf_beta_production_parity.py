@@ -62,6 +62,10 @@ def _convert_component(component):
         out["charts"] = [_convert_chart(c) for c in component["charts"]]
     if "images" in component:
         out["images"] = [{"name": img} for img in component["images"]]
+    if "healthChecks" in component:
+        out["healthChecks"] = component["healthChecks"]
+    if "actions" in component:
+        out["actions"] = component["actions"]
     return out
 
 
@@ -158,6 +162,9 @@ class BetaStagingTransformTests(unittest.TestCase):
             self.assertNotIn("required", by_name["cloudtak"])
             self.assertNotIn("default", by_name["cloudtak"])
             self.assertTrue(all(isinstance(i, dict) and "name" in i for i in by_name["takserver"]["images"]))
+            self.assertEqual(len(by_name["takserver"]["healthChecks"]), 2)
+            self.assertEqual(len(by_name["cloudtak"]["healthChecks"]), 2)
+            self.assertEqual(len(by_name["takserver"]["actions"]["onCreate"]["before"]), 1)
 
 
 @unittest.skipUnless(shutil.which("uds") or os.environ.get("CI"), "uds CLI is not installed")
@@ -275,6 +282,18 @@ class ProductionBetaRenderParityTests(unittest.TestCase):
             cwd=self.beta_dir, check=False, capture_output=True, text=True,
         )
         self.assertNotEqual(result.returncode, 0)
+
+    def test_staged_beta_package_passes_zarf_dev_lint(self):
+        result = subprocess.run(
+            [
+                "uds", "zarf", "dev", "lint", ".", "--flavor", "upstream",
+                "--no-color", "--log-level", "warn",
+            ],
+            cwd=self.beta_dir, check=False, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, pv.render_failure(result))
+        combined = f"{result.stdout}\n{result.stderr}"
+        self.assertNotIn("v1alpha1", combined)
 
 
 if __name__ == "__main__":
