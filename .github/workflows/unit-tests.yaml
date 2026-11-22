@@ -217,7 +217,7 @@ jobs:
           python3 -B -m unittest discover -s takx/sdk-package -p 'test_resource_inputs.py' -v
           python3 -B -m unittest discover -s takx/sdk-package -p 'test_source_families.py' -v
           python3 -B -m unittest discover -s takx/kernel-regressions -p 'test_build.py' -v
-          python3 -B -m unittest discover -s takx/kernel-texture -p 'test_prepare.py' -v
+          python3 -B -m unittest discover -s takx/kernel-texture -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/kernel-render-context -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/kernel-render-context/font-jni-control -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/sdk-package -p 'test_composition.py' -v
@@ -245,7 +245,13 @@ jobs:
           python3 -B -m unittest discover -s takx/native-proj -p 'test_build.py' -v
           python3 -B -m unittest discover -s takx/worldwind-java -p 'test_build.py' -v
           python3 -B -m unittest discover -s takx/worldwind-consumers -p 'test_stage.py' -v
-          python3 -B -m unittest discover -s takx/ui-java -p 'test_build.py' -v
+          python3 -B -m unittest discover -s takx/ui-java -p 'test_*.py' -v
+          python3 -B -m unittest discover -s takx/compat -p 'test_*.py' -v
+          python3 -B -m unittest discover -s takx/gl-qualification -p 'test_*.py' -v
+          python3 -B -m unittest discover -s takx/gles-cache -p 'test_*.py' -v
+          python3 -B -m unittest discover -s takx/mdbtools-cache -p 'test_*.py' -v
+          python3 -B -m unittest discover -s takx/native-caches -p 'test_*.py' -v
+          python3 -B -m unittest discover -s takx/proj-cache -p 'test_*.py' -v
 
   # Renders the package without a cluster and checks that the package values
   # default to the Zarf variables, so a DOMAIN change still moves the hosts.
