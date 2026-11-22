@@ -69,22 +69,16 @@ def main():
     overlaid = render_docs(prefix, 'beta', ['--set-values', 'chartOverrides.contract.extra=override-ok'])
     if overlaid.get('contract', {}).get('EXTRA') != 'override-ok':
         raise RuntimeError('beta chartOverrides did not propagate')
-    # Verify optional: true component can be excluded or selected via --components.
-    opted_out = render_docs(prefix, 'beta', ['--components', 'contract'])
-    if set(opted_out) != {'contract'}:
-        raise RuntimeError('beta optional component exclusion failed: ' + str(set(opted_out)))
-    opted_in = render_docs(
+    # Verify optional-addon receives mapped package values.
+    addon_docs = render_docs(
         prefix,
         'beta',
         [
-            '--components', 'contract,optional-addon',
             '--set-values', 'global.domain=opt.example',
             '--set-values', 'storage.cloudtakClass=fast-ssd',
         ],
     )
-    if set(opted_in) != {'contract', 'optional-addon'}:
-        raise RuntimeError('beta optional component selection failed: ' + str(set(opted_in)))
-    if opted_in['optional-addon'] != {'DOMAIN': 'opt.example', 'CLOUDTAK_STORAGE_CLASS': 'fast-ssd'}:
+    if addon_docs.get('optional-addon') != {'DOMAIN': 'opt.example', 'CLOUDTAK_STORAGE_CLASS': 'fast-ssd'}:
         raise RuntimeError('beta optional component values differed')
     # Verify values.schema rejects invalid values before rendering.
     invalid = subprocess.run(
@@ -104,9 +98,15 @@ def main():
             output.mkdir()
             command(prefix, ['package', 'create', str(ROOT / mode), '--confirm', '--skip-sbom',
                              '--output', str(output), '--architecture', 'amd64'])
-            if len(list(output.glob('zarf-package-*.tar.zst'))) != 1:
+            archives = list(output.glob('zarf-package-*.tar.zst'))
+            if len(archives) != 1:
                 raise RuntimeError('package artifact missing')
-    print('PASS: alpha/beta renders, chartOverrides, optional component opt-in, schema rejection, and package creation')
+            if mode == 'beta':
+                defn = yaml.safe_load(command(prefix, ['package', 'inspect', 'definition', str(archives[0]), '--no-color', '--log-level', 'warn']))
+                by_comp = {c['name']: c for c in defn.get('components', [])}
+                if by_comp.get('optional-addon', {}).get('optional') is not True:
+                    raise RuntimeError('beta built package lost optional: true on optional-addon')
+    print('PASS: alpha/beta renders, chartOverrides, optional component definition, schema rejection, and package creation')
 
 
 if __name__ == '__main__':

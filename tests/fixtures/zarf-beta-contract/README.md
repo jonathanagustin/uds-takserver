@@ -14,11 +14,11 @@ uv run --no-project --with pyyaml==6.0.3 python -B tests/zarf_beta_contract.py -
 Validated with UDS CLI 0.42.0 (embedded Zarf 1.0.1).
 Each invocation renders defaults and all ten overrides for both schemas, verifies
 `chartOverrides` root overlay propagation across `import.local`, checks that an
-`optional: true` component can be excluded or selected via `--components`, confirms
-`values.schema` rejects an invalid `backup.filesystem.owner` value, and creates
-both packages in temporary directories. The chart is local; no cluster, registry,
-image, or production package build is required. The existing `package-values` CI
-job runs this contract with the repository's pinned UDS CLI.
+`optional: true` component receives mapped values and retains `optional: true`
+in the built package definition, confirms `values.schema` rejects an invalid
+`backup.filesystem.owner` value, and creates both packages in temporary
+directories. The chart is local; no cluster, registry, image, or production
+package build is required. The existing `package-values` CI job runs this
 
 The chart deliberately quotes every ConfigMap data value. Beta `--set-values`
 infers boolean types for `true` and `false`; legacy variables are strings. This
