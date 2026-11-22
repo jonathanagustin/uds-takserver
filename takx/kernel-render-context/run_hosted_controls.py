@@ -173,8 +173,13 @@ def qualify(official_source: Path, output: Path, cxx: str) -> dict:
             str(official / "takkernel" / "annotation" / "src" / "main" / "java"),
         ]
     )
-    javac = shutil.which("javac") or "javac"
-    java = shutil.which("java") or "java"
+    java_home = os.environ.get("JAVA_HOME_17_X64") or os.environ.get("JAVA_HOME")
+    if java_home and (Path(java_home) / "bin" / "javac").is_file():
+        javac = str(Path(java_home) / "bin" / "javac")
+        java = str(Path(java_home) / "bin" / "java")
+    else:
+        javac = shutil.which("javac") or "javac"
+        java = shutil.which("java") or "java"
     run_cmd(
         [
             javac,
