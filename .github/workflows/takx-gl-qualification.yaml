@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - "takx/gl-qualification/**"
+      - "takx/kernel-render-context/**"
       - "takx/kernel-texture/**"
       - ".github/workflows/takx-gl-qualification.yaml"
   workflow_dispatch:
@@ -89,5 +90,46 @@ jobs:
         with:
           name: takx-kernel-texture-hosted-gl-receipt
           path: ${{ runner.temp }}/kernel-texture-gl/hosted-gl-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-render-context:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline render-context verifier tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/kernel-render-context/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/kernel-render-context -p 'test_*.py' -v
+
+      - name: Fetch pinned upstream ATAK Kernel commit
+        timeout-minutes: 5
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/official-atak"
+          git -C "${RUNNER_TEMP}/official-atak" init -q
+          git -C "${RUNNER_TEMP}/official-atak" remote add origin https://github.com/TAK-Product-Center/atak-civ.git
+          git -C "${RUNNER_TEMP}/official-atak" fetch --depth 1 origin 9f6893dd657feacc35ec5de03dad721c2e44170e
+          git -C "${RUNNER_TEMP}/official-atak" checkout -q FETCH_HEAD
+
+      - name: Run live prepare, BindingStateTest (88 assertions), and RetirableWorker C++ control
+        timeout-minutes: 8
+        run: |
+          python3 -B takx/kernel-render-context/run_hosted_controls.py \
+            --phase qualify \
+            --official-source "${RUNNER_TEMP}/official-atak" \
+            --output "${RUNNER_TEMP}/takx-render-context-hosted"
+
+      - name: Retain verified render-context hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-render-context-hosted-receipt
+          path: ${{ runner.temp }}/takx-render-context-hosted/hosted-render-context-receipt.json
           if-no-files-found: error
           retention-days: 14
