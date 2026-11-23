@@ -9,6 +9,9 @@ on:
       - "takx/compat/**"
       - "takx/contour-style/**"
       - "takx/gl-qualification/**"
+      - "takx/kernel-java/**"
+      - "takx/kernel-native/**"
+      - "takx/kernel-regressions/**"
       - "takx/kernel-render-context/**"
       - "takx/kernel-spatial-db/**"
       - "takx/kernel-texture/**"
@@ -16,9 +19,13 @@ on:
       - "takx/cot-conformance/**"
       - "takx/gis-java/**"
       - "takx/mission-package/**"
+      - "takx/native-gdal-jni/**"
       - "takx/native-las/**"
+      - "takx/sdk-package/**"
       - "takx/sqlite-jdbc/**"
       - "takx/ui-java/**"
+      - "takx/worldwind-java/**"
+      - "takx/worldwind-consumers/**"
       - ".github/workflows/takx-gl-qualification.yaml"
   workflow_dispatch:
 
@@ -459,6 +466,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload verified gdal-data JAR for downstream qualification
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-gdal-data-build-output
+          path: ${{ runner.temp }}/takx-gdal-data-hosted/build-1/uds-takserver-gdal-data.jar
+          if-no-files-found: error
+          retention-days: 1
+
   qualify-kernel-spatial-db:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -772,5 +787,642 @@ jobs:
         with:
           name: takx-gis-java-hosted-receipt
           path: ${{ runner.temp }}/takx-gis-java-hosted/hosted-gis-java-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload verified gis-java build output for downstream Java qualification
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-gis-java-build-output
+          path: ${{ runner.temp }}/takx-gis-java-hosted/build
+          if-no-files-found: error
+          retention-days: 1
+
+  qualify-native-gdal-jni:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline native-gdal-jni verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/native-gdal-jni/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/native-gdal-jni -p 'test_run_hosted_controls.py' -v
+
+      - name: Build pinned SWIG 4.3.0 and qualify GIS Java wrappers
+        timeout-minutes: 8
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libpcre2-dev
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            "https://downloads.sourceforge.net/project/swig/swig/swig-4.3.0/swig-4.3.0.tar.gz" \
+            -o "${RUNNER_TEMP}/swig-4.3.0.tar.gz"
+          printf '%s  %s\n' "f7203ef796f61af986c70c05816236cbd0d31b7aa9631e5ab53020ab7804aa9e" "${RUNNER_TEMP}/swig-4.3.0.tar.gz" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/swig-4.3.0.tar.gz" -C "${RUNNER_TEMP}"
+          (
+            cd "${RUNNER_TEMP}/swig-4.3.0"
+            PATH="${JAVA_HOME_17_X64}/bin:${PATH}" ./configure \
+              --prefix="${RUNNER_TEMP}/swig-install" \
+              --without-alllang \
+              --with-java
+            make -j4
+            make install
+          )
+          python3 -B takx/gis-java/run_hosted_controls.py \
+            --phase qualify \
+            --java-home "${JAVA_HOME_17_X64}" \
+            --swig-bin "${RUNNER_TEMP}/swig-install/bin/swig" \
+            --swig-lib "${RUNNER_TEMP}/swig-install/share/swig/4.3.0" \
+            --output "${RUNNER_TEMP}/gis-java"
+
+      - name: Extract prebuilt GDAL and static transitive OCI caches
+        timeout-minutes: 4
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/gdal-deps/include" "${RUNNER_TEMP}/gdal-deps/lib" "${RUNNER_TEMP}/gdal-deps/share"
+          for spec in \
+            "gdal:2.4.4-amd64" \
+            "proj:4.9.1-amd64" \
+            "libkml:1.3.0-amd64" \
+            "uriparser:0.9.8-amd64" \
+            "expat:2.10.0-amd64" \
+            "zlib:1.3.1-amd64"; do
+            dep_name="${spec%%:*}"
+            dep_tag="${spec#*:}"
+            dep_cid="$(docker create "ghcr.io/jonathanagustin/uds-takserver/takx-native-${dep_name}:${dep_tag}" "/${dep_name}")"
+            mkdir -p "${RUNNER_TEMP}/dep-${dep_name}"
+            docker cp "${dep_cid}:/${dep_name}/." "${RUNNER_TEMP}/dep-${dep_name}/"
+            docker rm "${dep_cid}"
+            if [ -d "${RUNNER_TEMP}/dep-${dep_name}/include" ]; then
+              cp -a "${RUNNER_TEMP}/dep-${dep_name}/include/." "${RUNNER_TEMP}/gdal-deps/include/"
+            fi
+            if [ -d "${RUNNER_TEMP}/dep-${dep_name}/lib" ]; then
+              cp -a "${RUNNER_TEMP}/dep-${dep_name}/lib/." "${RUNNER_TEMP}/gdal-deps/lib/"
+            fi
+            if [ -d "${RUNNER_TEMP}/dep-${dep_name}/share" ]; then
+              cp -a "${RUNNER_TEMP}/dep-${dep_name}/share/." "${RUNNER_TEMP}/gdal-deps/share/"
+            fi
+          done
+
+      - name: Run live GDAL 2.4.4 JNI and exception controls under JDK 17 -Xcheck:jni
+        timeout-minutes: 8
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/takx-native-gdal-jni-hosted"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work:ro" \
+            -v "${RUNNER_TEMP}/gis-java/build:/gis:ro" \
+            -v "${RUNNER_TEMP}/gdal-deps:/deps:ro" \
+            -v "${RUNNER_TEMP}/takx-native-gdal-jni-hosted:/out" \
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
+            python3 -B /work/takx/native-gdal-jni/run_hosted_controls.py \
+              --phase qualify \
+              --gis-build /gis \
+              --deps-prefix /deps \
+              --java-home /usr/lib/jvm/java-17-openjdk-amd64 \
+              --output /out
+
+      - name: Retain verified native-gdal-jni hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-native-gdal-jni-hosted-receipt
+          path: ${{ runner.temp }}/takx-native-gdal-jni-hosted/hosted-native-gdal-jni-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload verified native-gdal-jni libraries for downstream native qualification
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-native-gdal-jni-build-output
+          path: ${{ runner.temp }}/takx-native-gdal-jni-hosted/lib
+          if-no-files-found: error
+          retention-days: 1
+
+  qualify-worldwind-java:
+    needs: qualify-gis-java
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline worldwind-java verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/worldwind-java/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/worldwind-java -p 'test_*.py' -v
+
+      - name: Download verified gis-java build output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-gis-java-build-output
+          path: ${{ runner.temp }}/gis-java-build
+
+      - name: Fetch pinned upstream NASA WorldWindJava commit
+        timeout-minutes: 4
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/pinned-worldwind"
+          git -C "${RUNNER_TEMP}/pinned-worldwind" init -q
+          git -C "${RUNNER_TEMP}/pinned-worldwind" remote add origin https://github.com/NASAWorldWind/WorldWindJava.git
+          git -C "${RUNNER_TEMP}/pinned-worldwind" fetch --depth 1 origin 9ccf6b8ed2ae452ef51e7b1739a7ffd4ef78a403
+          git -C "${RUNNER_TEMP}/pinned-worldwind" checkout -q FETCH_HEAD
+
+      - name: Build standard and interop WorldWind Java JARs live on Linux JDK 17
+        timeout-minutes: 10
+        run: |
+          python3 -B takx/worldwind-java/run_hosted_controls.py \
+            --phase qualify \
+            --worldwind-source "${RUNNER_TEMP}/pinned-worldwind" \
+            --gis-build "${RUNNER_TEMP}/gis-java-build" \
+            --output "${RUNNER_TEMP}/takx-worldwind-java-hosted"
+
+      - name: Retain verified worldwind-java hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-worldwind-java-hosted-receipt
+          path: ${{ runner.temp }}/takx-worldwind-java-hosted/hosted-worldwind-java-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-kernel-java:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline kernel-java verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/kernel-java/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/kernel-java -p 'test_*.py' -v
+
+      - name: Fetch pinned upstream ATAK Kernel commit
+        timeout-minutes: 5
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/pinned-atak"
+          git -C "${RUNNER_TEMP}/pinned-atak" init -q
+          git -C "${RUNNER_TEMP}/pinned-atak" remote add origin https://github.com/TAK-Product-Center/atak-civ.git
+          git -C "${RUNNER_TEMP}/pinned-atak" fetch --depth 1 origin 9f6893dd657feacc35ec5de03dad721c2e44170e
+          git -C "${RUNNER_TEMP}/pinned-atak" checkout -q FETCH_HEAD
+
+      - name: Build pinned SWIG 4.3.0 and qualify GIS Java JARs
+        timeout-minutes: 8
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libpcre2-dev
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            "https://downloads.sourceforge.net/project/swig/swig/swig-4.3.0/swig-4.3.0.tar.gz" \
+            -o "${RUNNER_TEMP}/swig-4.3.0.tar.gz"
+          printf '%s  %s\n' "f7203ef796f61af986c70c05816236cbd0d31b7aa9631e5ab53020ab7804aa9e" "${RUNNER_TEMP}/swig-4.3.0.tar.gz" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/swig-4.3.0.tar.gz" -C "${RUNNER_TEMP}"
+          (
+            cd "${RUNNER_TEMP}/swig-4.3.0"
+            PATH="${JAVA_HOME_17_X64}/bin:${PATH}" ./configure \
+              --prefix="${RUNNER_TEMP}/swig-install" \
+              --without-alllang \
+              --with-java
+            make -j4
+            make install
+          )
+          python3 -B takx/gis-java/run_hosted_controls.py \
+            --phase qualify \
+            --java-home "${JAVA_HOME_17_X64}" \
+            --swig-bin "${RUNNER_TEMP}/swig-install/bin/swig" \
+            --swig-lib "${RUNNER_TEMP}/swig-install/share/swig/4.3.0" \
+            --output "${RUNNER_TEMP}/gis-java"
+
+      - name: Compile all 1,176 Kernel engine-shared Java sources and 59 compat adapters live on JDK 17
+        timeout-minutes: 8
+        run: |
+          python3 -B takx/kernel-java/run_hosted_controls.py \
+            --phase qualify \
+            --atak-source "${RUNNER_TEMP}/pinned-atak" \
+            --gis-build "${RUNNER_TEMP}/gis-java/build" \
+            --java-home "${JAVA_HOME_17_X64}" \
+            --output "${RUNNER_TEMP}/takx-kernel-java-hosted"
+
+      - name: Retain verified kernel-java hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-kernel-java-hosted-receipt
+          path: ${{ runner.temp }}/takx-kernel-java-hosted/hosted-kernel-java-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload verified kernel-java classes, JNI headers, and classpath for native qualification
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-kernel-java-build-output
+          path: |
+            ${{ runner.temp }}/takx-kernel-java-hosted/proof/classes
+            ${{ runner.temp }}/takx-kernel-java-hosted/proof/jni-headers
+            ${{ runner.temp }}/takx-kernel-java-hosted/proof/classpath
+          if-no-files-found: error
+          retention-days: 1
+
+  qualify-worldwind-consumers:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64
+    timeout-minutes: 10
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline worldwind-consumers verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/worldwind-consumers/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/worldwind-consumers -p 'test_*.py' -v
+
+      - name: Fetch pinned upstream TAKX 5.7 and 5.8 commits
+        timeout-minutes: 4
+        run: |
+          set -eu
+          for spec in \
+            "57:0b59a9bb2d0e90dc35c9edfff1c2056daab2b713" \
+            "58:af54a3e1fe8796b6e109e2e5925dbef524ea7e31"; do
+            tag="${spec%%:*}"
+            rev="${spec#*:}"
+            dir="${RUNNER_TEMP}/pinned-takx-${tag}"
+            mkdir -p "${dir}"
+            git -C "${dir}" init -q
+            git -C "${dir}" remote add origin https://github.com/TAK-Product-Center/TAKX.git
+            git -C "${dir}" fetch --depth 1 origin "${rev}"
+            git -C "${dir}" checkout -q FETCH_HEAD
+          done
+
+      - name: Stage and verify all 21 pinned TAKX 5.7 and 5.8 WorldWind consumers live on Linux
+        timeout-minutes: 4
+        run: |
+          python3 -B takx/worldwind-consumers/run_hosted_controls.py \
+            --phase qualify \
+            --takx-57 "${RUNNER_TEMP}/pinned-takx-57" \
+            --takx-58 "${RUNNER_TEMP}/pinned-takx-58" \
+            --output "${RUNNER_TEMP}/takx-worldwind-consumers-hosted"
+
+      - name: Retain verified worldwind-consumers hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-worldwind-consumers-hosted-receipt
+          path: ${{ runner.temp }}/takx-worldwind-consumers-hosted/hosted-worldwind-consumers-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-kernel-native:
+    needs:
+      - qualify-native-gdal-jni
+      - qualify-kernel-java
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline kernel-native verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/kernel-native/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/kernel-native -p 'test_build.py' -v
+          python3 -B -m unittest discover -s takx/kernel-native -p 'test_gdal_history.py' -v
+          python3 -B -m unittest discover -s takx/kernel-native -p 'test_run_hosted_controls.py' -v
+
+      - name: Download verified native-gdal-jni and kernel-java build outputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-native-gdal-jni-build-output
+          path: ${{ runner.temp }}/gdal-jni
+
+      - name: Download verified kernel-java classes, JNI headers, and classpath
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-kernel-java-build-output
+          path: ${{ runner.temp }}/kernel-java
+
+      - name: Fetch pinned atak-civ 8.30.5 sources, tinygltf archives, and minizip headers
+        timeout-minutes: 6
+        run: |
+          set -eu
+          chmod 755 "${RUNNER_TEMP}/gdal-jni"/*.so
+          mkdir -p "${RUNNER_TEMP}/pinned-atak" "${RUNNER_TEMP}/gltf-cache" "${RUNNER_TEMP}/minizip-include/minizip"
+          git -C "${RUNNER_TEMP}/pinned-atak" init -q
+          git -C "${RUNNER_TEMP}/pinned-atak" remote add origin https://github.com/TAK-Product-Center/atak-civ.git
+          git -C "${RUNNER_TEMP}/pinned-atak" fetch --depth 1 origin 9f6893dd657feacc35ec5de03dad721c2e44170e
+          git -C "${RUNNER_TEMP}/pinned-atak" checkout -q FETCH_HEAD
+
+          for entry in \
+            "fa32ead8ec963f96ae6bd4a65d5b8b8361740d25e8915f3f226303d1ac2e6f85|https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/depends/tinygltf-2.4.1-mod.tar.gz" \
+            "2d9a0196d5346a955f3bbb08f890bb808e92b9980dd79d112611501500d68c43|https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/depends/tinygltfloader-0.9.5-mod.tar.gz"; do
+            sha="${entry%%|*}"
+            url="${entry#*|}"
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "${url}" -o "${RUNNER_TEMP}/gltf-cache/${sha}"
+            printf '%s  %s\n' "${sha}" "${RUNNER_TEMP}/gltf-cache/${sha}" | sha256sum -c -
+          done
+
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            "https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/takthirdparty/distfiles/libkml.tar.gz" \
+            -o "${RUNNER_TEMP}/libkml.tar.gz"
+          printf '%s  %s\n' "39692c0184933424e35ef69e5101f1ff0d664f2b50b972887cfc15fda032d1cb" "${RUNNER_TEMP}/libkml.tar.gz" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/libkml-extract"
+          tar -xzf "${RUNNER_TEMP}/libkml.tar.gz" -C "${RUNNER_TEMP}/libkml-extract"
+          patch --batch --fuzz=0 -p1 \
+            -d "${RUNNER_TEMP}/libkml-extract/libkml-1.3/third_party/zlib-1.2.3/contrib/minizip" \
+            -i "${GITHUB_WORKSPACE}/takx/native-caches/libkml/patches/minizip-zlib-crc-type.patch"
+          cp -a "${RUNNER_TEMP}/libkml-extract/libkml-1.3/third_party/zlib-1.2.3/contrib/minizip"/*.h \
+            "${RUNNER_TEMP}/minizip-include/minizip/"
+
+      - name: Extract published GHCR Layer-0/1/2 native OCI caches
+        timeout-minutes: 8
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/caches/gles"
+          gles_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-gles:1.7.0-amd64 /nonexistent)"
+          docker cp "${gles_cid}:/glvnd/." "${RUNNER_TEMP}/caches/gles/"
+          docker rm "${gles_cid}"
+
+          for spec in \
+            "zlib:1.3.1-amd64" \
+            "expat:2.10.0-amd64" \
+            "quictls:3.0.14-quic1-amd64" \
+            "openssl:3.5.9-amd64" \
+            "nghttp2:1.62.1-amd64" \
+            "libmicrohttpd:1.0.1-amd64" \
+            "protobuf:3.21.0-amd64" \
+            "uriparser:0.9.8-amd64" \
+            "fmt:10.2.1-amd64" \
+            "zstd:1.5.6-amd64" \
+            "meshoptimizer:0.20-amd64" \
+            "asyncplusplus:1.1-amd64" \
+            "tinyxml2:10.0.0-amd64" \
+            "libjpeg-turbo:3.0.3-amd64" \
+            "libwebp:1.4.0-amd64" \
+            "draco:1.5.7-amd64" \
+            "zlib-ng:2.1.5-amd64" \
+            "modp-base64:2020-09-26-amd64" \
+            "abseil:20240116.2-amd64" \
+            "libiconv:1.15-amd64" \
+            "sqlite3:3.46.0-amd64" \
+            "proj:4.9.1-amd64" \
+            "geos:3.4.3-amd64" \
+            "mdbtools:1.0.0-amd64" \
+            "curl:8.23.0-amd64" \
+            "sqlcipher:4.5.7-amd64" \
+            "laszip:3.4.3-amd64" \
+            "assimp:4.0.1-amd64" \
+            "ngtcp2:1.6.0-amd64" \
+            "spdlog:1.14.1-amd64" \
+            "ktx:4.3.1-amd64" \
+            "s2geometry:0.11.1-amd64" \
+            "libxml2:2.13.3-amd64" \
+            "libkml:1.3.0-amd64" \
+            "liblas:1.8.2-amd64" \
+            "gdal:2.4.4-amd64" \
+            "spatialite:4.3.0a-amd64" \
+            "cesium:0.40.1-amd64"; do
+            name="${spec%%:*}"
+            tag="${spec#*:}"
+            mkdir -p "${RUNNER_TEMP}/caches/${name}"
+            cid="$(docker create "ghcr.io/jonathanagustin/uds-takserver/takx-native-${name}:${tag}" "/nonexistent")"
+            docker cp "${cid}:/${name}/." "${RUNNER_TEMP}/caches/${name}/"
+            docker rm "${cid}"
+          done
+
+      - name: Compile 642 Kernel 8.30.5 C/C++ TUs, audit ELF boundaries, and run JDK 17 -Xcheck:jni controls
+        timeout-minutes: 20
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/takx-kernel-native-hosted"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work:ro" \
+            -v "${RUNNER_TEMP}/pinned-atak:/atak:ro" \
+            -v "${RUNNER_TEMP}/gltf-cache:/gltf:ro" \
+            -v "${RUNNER_TEMP}/minizip-include:/minizip:ro" \
+            -v "${RUNNER_TEMP}/caches:/caches:ro" \
+            -v "${RUNNER_TEMP}/gdal-jni:/gdal-jni:ro" \
+            -v "${RUNNER_TEMP}/kernel-java:/kernel-java:ro" \
+            -v "${RUNNER_TEMP}/takx-kernel-native-hosted:/out" \
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
+            python3 -B /work/takx/kernel-native/run_hosted_controls.py \
+              --phase qualify \
+              --atak-source /atak \
+              --gltf-cache /gltf \
+              --minizip-include /minizip \
+              --caches-root /caches \
+              --gdal-jni-dir /gdal-jni \
+              --kernel-java-dir /kernel-java \
+              --java-home /usr/lib/jvm/java-17-openjdk-amd64 \
+              --output /out/run \
+              --jobs 4
+
+      - name: Retain verified kernel-native hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-kernel-native-hosted-receipt
+          path: ${{ runner.temp }}/takx-kernel-native-hosted/run/hosted-kernel-native-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload verified kernel-native libraries for downstream SDK qualification
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-kernel-native-build-output
+          path: |
+            ${{ runner.temp }}/takx-kernel-native-hosted/run/build/kernel-cpp/libtakengine.so
+            ${{ runner.temp }}/takx-kernel-native-hosted/run/build/kernel-jni/libtakenginejni.so
+            ${{ runner.temp }}/takx-kernel-native-hosted/run/hosted-kernel-native-receipt.json
+          if-no-files-found: error
+          retention-days: 1
+
+  qualify-sdk-package:
+    needs:
+      - qualify-native-gdal-jni
+      - qualify-kernel-java
+      - qualify-kernel-native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline sdk-package verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/sdk-package/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/sdk-package -p 'test_build.py' -v
+          python3 -B -m unittest discover -s takx/sdk-package -p 'test_resource_inputs.py' -v
+          python3 -B -m unittest discover -s takx/sdk-package -p 'test_source_families.py' -v
+          python3 -B -m unittest discover -s takx/sdk-package -p 'test_composition.py' -v
+          python3 -B -m unittest discover -s takx/sdk-package -p 'test_native_source_*.py' -v
+          python3 -B -m unittest discover -s takx/sdk-package -p 'test_run_hosted_controls.py' -v
+
+      - name: Download verified native-gdal-jni, kernel-java, and kernel-native outputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-native-gdal-jni-build-output
+          path: ${{ runner.temp }}/gdal-jni
+
+      - name: Download verified kernel-java classes, JNI headers, and classpath
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-kernel-java-build-output
+          path: ${{ runner.temp }}/kernel-java
+
+      - name: Download verified kernel-native shared libraries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-kernel-native-build-output
+          path: ${{ runner.temp }}/kernel-native
+
+      - name: Fetch pinned atak-civ 8.30.5 sources, verified LFS payload, and GHCR OCI caches
+        timeout-minutes: 6
+        run: |
+          set -eu
+          find "${RUNNER_TEMP}/gdal-jni" "${RUNNER_TEMP}/kernel-native" -name '*.so' -exec chmod 755 {} +
+          mkdir -p "${RUNNER_TEMP}/pinned-atak" "${RUNNER_TEMP}/resource-payloads"
+          git -C "${RUNNER_TEMP}/pinned-atak" init -q
+          git -C "${RUNNER_TEMP}/pinned-atak" remote add origin https://github.com/TAK-Product-Center/atak-civ.git
+          git -C "${RUNNER_TEMP}/pinned-atak" fetch --depth 1 origin 9f6893dd657feacc35ec5de03dad721c2e44170e
+          git -C "${RUNNER_TEMP}/pinned-atak" checkout -q FETCH_HEAD
+
+          lfs_sha="12e71980bdeffb9bb48db5976e9e10a0af635f7fc7834915db3baab9c195aa31"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            "https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/takkernel/engine/src/main/assets/loresel.sqlite.zip" \
+            -o "${RUNNER_TEMP}/resource-payloads/${lfs_sha}"
+          printf '%s  %s\n' "${lfs_sha}" "${RUNNER_TEMP}/resource-payloads/${lfs_sha}" | sha256sum -c -
+
+          mkdir -p "${RUNNER_TEMP}/sdk-caches/gles"
+          gles_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-gles:1.7.0-amd64 /nonexistent)"
+          docker cp "${gles_cid}:/glvnd/." "${RUNNER_TEMP}/sdk-caches/gles/"
+          docker rm "${gles_cid}"
+
+          for spec in \
+            "liblas:1.8.2-amd64" \
+            "assimp:4.0.1-amd64" \
+            "zlib:1.3.1-amd64"; do
+            name="${spec%%:*}"
+            tag="${spec#*:}"
+            mkdir -p "${RUNNER_TEMP}/sdk-caches/${name}"
+            cid="$(docker create "ghcr.io/jonathanagustin/uds-takserver/takx-native-${name}:${tag}" "/nonexistent")"
+            docker cp "${cid}:/${name}/." "${RUNNER_TEMP}/sdk-caches/${name}/"
+            docker rm "${cid}"
+          done
+
+      - name: Assemble SDK JAR and qualify stock EngineLibrary resource loader under JDK 17 -Xcheck:jni
+        timeout-minutes: 10
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/takx-sdk-package-hosted"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work:ro" \
+            -v "${RUNNER_TEMP}/pinned-atak:/atak:ro" \
+            -v "${RUNNER_TEMP}/resource-payloads:/sdk-payloads:ro" \
+            -v "${RUNNER_TEMP}/sdk-caches:/sdk-caches:ro" \
+            -v "${RUNNER_TEMP}/gdal-jni:/sdk-gdal-jni:ro" \
+            -v "${RUNNER_TEMP}/kernel-java:/sdk-kernel-java:ro" \
+            -v "${RUNNER_TEMP}/kernel-native:/sdk-kernel-native:ro" \
+            -v "${RUNNER_TEMP}/takx-sdk-package-hosted:/out" \
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
+            python3 -B /work/takx/sdk-package/run_hosted_controls.py \
+              --phase qualify \
+              --atak-source /atak \
+              --resource-payloads /sdk-payloads \
+              --caches-root /sdk-caches \
+              --gdal-jni-dir /sdk-gdal-jni \
+              --kernel-java-dir /sdk-kernel-java \
+              --kernel-native-dir /sdk-kernel-native \
+              --java-home /usr/lib/jvm/java-17-openjdk-amd64 \
+              --output /out/run
+
+      - name: Retain verified sdk-package hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-sdk-package-hosted-receipt
+          path: ${{ runner.temp }}/takx-sdk-package-hosted/run/hosted-sdk-package-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload assembled SDK package for downstream qualification
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-sdk-package-build-output
+          path: ${{ runner.temp }}/takx-sdk-package-hosted/run/package
+          if-no-files-found: error
+          retention-days: 1
+
+  qualify-kernel-regressions:
+    needs:
+      - qualify-sdk-package
+      - qualify-gdal-data
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline kernel-regressions verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/kernel-regressions/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/kernel-regressions -p 'test_build.py' -v
+          python3 -B -m unittest discover -s takx/kernel-regressions -p 'test_run_hosted_controls.py' -v
+
+      - name: Download assembled SDK package artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-sdk-package-build-output
+          path: ${{ runner.temp }}/sdk-package
+
+      - name: Download verified gdal-data JAR artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-gdal-data-build-output
+          path: ${{ runner.temp }}/gdal-data
+
+      - name: Run all 6 Kernel 8.30.5 format regression suites under JDK 17 -Xcheck:jni
+        timeout-minutes: 10
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/takx-kernel-regressions-hosted"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work:ro" \
+            -v "${RUNNER_TEMP}/sdk-package:/sdk-package:ro" \
+            -v "${RUNNER_TEMP}/gdal-data:/gdal-data:ro" \
+            -v "${RUNNER_TEMP}/takx-kernel-regressions-hosted:/out" \
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
+            python3 -B /work/takx/kernel-regressions/run_hosted_controls.py \
+              --phase qualify \
+              --sdk-package-dir /sdk-package \
+              --gdal-data-jar /gdal-data/uds-takserver-gdal-data.jar \
+              --java-home /usr/lib/jvm/java-17-openjdk-amd64 \
+              --output /out/run
+
+      - name: Retain verified kernel-regressions hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-kernel-regressions-hosted-receipt
+          path: ${{ runner.temp }}/takx-kernel-regressions-hosted/run/hosted-kernel-regressions-receipt.json
           if-no-files-found: error
           retention-days: 14

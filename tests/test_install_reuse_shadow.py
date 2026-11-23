@@ -741,6 +741,49 @@ class ScenarioSetTests(unittest.TestCase):
                 self.assertEqual(summary['decision'], 'execute-fresh')
                 self.assertFalse(summary['reuse_authorized'])
 
+    def test_cli_scenario_set_aggregates_bounded_files_and_rejects_symlinks_or_mixed_flags(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            files = []
+            for name, entry in [
+                ('amd64.json', self.shadow_entry('install', 'amd64', job_id=30, artifact_id=40)),
+                ('arm64.json', self.shadow_entry('install', 'arm64', job_id=31, artifact_id=41)),
+                ('airgap.json', self.shadow_entry('install-airgap', 'amd64', job_id=32, artifact_id=42)),
+            ]:
+                path = root / name
+                path.write_text(json.dumps(entry))
+                files.append(path)
+
+            argv = ['shadow', '--scenario-set', *(str(p) for p in files)]
+            with mock.patch.object(sys, 'argv', argv), mock.patch.object(sys, 'stdout', new=io.StringIO()) as out:
+                SHADOW.main()
+            result = json.loads(out.getvalue())
+            self.assertEqual(result['mode'], 'shadow-set')
+            self.assertTrue(result['set_qualified'])
+            self.assertTrue(result['complete_install_set'])
+            self.assertEqual(result['decision'], 'execute-fresh')
+            self.assertFalse(result['reuse_authorized'])
+
+            # Symlink input must fail closed without traceback.
+            link = root / 'link.json'
+            link.symlink_to(files[0])
+            with mock.patch.object(sys, 'argv', ['shadow', '--scenario-set', str(link)]), \
+                    mock.patch.object(sys, 'stdout', new=io.StringIO()) as out:
+                SHADOW.main()
+            sym_result = json.loads(out.getvalue())
+            self.assertEqual(sym_result['mode'], 'shadow-set')
+            self.assertFalse(sym_result['set_qualified'])
+            self.assertEqual(sym_result['blockers'], ['scenario-set-input-unavailable'])
+
+            # Mixing --scenario-set with single-receipt flags must fail closed.
+            with mock.patch.object(sys, 'argv', ['shadow', '--scenario-set', str(files[0]), '--pr', '5']), \
+                    mock.patch.object(sys, 'stdout', new=io.StringIO()) as out:
+                SHADOW.main()
+            mixed_result = json.loads(out.getvalue())
+            self.assertEqual(mixed_result['mode'], 'shadow-set')
+            self.assertFalse(mixed_result['set_qualified'])
+            self.assertEqual(mixed_result['blockers'], ['scenario-set-input-unavailable'])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -159,7 +159,11 @@ python3 .github/scripts/install-reuse-shadow.py \
   --receipt /private/install-receipt-install-amd64.json \
   --bundle /private/install-receipt-install-amd64.jsonl \
   --pr PR_NUMBER --target EXACT_SQUASH_COMMIT --policy-ref REVIEWED_POLICY_COMMIT \
+  --expected-runner ubuntu-22.04 \
   --gh /path/to/gh
+
+python3 .github/scripts/install-reuse-shadow.py \
+  --scenario-set /private/shadow-amd64.json /private/shadow-arm64.json /private/shadow-airgap.json
 ```
 
 Use exact 40-character commit IDs. The policy commit must be selected independently
@@ -215,11 +219,12 @@ Every output says `decision: execute-fresh` and `reuse_authorized: false`.
 `--expected-runner` compares the selected job's GitHub-hosted runner group and
 single runner label against an allowlisted label for that architecture and
 records `execution_class_comparison` (failing closed on unknown, cross-architecture,
-or non-hosted labels). `evaluate_scenario_set()` aggregates per-scenario shadow
-results to verify cross-scenario commit/tree binding, deduplication, and coverage
-of all three install scenarios (`install-online` on amd64 and arm64, plus
-`install-airgap` on amd64), emitting a non-authorizing `verifier_preview`
-(`reuse_authorized: false`) shaped for `.github/scripts/test-validation-mode.py`.
+or non-hosted labels). `--scenario-set` (`evaluate_scenario_set()`) aggregates
+bounded per-scenario shadow JSON files to verify cross-scenario commit/tree
+binding, deduplication, and coverage of all three install scenarios
+(`install-online` on amd64 and arm64, plus `install-airgap` on amd64), emitting
+a non-authorizing `verifier_preview` (`reuse_authorized: false`) shaped for
+`.github/scripts/test-validation-mode.py`.
 Neither historical evidence nor runner-label comparison
 establishes prospective package/input equivalence or an approved execution-class
 policy, and those blockers remain even when checks pass. It cannot enable
