@@ -299,7 +299,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=takx-native-${{ matrix.component }}
 
       - name: Attest OCI cache build provenance
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
         with:
           subject-name: ghcr.io/jonathanagustin/uds-takserver/takx-native-${{ matrix.component }}
           subject-digest: ${{ steps.push.outputs.digest }}
@@ -544,7 +544,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=takx-native-${{ matrix.component }}
 
       - name: Attest OCI cache build provenance
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
         with:
           subject-name: ghcr.io/jonathanagustin/uds-takserver/takx-native-${{ matrix.component }}
           subject-digest: ${{ steps.push.outputs.digest }}
@@ -736,7 +736,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=takx-native-${{ matrix.component }}
 
       - name: Attest OCI cache build provenance
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
         with:
           subject-name: ghcr.io/jonathanagustin/uds-takserver/takx-native-${{ matrix.component }}
           subject-digest: ${{ steps.push.outputs.digest }}
