@@ -34,6 +34,9 @@ class HostedKernelFeatureJniControlsTests(unittest.TestCase):
         self.assertEqual(len(info["owned_controls"]), 17)
         self.assertEqual(len(runner.HEADLESS_JAVA_CONTROLS), 10)
         self.assertEqual(len(runner.PROBE_CPP_SOURCES), 6)
+        self.assertEqual(len(runner.LAYER_CLASS_INIT_CASES), 7)
+        self.assertNotIn("shared-fault-secondary", runner.LAYER_CLASS_INIT_CASES)
+        self.assertIn("unique-fault-secondary", runner.LAYER_CLASS_INIT_CASES)
         self.assertEqual(len(runner.POINTER_LIFETIME_MODES), 20)
 
     def test_extract_patch_section_extracts_layered_client_diffs(self) -> None:

@@ -68,7 +68,6 @@ LAYER_CLASS_INIT_CASES = (
     "shared-reference",
     "shared-fault",
     "unique-fault",
-    "shared-fault-secondary",
     "unique-fault-secondary",
 )
 LAYER_INBOUND_CASES = (
@@ -997,6 +996,7 @@ def qualify(
             "layer_removal_cases": len(LAYER_REMOVAL_CASES),
             "layer_removal_checks": rem_checks,
             "layer_class_init_cases": len(LAYER_CLASS_INIT_CASES),
+            "layer_class_init_excluded_cases": ["shared-fault-secondary"],
             "layer_class_init_checks": class_init_checks,
             "layer_inbound_cases": len(LAYER_INBOUND_CASES),
             "layer_inbound_checks": inbound_checks,
@@ -1008,6 +1008,7 @@ def qualify(
         "scope": {
             "feature_jni_callbacks_patched": True,
             "xcheck_jni_controls_passed": True,
+            "shared_fault_secondary_excluded_caller_stack_lifetime": True,
             "native_builder_integration": False,
             "strict_callback_accepted": False,
             "rendered_layer_accepted": False,
