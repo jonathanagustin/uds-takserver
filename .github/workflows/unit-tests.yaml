@@ -210,6 +210,7 @@ jobs:
           python3 -B -m unittest discover -s takx/kernel-elevation-jni -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/elevation-download-compat -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/kernel-client-interop -p 'test_build.py' -v
+          python3 -B -m unittest discover -s takx/kernel-client-interop -p 'test_run_hosted_controls.py' -v
           python3 -B -m unittest discover -s takx/contour-grid -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/contour-elevation -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/contour-style -p 'test_*.py' -v

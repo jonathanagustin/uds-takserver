@@ -11,6 +11,7 @@ on:
       - "takx/contour-elevation/**"
       - "takx/contour-style/**"
       - "takx/gl-qualification/**"
+      - "takx/kernel-client-interop/**"
       - "takx/kernel-elevation-jni/**"
       - "takx/kernel-feature-jni/**"
       - "takx/kernel-java/**"
@@ -2043,3 +2044,52 @@ jobs:
           path: ${{ runner.temp }}/takx-kernel-feature-jni-hosted/run/libtakenginejni.so
           if-no-files-found: error
           retention-days: 1
+  qualify-kernel-client-interop:
+    needs: qualify-sdk-package
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline kernel-client-interop verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/kernel-client-interop/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/kernel-client-interop -p 'test_build.py' -v
+          python3 -B -m unittest discover -s takx/kernel-client-interop -p 'test_run_hosted_controls.py' -v
+
+      - name: Download assembled SDK package artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-sdk-package-build-output
+          path: ${{ runner.temp }}/sdk-package
+
+      - name: Fetch pinned upstream ATAK Kernel client-interop files
+        timeout-minutes: 4
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/pinned-atak"
+          git -C "${RUNNER_TEMP}/pinned-atak" init -q
+          git -C "${RUNNER_TEMP}/pinned-atak" remote add origin https://github.com/TAK-Product-Center/atak-civ.git
+          git -C "${RUNNER_TEMP}/pinned-atak" fetch --depth 1 --filter=blob:none origin 9f6893dd657feacc35ec5de03dad721c2e44170e
+          git -C "${RUNNER_TEMP}/pinned-atak" sparse-checkout init --no-cone
+          git -C "${RUNNER_TEMP}/pinned-atak" sparse-checkout set             /takkernel/shared/src/main/java/gov/tak/api/cot/detail/RolesManager.java             /takkernel/shared/src/main/java/gov/tak/api/symbology/ISymbologyProvider.java             /takkernel/shared/src/main/java/gov/tak/platform/symbology/milstd2525/MilStd2525cSymbologyProviderBase.java             /takkernel/shared/src/main/java/gov/tak/platform/symbology/milstd2525/MilStd2525dSymbologyProviderBase.java             /takkernel/shared/src/main/java/gov/tak/platform/symbology/milstd2525/MilStd2525Base.java             /takkernel/engine/src/main/java/com/atakmap/map/layer/feature/FeatureLayer3.java             /takkernel/engine/src/main/jni/interop/feature/Interop.cpp             /takkernel/engine/src/main/java/com/atakmap/map/layer/model/SceneLayer.java             /takkernel/engine/src/main/jni/jscenelayer.cpp
+          git -C "${RUNNER_TEMP}/pinned-atak" checkout -q FETCH_HEAD
+
+      - name: Compile client-interop overlay and run HeadlessControls live on JDK 17
+        timeout-minutes: 8
+        run: |
+          python3 -B takx/kernel-client-interop/run_hosted_controls.py             --phase qualify             --atak-source "${RUNNER_TEMP}/pinned-atak"             --sdk-package-dir "${RUNNER_TEMP}/sdk-package"             --java-home /usr/lib/jvm/java-17-openjdk-amd64             --output "${RUNNER_TEMP}/takx-kernel-client-interop-hosted"
+
+      - name: Retain verified kernel-client-interop hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-kernel-client-interop-hosted-receipt
+          path: ${{ runner.temp }}/takx-kernel-client-interop-hosted/hosted-kernel-client-interop-receipt.json
+          if-no-files-found: error
+          retention-days: 14
