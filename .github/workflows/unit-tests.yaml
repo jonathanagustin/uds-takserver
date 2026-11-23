@@ -204,6 +204,7 @@ jobs:
           python3 -B -m unittest discover -s takx/gis-java/data -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/kernel-java -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/kernel-native -p 'test_build.py' -v
+          python3 -B -m unittest discover -s takx/kernel-native -p 'test_run_hosted_controls.py' -v
           python3 -B -m unittest discover -s takx/kernel-feature-jni -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/kernel-native -p 'test_gdal_history.py' -v
           python3 -B -m unittest discover -s takx/kernel-elevation-jni -p 'test_*.py' -v
