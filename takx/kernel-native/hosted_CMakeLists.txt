@@ -82,12 +82,13 @@ foreach(family base dom engine convenience regionator xsd)
   real_library("UDS::KML_${family}" STATIC "${CACHES_ROOT}/libkml/lib/libkml${family}.a")
 endforeach()
 
-real_library(OpenSSL::SSL STATIC "${CACHES_ROOT}/openssl/lib/libssl.a")
-set_property(TARGET OpenSSL::SSL PROPERTY
-  INTERFACE_INCLUDE_DIRECTORIES "${CACHES_ROOT}/openssl/include")
 real_library(OpenSSL::Crypto STATIC "${CACHES_ROOT}/openssl/lib/libcrypto.a")
 set_property(TARGET OpenSSL::Crypto PROPERTY
   INTERFACE_INCLUDE_DIRECTORIES "${CACHES_ROOT}/openssl/include")
+real_library(OpenSSL::SSL STATIC "${CACHES_ROOT}/openssl/lib/libssl.a")
+set_target_properties(OpenSSL::SSL PROPERTIES
+  INTERFACE_INCLUDE_DIRECTORIES "${CACHES_ROOT}/openssl/include"
+  INTERFACE_LINK_LIBRARIES "OpenSSL::Crypto;${CMAKE_DL_LIBS};pthread")
 real_library(SQLCipher::SQLCipher STATIC "${CACHES_ROOT}/sqlcipher/lib/libsqlite3.a")
 set_target_properties(SQLCipher::SQLCipher PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${CACHES_ROOT}/sqlcipher/include"
@@ -189,8 +190,10 @@ set(cesium_link_group
   ${cesium_all_archives}
   ${cesium_dep_archives}
   "draco::draco"
-  "OpenSSL::SSL"
-  "OpenSSL::Crypto"
+  "${CACHES_ROOT}/curl/lib/libcurl.a"
+  "${CACHES_ROOT}/openssl/lib/libssl.a"
+  "${CACHES_ROOT}/openssl/lib/libcrypto.a"
+  "${CACHES_ROOT}/zlib/lib/libz.a"
   "SQLCipher::SQLCipher"
   "-Wl,--end-group"
 )
