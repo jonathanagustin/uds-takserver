@@ -202,7 +202,7 @@ jobs:
           python3 -B -m unittest tests.test_ghcr_migration -v
           python3 -B -m unittest discover -s takx/gis-java -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/gis-java/data -p 'test_*.py' -v
-          python3 -B -m unittest discover -s takx/kernel-java -p 'test_build.py' -v
+          python3 -B -m unittest discover -s takx/kernel-java -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/kernel-native -p 'test_build.py' -v
           python3 -B -m unittest discover -s takx/kernel-feature-jni -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/kernel-native -p 'test_gdal_history.py' -v
@@ -245,7 +245,7 @@ jobs:
           uv run --no-project --with "pyyaml==${PYYAML_VERSION}" python -B -m unittest discover -s takx/geos-cache -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/native-proj -p 'test_build.py' -v
           python3 -B -m unittest discover -s takx/worldwind-java -p 'test_*.py' -v
-          python3 -B -m unittest discover -s takx/worldwind-consumers -p 'test_stage.py' -v
+          python3 -B -m unittest discover -s takx/worldwind-consumers -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/ui-java -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/compat -p 'test_*.py' -v
           python3 -B -m unittest discover -s takx/gl-qualification -p 'test_*.py' -v
