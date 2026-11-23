@@ -2255,3 +2255,52 @@ jobs:
           path: ${{ runner.temp }}/takx-render-context-jni-hosted/run/hosted-render-context-jni-receipt.json
           if-no-files-found: error
           retention-days: 14
+
+  qualify-font-jni-control:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64
+    timeout-minutes: 10
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline font-jni-control verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/kernel-render-context/font-jni-control/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/kernel-render-context/font-jni-control -p 'test_*.py' -v
+
+      - name: Fetch pinned OpenJDK 17u font sources (jdk-17.0.21+9)
+        timeout-minutes: 4
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/jdk17u"
+          git -C "${RUNNER_TEMP}/jdk17u" init -q
+          git -C "${RUNNER_TEMP}/jdk17u" remote add origin https://github.com/openjdk/jdk17u.git
+          git -C "${RUNNER_TEMP}/jdk17u" fetch --depth 1 --filter=blob:none origin e8adc958475b92b9f251145c6ce20532be16d806
+          git -C "${RUNNER_TEMP}/jdk17u" sparse-checkout init --no-cone
+          git -C "${RUNNER_TEMP}/jdk17u" sparse-checkout set \
+            /src/java.desktop/share/native/libfontmanager/HBShaper.c \
+            /src/java.desktop/share/native/libfontmanager/freetypeScaler.c \
+            /src/java.desktop/share/native/libfontmanager/hb-jdk-font.cc
+          git -C "${RUNNER_TEMP}/jdk17u" checkout -q FETCH_HEAD
+
+      - name: Run prepare.py and FontJniProbe live on JDK 17
+        timeout-minutes: 4
+        run: |
+          python3 -B takx/kernel-render-context/font-jni-control/run_hosted_controls.py \
+            --phase qualify \
+            --jdk-source "$(realpath "${RUNNER_TEMP}/jdk17u")" \
+            --java-home /usr/lib/jvm/java-17-openjdk-amd64 \
+            --output "$(realpath -m "${RUNNER_TEMP}/takx-font-jni-control-hosted")"
+
+      - name: Retain verified font-jni-control hosted receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-font-jni-control-hosted-receipt
+          path: ${{ runner.temp }}/takx-font-jni-control-hosted/hosted-font-jni-control-receipt.json
+          if-no-files-found: error
+          retention-days: 14
