@@ -336,6 +336,7 @@ RUN set -x; \
     done; \
     cp "${csrc}/LICENSE" /cesium/LICENSE; \
     g++ -std=c++17 -Wall -Wextra -Werror -O2 -DSPDLOG_FMT_EXTERNAL=1 \
+      -DGLM_FORCE_XYZW_ONLY -DGLM_FORCE_EXPLICIT_CTOR -DGLM_FORCE_SIZE_T_LENGTH \
       -isystem /cesium/include -isystem /opt/cesium-deps/include \
       /build/cesium_control.cpp \
       -Wl,--start-group /cesium/lib/libCesium*.a /opt/cesium-deps/lib/*.a /opt/sqlcipher/lib/libsqlite3.a /opt/openssl/lib/*.a -Wl,--end-group \
