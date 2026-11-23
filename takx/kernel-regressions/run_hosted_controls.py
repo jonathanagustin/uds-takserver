@@ -184,7 +184,12 @@ def _clean_env(java_home: Path, tmp_dir: Path) -> dict[str, str]:
     return env
 
 
-def qualify(sdk_package_dir: Path, java_home: Path, output_dir: Path) -> dict:
+def qualify(
+    sdk_package_dir: Path,
+    java_home: Path,
+    output_dir: Path,
+    gdal_data_jar: Path | None = None,
+) -> dict:
     """Compile regression controls and run all 6 format categories under JDK 17 -Xcheck:jni."""
     verified = verify_offline()
     sdk_package_dir = sdk_package_dir.resolve()
@@ -207,6 +212,21 @@ def qualify(sdk_package_dir: Path, java_home: Path, output_dir: Path) -> dict:
     if not dep_jars:
         raise FileNotFoundError(f"no dependency JARs found under {third_party_dir}")
 
+    gdal_data_meta: dict | None = None
+    extra_jars: list[Path] = []
+    if gdal_data_jar is not None:
+        if gdal_data_jar.is_symlink():
+            raise ValueError(f"symlink gdal-data JAR refused: {gdal_data_jar}")
+        resolved_gdal_data = gdal_data_jar.resolve()
+        if not resolved_gdal_data.is_file() or resolved_gdal_data.suffix != ".jar":
+            raise FileNotFoundError(f"regular .jar file required for --gdal-data-jar: {resolved_gdal_data}")
+        extra_jars.append(resolved_gdal_data)
+        gdal_data_meta = {
+            "name": resolved_gdal_data.name,
+            "sha256": _sha256_file(resolved_gdal_data),
+            "bytes": resolved_gdal_data.stat().st_size,
+        }
+
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     native_manifest = manifest["native_resources"]
     if len(native_manifest) != 9:
@@ -228,7 +248,7 @@ def qualify(sdk_package_dir: Path, java_home: Path, output_dir: Path) -> dict:
         sub.mkdir(parents=True, exist_ok=True)
 
     env = _clean_env(java_home, tmp_dir)
-    sdk_cp = os.pathsep.join(str(p) for p in [sdk_jar, *dep_jars])
+    sdk_cp = os.pathsep.join(str(p) for p in [sdk_jar, *dep_jars, *extra_jars])
     subprocess.run(
         [
             str(javac_bin),
@@ -309,6 +329,7 @@ def qualify(sdk_package_dir: Path, java_home: Path, output_dir: Path) -> dict:
             "bytes": sdk_jar.stat().st_size,
             "third_party_jar_count": len(dep_jars),
         },
+        "gdal_data_jar": gdal_data_meta,
         "qualified_format_categories": list(category_outcomes),
         "category_outcomes": category_outcomes,
         "scope": {
@@ -330,6 +351,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--phase", choices=("verify", "qualify"), required=True)
     parser.add_argument("--sdk-package-dir", type=Path)
+    parser.add_argument("--gdal-data-jar", type=Path)
     parser.add_argument("--java-home", type=Path, default=Path("/usr/lib/jvm/java-17-openjdk-amd64"))
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -353,6 +375,7 @@ def main() -> int:
         sdk_package_dir=args.sdk_package_dir,
         java_home=args.java_home,
         output_dir=args.output,
+        gdal_data_jar=args.gdal_data_jar,
     )
     return 0
 

@@ -466,6 +466,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload verified gdal-data JAR for downstream qualification
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-gdal-data-build-output
+          path: ${{ runner.temp }}/takx-gdal-data-hosted/build-1/uds-takserver-gdal-data.jar
+          if-no-files-found: error
+          retention-days: 1
+
   qualify-kernel-spatial-db:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -1365,6 +1373,7 @@ jobs:
   qualify-kernel-regressions:
     needs:
       - qualify-sdk-package
+      - qualify-gdal-data
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -1386,6 +1395,12 @@ jobs:
           name: takx-sdk-package-build-output
           path: ${{ runner.temp }}/sdk-package
 
+      - name: Download verified gdal-data JAR artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-gdal-data-build-output
+          path: ${{ runner.temp }}/gdal-data
+
       - name: Run all 6 Kernel 8.30.5 format regression suites under JDK 17 -Xcheck:jni
         timeout-minutes: 10
         run: |
@@ -1394,11 +1409,13 @@ jobs:
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/work:ro" \
             -v "${RUNNER_TEMP}/sdk-package:/sdk-package:ro" \
+            -v "${RUNNER_TEMP}/gdal-data:/gdal-data:ro" \
             -v "${RUNNER_TEMP}/takx-kernel-regressions-hosted:/out" \
             ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
             python3 -B /work/takx/kernel-regressions/run_hosted_controls.py \
               --phase qualify \
               --sdk-package-dir /sdk-package \
+              --gdal-data-jar /gdal-data/uds-takserver-gdal-data.jar \
               --java-home /usr/lib/jvm/java-17-openjdk-amd64 \
               --output /out/run
 
