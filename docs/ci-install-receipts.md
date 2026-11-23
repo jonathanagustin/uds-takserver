@@ -168,9 +168,14 @@ python3 .github/scripts/install-reuse-shadow.py \
 
 Use exact 40-character commit IDs. The policy commit must be selected independently
 of downloaded evidence; it supplies the approved workflow and selected producer files.
-The checker compares the workflow plus five helper files, including the directly
-executed dev-package key helper. This is a partial dependency policy, not validation
-of the complete acquisition, test and sanitization dependency closure; that
+The checker compares the workflow plus nineteen directly executed helper, task,
+and bundle files (receipt encoding, collection, artifact inputs, checkpoint
+identity, dev-package key, image pinning, slim-core deployment, runner fitting,
+air-gap orchestration and egress, log redaction and sanitization, validation-mode
+planning/verification, root/test task definitions, and the dev/air-gap bundle
+definitions and configs). Individual `tests/` scripts/specs and remote task
+includes remain outside this policy, so this remains a partial dependency
+policy rather than validation of the complete task and test-suite closure; that
 limitation remains an explicit permanent blocker. It does not trust an arbitrary
 PR's claim of approved code. The supplied receipt and Sigstore bundle are data files,
 never executable inputs. GitHub CLI must support `attestation verify` with exact

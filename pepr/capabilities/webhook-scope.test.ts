@@ -4,15 +4,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parse } from "yaml";
+import { POLICY_CONFIGMAPS } from "./tak-policy.ts";
 import {
   FAILURE_VALUE,
   failurePolicy,
   MATCH_CONDITION,
   matchExpression,
   pinLiterals,
+  scopeValidationWebhook,
   scopeWebhook,
   splitTakClientWebhook,
   TIMEOUT_VALUE,
+  VALIDATION_MATCH_CONDITION,
+  validationMatchExpression,
 } from "../scripts/webhook-scope.ts";
 import { TAK_APPS } from "./oidc-render.ts";
 import { IGNITE_CONFIGMAP, IGNITE_STATEFULSET, TAK_DEPLOYS } from "./workload.ts";
@@ -211,4 +215,143 @@ test("splitTakClientWebhook accepts a webhook-entry fragment starting at offset 
   assert.equal(doc.webhooks.length, 2);
   assert.equal(doc.webhooks[1].name, "takclients.uuid.pepr.dev");
   assert.deepEqual(doc.webhooks[1].rules[0].resources, ["takclients"]);
+});
+
+const validationGenerated = `apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ .Values.uuid }}
+webhooks:
+  - admissionReviewVersions:
+      - v1
+      - v1beta1
+    clientConfig:
+      caBundle: >-
+        LS0t${FAILURE_VALUE}LS0t
+      service:
+        name: {{ .Values.uuid }}
+        namespace: pepr-system
+        path: >-
+          /validate/3e34bf${TIMEOUT_VALUE}d2259
+    failurePolicy: ${FAILURE_VALUE}
+    matchPolicy: Equivalent
+    name: {{ .Values.uuid }}.pepr.dev
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: ${"Not" + "In"}
+          values:
+            - kube-system
+            - pepr-system
+    rules:
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - pods
+          - pods/ephemeralcontainers
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - services
+      - apiGroups:
+          - ''
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - configmaps
+      - apiGroups:
+          - tak.uds.dev
+        apiVersions:
+          - v1alpha1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - takclients
+    sideEffects: None
+    timeoutSeconds: ${TIMEOUT_VALUE}
+`;
+
+test("validationMatchExpression restricts ConfigMap validation to policy ConfigMaps", () => {
+  const expression = validationMatchExpression();
+  for (const name of POLICY_CONFIGMAPS) {
+    assert.ok(expression.includes(`'${name}'`), name);
+  }
+  assert.ok(expression.includes("request.kind.kind == 'ConfigMap'"));
+  assert.ok(!expression.includes('"'));
+});
+
+test("scopeValidationWebhook splits validation rules across takserver, cloudtak, and takclients", () => {
+  const doc = render(scopeValidationWebhook(pinLiterals(validationGenerated, 10, "Fail")));
+  assert.equal(doc.webhooks.length, 3);
+  const [tak, cloudtak, clients] = doc.webhooks;
+  assert.equal(tak.name, "takserver-policy.uuid.pepr.dev");
+  assert.deepEqual(tak.namespaceSelector, { matchLabels: { "kubernetes.io/metadata.name": "takserver" } });
+  assert.deepEqual(tak.matchConditions, [
+    { name: VALIDATION_MATCH_CONDITION, expression: validationMatchExpression() },
+  ]);
+  assert.deepEqual(
+    tak.rules.map((rule: { resources: string[] }) => rule.resources),
+    [["pods", "pods/ephemeralcontainers"], ["services"], ["configmaps"]],
+  );
+  assert.equal(tak.clientConfig.service.path, "/validate/3e34bf10d2259");
+  assert.equal(tak.clientConfig.caBundle, "LS0tFailLS0t");
+
+  assert.equal(cloudtak.name, "cloudtak-policy.uuid.pepr.dev");
+  assert.deepEqual(cloudtak.namespaceSelector, { matchLabels: { "kubernetes.io/metadata.name": "cloudtak" } });
+  assert.equal(cloudtak.matchConditions, undefined);
+  assert.deepEqual(
+    cloudtak.rules.map((rule: { resources: string[] }) => rule.resources),
+    [["pods", "pods/ephemeralcontainers"]],
+  );
+  assert.deepEqual(cloudtak.clientConfig, tak.clientConfig);
+
+  assert.equal(clients.name, "takclients-policy.uuid.pepr.dev");
+  assert.deepEqual(clients.namespaceSelector, { matchLabels: { "kubernetes.io/metadata.name": "takclients" } });
+  assert.equal(clients.matchConditions, undefined);
+  assert.deepEqual(
+    clients.rules.map((rule: { resources: string[] }) => rule.resources),
+    [["takclients"]],
+  );
+  assert.equal(clients.timeoutSeconds, "TIMEOUT");
+  assert.equal(clients.failurePolicy, "FAILURE");
+  assert.equal(clients.sideEffects, "None");
+});
+
+test("scopeValidationWebhook throws when required anchors or rules are missing", () => {
+  assert.throws(
+    () => scopeValidationWebhook(validationGenerated.replace("  - admissionReviewVersions:", "  - invalid:")),
+    /expected webhook anchors/,
+  );
+  assert.throws(
+    () => scopeValidationWebhook(validationGenerated.replace("    namespaceSelector:\n", "")),
+    /expected webhook anchors/,
+  );
+  assert.throws(
+    () => scopeValidationWebhook(validationGenerated.replace("    rules:\n", "")),
+    /expected webhook anchors/,
+  );
+  assert.throws(
+    () => scopeValidationWebhook(validationGenerated.replace(/^ +sideEffects:.*$/gm, "")),
+    /expected webhook anchors/,
+  );
+  for (const resource of ["pods", "services", "configmaps", "takclients"]) {
+    assert.throws(
+      () => scopeValidationWebhook(validationGenerated.replace(`          - ${resource}`, "          - other")),
+      new RegExp(`missing the ${resource} rule`),
+    );
+  }
 });

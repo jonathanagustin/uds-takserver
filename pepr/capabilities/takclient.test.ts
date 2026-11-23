@@ -1379,6 +1379,9 @@ test("registerAll registers every issued TakClient again", async () => {
 test("onMessaging registers again only when messaging becomes Available", async () => {
   const saved = { cluster: runtime.takCluster, tak: runtime.tak };
   const seeded = fake();
+  // onMessaging() calls registerAll(deps()) using the live wall clock, so seed
+  // the issued certificate relative to today rather than the fixed NOW fixture.
+  seeded.setNow(new Date());
   await reconcileCurrentEvent(client({ metadata: { name: "a1b2" } }), "ADDED", seeded.d);
   const issued = structuredClone(seeded.clients.get("a1b2")!);
   const { d, calls } = fake({ clients: [issued], store: seeded.store });

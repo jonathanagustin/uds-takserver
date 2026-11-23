@@ -476,8 +476,33 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(self.result(altered_subject)['evidence_qualified'])
 
     def test_reviewed_workflow_and_helpers_not_just_content_key(self):
-        self.api.file.side_effect = lambda commit, path: self.workflow if commit == self.merge else b'changed'
-        self.assertFalse(self.result()['evidence_qualified'])
+        repo_root = Path(__file__).resolve().parents[1]
+        self.assertEqual(len(set(SHADOW.POLICY_FILES)), len(SHADOW.POLICY_FILES))
+        expected_entries = (
+            'tasks.yaml',
+            'tasks/test.yaml',
+            '.github/scripts/test-airgap.sh',
+            '.github/scripts/fit-runner.sh',
+            '.github/scripts/redact-then-filter.sh',
+            'bundle/uds-bundle.yaml',
+            'bundle/uds-config.yaml',
+            'bundle/airgap-config.yaml',
+            'bundle/test-values.yaml',
+        )
+        for rel in expected_entries:
+            self.assertIn(rel, SHADOW.POLICY_FILES)
+        for rel in SHADOW.POLICY_FILES:
+            with self.subTest(exists=rel):
+                self.assertTrue((repo_root / rel).is_file(), f'missing policy file: {rel}')
+        for drifted in SHADOW.POLICY_FILES:
+            with self.subTest(drifted=drifted):
+                self.api.file.side_effect = (
+                    lambda commit, path, target=drifted:
+                    b'changed' if (commit == self.policy and path == target) else self.workflow
+                )
+                result = self.result()
+                self.assertFalse(result['evidence_qualified'])
+                self.assertEqual(result['blockers'][0], 'unreviewed-producer-or-workflow')
 
     def test_api_failure_becomes_bounded_fresh_result(self):
         self.api.get.side_effect = SHADOW.Unavailable('command-failed')

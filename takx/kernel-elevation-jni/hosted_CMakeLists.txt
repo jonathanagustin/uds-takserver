@@ -1,0 +1,253 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+cmake_minimum_required(VERSION 3.24)
+project(HostedKernelElevationJNI LANGUAGES C CXX)
+
+set(CMAKE_C_STANDARD 99)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_FIND_USE_PACKAGE_REGISTRY OFF)
+set(CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY OFF)
+
+foreach(input
+  CACHES_ROOT
+  GDAL_JNI_DIR
+  KERNEL_NATIVE_DIR
+  KERNEL_LAYOUT
+  JNI_HEADERS
+  GLTF
+  GLTFLOADER
+  GLES_EXTRA
+  MINIZIP_INCLUDE
+)
+  if(NOT EXISTS "${${input}}")
+    message(FATAL_ERROR "Missing required hosted elevation JNI input ${input}: ${${input}}")
+  endif()
+endforeach()
+
+set(CMAKE_BUILD_RPATH
+  "${CACHES_ROOT}/gles/lib;${CACHES_ROOT}/liblas/lib;${GDAL_JNI_DIR};${KERNEL_NATIVE_DIR}")
+
+function(real_library target kind path)
+  if(NOT EXISTS "${path}")
+    message(FATAL_ERROR "Missing actual library for ${target}: ${path}")
+  endif()
+  add_library("${target}" ${kind} IMPORTED GLOBAL)
+  set_property(TARGET "${target}" PROPERTY IMPORTED_LOCATION "${path}")
+endfunction()
+
+function(resolve_first out_var)
+  foreach(candidate IN LISTS ARGN)
+    if(EXISTS "${candidate}")
+      set("${out_var}" "${candidate}" PARENT_SCOPE)
+      return()
+    endif()
+  endforeach()
+  message(FATAL_ERROR "None of the candidate files exist for ${out_var}: ${ARGN}")
+endfunction()
+
+resolve_first(GLESV2_LIB
+  "${CACHES_ROOT}/gles/lib/libGLESv2.so.2.1.0"
+  "${CACHES_ROOT}/gles/lib/libGLESv2.so.2"
+  "${CACHES_ROOT}/gles/lib/libGLESv2.so")
+resolve_first(LAS_LIB
+  "${CACHES_ROOT}/liblas/lib/liblas.so.2.4.0"
+  "${CACHES_ROOT}/liblas/lib/liblas.so.3"
+  "${CACHES_ROOT}/liblas/lib/liblas.so")
+resolve_first(LAS_C_LIB
+  "${CACHES_ROOT}/liblas/lib/liblas_c.so.2.4.0"
+  "${CACHES_ROOT}/liblas/lib/liblas_c.so.3"
+  "${CACHES_ROOT}/liblas/lib/liblas_c.so")
+
+real_library(takengine SHARED "${KERNEL_NATIVE_DIR}/libtakengine.so")
+real_library(UDS::GLES SHARED "${GLESV2_LIB}")
+real_library(UDS::GDAL SHARED "${GDAL_JNI_DIR}/libgdal.so")
+real_library(UDS::Spatialite STATIC "${CACHES_ROOT}/spatialite/lib/libspatialite.a")
+real_library(UDS::GEOS_C STATIC "${CACHES_ROOT}/geos/lib/libgeos_c.a")
+real_library(UDS::GEOS STATIC "${CACHES_ROOT}/geos/lib/libgeos.a")
+real_library(UDS::PROJ STATIC "${CACHES_ROOT}/proj/lib/libproj.a")
+real_library(UDS::XML STATIC "${CACHES_ROOT}/libxml2/lib/libxml2.a")
+real_library(UDS::Iconv STATIC "${CACHES_ROOT}/libiconv/lib/libiconv.a")
+real_library(UDS::Zlib STATIC "${CACHES_ROOT}/zlib/lib/libz.a")
+real_library(UDS::IrrXML STATIC "${CACHES_ROOT}/assimp/lib/libIrrXML.a")
+real_library(UDS::Assimp STATIC "${CACHES_ROOT}/assimp/lib/libassimp.a")
+real_library(UDS::LAS SHARED "${LAS_LIB}")
+real_library(UDS::LAS_C SHARED "${LAS_C_LIB}")
+real_library(UDS::MDB STATIC "${CACHES_ROOT}/mdbtools/lib/libmdb.a")
+real_library(UDS::Minizip STATIC "${CACHES_ROOT}/libkml/lib/libminizip.a")
+real_library(UDS::Expat STATIC "${CACHES_ROOT}/expat/lib/libexpat.a")
+
+foreach(family base dom engine convenience regionator xsd)
+  real_library("UDS::KML_${family}" STATIC "${CACHES_ROOT}/libkml/lib/libkml${family}.a")
+endforeach()
+
+real_library(OpenSSL::Crypto STATIC "${CACHES_ROOT}/openssl/lib/libcrypto.a")
+set_property(TARGET OpenSSL::Crypto PROPERTY
+  INTERFACE_INCLUDE_DIRECTORIES "${CACHES_ROOT}/openssl/include")
+real_library(OpenSSL::SSL STATIC "${CACHES_ROOT}/openssl/lib/libssl.a")
+set_target_properties(OpenSSL::SSL PROPERTIES
+  INTERFACE_INCLUDE_DIRECTORIES "${CACHES_ROOT}/openssl/include"
+  INTERFACE_LINK_LIBRARIES "OpenSSL::Crypto;${CMAKE_DL_LIBS};pthread")
+real_library(SQLCipher::SQLCipher STATIC "${CACHES_ROOT}/sqlcipher/lib/libsqlite3.a")
+set_target_properties(SQLCipher::SQLCipher PROPERTIES
+  INTERFACE_INCLUDE_DIRECTORIES "${CACHES_ROOT}/sqlcipher/include"
+  INTERFACE_LINK_LIBRARIES "OpenSSL::Crypto;${CMAKE_DL_LIBS};m")
+
+real_library(draco::draco STATIC "${CACHES_ROOT}/draco/lib/libdraco.a")
+set_property(TARGET draco::draco PROPERTY
+  INTERFACE_INCLUDE_DIRECTORIES "${CACHES_ROOT}/draco/include")
+
+real_library(CURL::libcurl_static STATIC "${CACHES_ROOT}/curl/lib/libcurl.a")
+set_target_properties(CURL::libcurl_static PROPERTIES
+  INTERFACE_INCLUDE_DIRECTORIES "${CACHES_ROOT}/curl/include"
+  INTERFACE_COMPILE_DEFINITIONS "CURL_STATICLIB"
+  INTERFACE_LINK_LIBRARIES "OpenSSL::SSL;OpenSSL::Crypto;UDS::Zlib;${CMAKE_DL_LIBS};pthread")
+
+real_library(uriparser::uriparser STATIC "${CACHES_ROOT}/uriparser/lib/liburiparser.a")
+set_property(TARGET uriparser::uriparser PROPERTY
+  INTERFACE_INCLUDE_DIRECTORIES "${CACHES_ROOT}/uriparser/include")
+
+real_library(fmt::fmt STATIC "${CACHES_ROOT}/fmt/lib/libfmt.a")
+set_property(TARGET fmt::fmt PROPERTY
+  INTERFACE_INCLUDE_DIRECTORIES "${CACHES_ROOT}/fmt/include")
+
+real_library(spdlog::spdlog STATIC "${CACHES_ROOT}/spdlog/lib/libspdlog.a")
+set_target_properties(spdlog::spdlog PROPERTIES
+  INTERFACE_INCLUDE_DIRECTORIES "${CACHES_ROOT}/spdlog/include"
+  INTERFACE_COMPILE_DEFINITIONS "SPDLOG_FMT_EXTERNAL=1"
+  INTERFACE_LINK_LIBRARIES "fmt::fmt")
+
+real_library(s2::s2 STATIC "${CACHES_ROOT}/s2geometry/lib/libs2.a")
+set_property(TARGET s2::s2 PROPERTY
+  INTERFACE_INCLUDE_DIRECTORIES "${CACHES_ROOT}/s2geometry/include;${CACHES_ROOT}/abseil/include")
+
+set_property(TARGET UDS::Assimp PROPERTY INTERFACE_LINK_LIBRARIES "UDS::IrrXML;UDS::Zlib")
+set_property(TARGET UDS::KML_base PROPERTY INTERFACE_LINK_LIBRARIES
+  "UDS::Expat;UDS::Minizip;UDS::Zlib;uriparser::uriparser")
+set_property(TARGET UDS::KML_dom PROPERTY INTERFACE_LINK_LIBRARIES "UDS::KML_base")
+set_property(TARGET UDS::KML_engine PROPERTY INTERFACE_LINK_LIBRARIES "UDS::KML_dom;UDS::KML_base")
+set_property(TARGET UDS::KML_convenience PROPERTY INTERFACE_LINK_LIBRARIES
+  "UDS::KML_engine;UDS::KML_dom;UDS::KML_base")
+set_property(TARGET UDS::KML_regionator PROPERTY INTERFACE_LINK_LIBRARIES
+  "UDS::KML_convenience;UDS::KML_engine;UDS::KML_dom;UDS::KML_base")
+set_property(TARGET UDS::KML_xsd PROPERTY INTERFACE_LINK_LIBRARIES "UDS::KML_base")
+set_property(TARGET UDS::Spatialite PROPERTY INTERFACE_LINK_LIBRARIES
+  "UDS::GEOS_C;UDS::GEOS;UDS::PROJ;UDS::XML;UDS::Iconv;UDS::Zlib;SQLCipher::SQLCipher")
+
+set(cesium_dep_archives)
+foreach(comp
+  abseil asyncplusplus fmt ktx libjpeg-turbo libwebp meshoptimizer modp-base64
+  s2geometry spdlog tinyxml2 uriparser zlib-ng zstd
+)
+  file(GLOB comp_archives CONFIGURE_DEPENDS "${CACHES_ROOT}/${comp}/lib/*.a")
+  list(SORT comp_archives)
+  list(APPEND cesium_dep_archives ${comp_archives})
+endforeach()
+if(EXISTS "${CACHES_ROOT}/cesium/lib/libglm.a")
+  list(APPEND cesium_dep_archives "${CACHES_ROOT}/cesium/lib/libglm.a")
+endif()
+
+set(cesium_include_dirs
+  "${CACHES_ROOT}/cesium/include"
+  "${CACHES_ROOT}/spdlog/include"
+  "${CACHES_ROOT}/fmt/include"
+  "${CACHES_ROOT}/s2geometry/include"
+  "${CACHES_ROOT}/abseil/include"
+  "${CACHES_ROOT}/uriparser/include"
+  "${CACHES_ROOT}/ktx/include"
+  "${CACHES_ROOT}/draco/include"
+  "${CACHES_ROOT}/asyncplusplus/include"
+  "${CACHES_ROOT}/meshoptimizer/include"
+  "${CACHES_ROOT}/libjpeg-turbo/include"
+  "${CACHES_ROOT}/tinyxml2/include"
+  "${CACHES_ROOT}/libwebp/include"
+  "${CACHES_ROOT}/zlib-ng/include"
+  "${CACHES_ROOT}/zstd/include"
+  "${CACHES_ROOT}/modp-base64/include"
+)
+
+set(cesium_targets
+  CesiumUtility CesiumGltf CesiumGeometry CesiumGeospatial CesiumJsonReader
+  CesiumJsonWriter CesiumGltfContent CesiumGltfReader CesiumGltfWriter CesiumAsync
+  Cesium3DTiles Cesium3DTilesReader Cesium3DTilesWriter Cesium3DTilesContent
+  CesiumRasterOverlays Cesium3DTilesSelection CesiumIonClient CesiumQuantizedMeshTerrain
+)
+set(cesium_all_archives)
+foreach(real_target IN LISTS cesium_targets)
+  set(lib_file "${CACHES_ROOT}/cesium/lib/lib${real_target}.a")
+  real_library("${real_target}" STATIC "${lib_file}")
+  list(APPEND cesium_all_archives "${lib_file}")
+  set_target_properties("${real_target}" PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${cesium_include_dirs}"
+    INTERFACE_COMPILE_DEFINITIONS
+      "GLM_FORCE_XYZW_ONLY;GLM_FORCE_EXPLICIT_CTOR;GLM_FORCE_SIZE_T_LENGTH;SPDLOG_FMT_EXTERNAL=1"
+  )
+endforeach()
+
+set(cesium_link_group
+  "-Wl,--start-group"
+  ${cesium_all_archives}
+  ${cesium_dep_archives}
+  "draco::draco"
+  "${CACHES_ROOT}/curl/lib/libcurl.a"
+  "${CACHES_ROOT}/openssl/lib/libssl.a"
+  "${CACHES_ROOT}/openssl/lib/libcrypto.a"
+  "${CACHES_ROOT}/zlib/lib/libz.a"
+  "SQLCipher::SQLCipher"
+  "-Wl,--end-group"
+)
+set_property(TARGET Cesium3DTilesSelection PROPERTY
+  INTERFACE_LINK_LIBRARIES "${cesium_link_group}")
+
+# Explicit include directories for unchanged upstream Kernel 8.30.5 JNI sources.
+set(khronos_INCLUDE_DIRS "${CACHES_ROOT}/gles/include")
+set(tinygltf-tak_INCLUDE_DIRS "${GLTF}")
+set(tinygltfloader-tak_INCLUDE_DIRS "${GLTFLOADER}")
+set(ttp-dist_INCLUDE_DIRS
+  "${CACHES_ROOT}/sqlcipher/include"
+  "${CACHES_ROOT}/spatialite/include"
+  "${CACHES_ROOT}/gdal/include"
+  "${MINIZIP_INCLUDE}"
+  "${MINIZIP_INCLUDE}/minizip"
+  "${CACHES_ROOT}/geos/include"
+  "${CACHES_ROOT}/proj/include"
+  "${CACHES_ROOT}/mdbtools/include"
+  "${CACHES_ROOT}/libkml/include"
+  "${CACHES_ROOT}/expat/include"
+  "${CACHES_ROOT}/libxml2/include/libxml2"
+  "${CACHES_ROOT}/libiconv/include"
+  "${CACHES_ROOT}/assimp/include"
+  "${CACHES_ROOT}/zlib/include"
+)
+set(libLAS_INCLUDE_DIRS "${CACHES_ROOT}/liblas/include")
+set(draco_INCLUDE_DIRS "${CACHES_ROOT}/draco/include")
+set(cesium-native_INCLUDE_DIRS "${cesium_include_dirs}")
+
+# Satisfy upstream find_package(JNI REQUIRED) when using openjdk-17-jdk-headless
+# (libtakenginejni overrides LINK_LIBRARIES explicitly and does not use jawt).
+find_file(_takx_jawt_header NAMES jawt.h PATHS "$ENV{JAVA_HOME}/include" NO_DEFAULT_PATH)
+if(NOT _takx_jawt_header)
+  find_library(_takx_jvm_lib NAMES jvm
+    PATHS "$ENV{JAVA_HOME}/lib/server" "$ENV{JAVA_HOME}/jre/lib/amd64/server"
+    NO_DEFAULT_PATH REQUIRED)
+  set(JAVA_AWT_INCLUDE_PATH "$ENV{JAVA_HOME}/include" CACHE PATH "Headless JDK include fallback" FORCE)
+  set(JAVA_AWT_LIBRARY "${_takx_jvm_lib}" CACHE FILEPATH "Headless JDK JNI fallback" FORCE)
+endif()
+
+set(kernel_root "${KERNEL_LAYOUT}/takkernel/engine")
+add_subdirectory("${kernel_root}/src/main/jni" kernel-jni)
+
+set_property(TARGET takenginejni PROPERTY LINK_DIRECTORIES "")
+set_property(TARGET takenginejni PROPERTY LINK_LIBRARIES
+  "takengine;UDS::GLES;UDS::GDAL;UDS::Spatialite;SQLCipher::SQLCipher;draco::draco;$<LINK_ONLY:CURL::libcurl_static>;Cesium3DTilesSelection")
+
+target_include_directories(takenginejni PRIVATE
+  "${JNI_HEADERS}"
+  "${CACHES_ROOT}/curl/include"
+  "${CACHES_ROOT}/openssl/include")
+target_compile_definitions(takenginejni PRIVATE CURL_STATICLIB)
+target_link_options(takenginejni PRIVATE
+  "-Wl,--no-undefined"
+  "-Wl,--exclude-libs,libssl.a:libcrypto.a:libexpat.a")
