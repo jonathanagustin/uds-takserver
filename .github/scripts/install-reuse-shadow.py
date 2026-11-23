@@ -26,8 +26,13 @@ POLICY_FILES = (WORKFLOW, '.github/scripts/install-receipt.py',
                 '.github/scripts/install-artifact-inputs.py',
                 '.github/scripts/checkpoint-identity.py', '.github/scripts/dev-package.sh',
                 '.github/scripts/pin-image-tags.sh', '.github/scripts/deploy-slim-core.sh',
-                '.github/scripts/node-airgap.py', '.github/scripts/stage-sanitized-logs.sh',
-                '.github/scripts/test-validation-mode.py')
+                '.github/scripts/fit-runner.sh', '.github/scripts/test-airgap.sh',
+                '.github/scripts/node-airgap.py', '.github/scripts/redact-then-filter.sh',
+                '.github/scripts/stage-sanitized-logs.sh',
+                '.github/scripts/test-validation-mode.py',
+                'tasks.yaml', 'tasks/test.yaml',
+                'bundle/uds-bundle.yaml', 'bundle/uds-config.yaml',
+                'bundle/airgap-config.yaml', 'bundle/test-values.yaml')
 ALLOWED_RUNNERS = {
     'amd64': frozenset({'ubuntu-22.04', 'ubuntu-24.04', 'ubuntu-26.04'}),
     'arm64': frozenset({'ubuntu-22.04-arm', 'ubuntu-24.04-arm', 'ubuntu-26.04-arm'}),
