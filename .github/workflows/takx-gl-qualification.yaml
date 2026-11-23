@@ -22,6 +22,7 @@ on:
       - "takx/mission-package/**"
       - "takx/native-gdal-jni/**"
       - "takx/native-las/**"
+      - "takx/sdk-coexist/**"
       - "takx/sdk-package/**"
       - "takx/sqlite-jdbc/**"
       - "takx/ui-java/**"
@@ -434,6 +435,17 @@ jobs:
           path: ${{ runner.temp }}/takx-cot-conformance-hosted/hosted-cot-conformance-receipt.json
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload verified CommonCommo JAR and JNI library for downstream coexistence qualification
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-cot-conformance-build-output
+          path: |
+            ${{ runner.temp }}/takx-cot-conformance-hosted/jcommoncommo.jar
+            ${{ runner.temp }}/takx-cot-conformance-hosted/lib/libcommoncommojni.so
+            ${{ runner.temp }}/takx-cot-conformance-hosted/hosted-cot-conformance-receipt.json
+          if-no-files-found: error
+          retention-days: 1
 
   qualify-gdal-data:
     runs-on: ubuntu-24.04
@@ -1466,5 +1478,63 @@ jobs:
         with:
           name: takx-client58-public-api-hosted-receipt
           path: ${{ runner.temp }}/takx-client58-public-api-hosted/hosted-client58-public-api-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-sdk-coexist:
+    needs:
+      - qualify-sdk-package
+      - qualify-cot-conformance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline sdk-coexist verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/sdk-coexist/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/sdk-coexist -p 'test_build.py' -v
+          python3 -B -m unittest discover -s takx/sdk-coexist -p 'test_run_hosted_controls.py' -v
+
+      - name: Download assembled SDK package artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-sdk-package-build-output
+          path: ${{ runner.temp }}/sdk-package
+
+      - name: Download verified CommonCommo JAR and JNI artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-cot-conformance-build-output
+          path: ${{ runner.temp }}/commoncommo
+
+      - name: Run live sdk-first and common-first coexistence controls under JDK 17 -Xcheck:jni
+        timeout-minutes: 10
+        run: |
+          set -eu
+          find "${RUNNER_TEMP}/commoncommo" -name '*.so' -exec chmod 755 {} +
+          mkdir -p "${RUNNER_TEMP}/takx-sdk-coexist-hosted"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work:ro" \
+            -v "${RUNNER_TEMP}/sdk-package:/sdk-package:ro" \
+            -v "${RUNNER_TEMP}/commoncommo:/commoncommo:ro" \
+            -v "${RUNNER_TEMP}/takx-sdk-coexist-hosted:/out" \
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
+            python3 -B /work/takx/sdk-coexist/run_hosted_controls.py \
+              --phase qualify \
+              --sdk-package-dir /sdk-package \
+              --commoncommo-dir /commoncommo \
+              --java-home /usr/lib/jvm/java-17-openjdk-amd64 \
+              --output /out/run
+
+      - name: Retain verified sdk-coexist hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-sdk-coexist-hosted-receipt
+          path: ${{ runner.temp }}/takx-sdk-coexist-hosted/run/hosted-sdk-coexist-receipt.json
           if-no-files-found: error
           retention-days: 14
