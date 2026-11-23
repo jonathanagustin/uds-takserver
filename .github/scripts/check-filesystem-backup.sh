@@ -32,7 +32,7 @@ for needle in \
   'kind: DaemonSet' \
   'name: node-agent' \
   'name: velero-node-agent' \
-  'docker.io/velero/velero:v1.18.4' \
+  'docker.io/velero/velero:v1.19.0' \
   'privileged: true' \
   'runAsUser: 0' \
   'role: node-agent' \

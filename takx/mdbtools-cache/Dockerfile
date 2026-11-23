@@ -8,7 +8,7 @@
 # - Runs mdb_control.c and whole-archive --no-undefined / no-TEXTREL shared link check.
 # - Exports only /mdbtools into a minimal scratch OCI artifact.
 
-FROM docker.io/library/gcc@sha256:531d94a9eb84cb69df20050ddde80d308bf8650c83f4cb0accf4ef39bb543ed4 AS builder
+FROM docker.io/library/gcc@sha256:82549aa8f90ada3236a8be70c74543132a76662ef33f0c3271ed802b81584a82 AS builder
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
