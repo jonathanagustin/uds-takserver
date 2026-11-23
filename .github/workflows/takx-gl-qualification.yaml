@@ -11,6 +11,7 @@ on:
       - "takx/gl-qualification/**"
       - "takx/kernel-java/**"
       - "takx/kernel-native/**"
+      - "takx/kernel-regressions/**"
       - "takx/kernel-render-context/**"
       - "takx/kernel-spatial-db/**"
       - "takx/kernel-texture/**"
@@ -1360,3 +1361,51 @@ jobs:
           path: ${{ runner.temp }}/takx-sdk-package-hosted/run/package
           if-no-files-found: error
           retention-days: 1
+
+  qualify-kernel-regressions:
+    needs:
+      - qualify-sdk-package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline kernel-regressions verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/kernel-regressions/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/kernel-regressions -p 'test_build.py' -v
+          python3 -B -m unittest discover -s takx/kernel-regressions -p 'test_run_hosted_controls.py' -v
+
+      - name: Download assembled SDK package artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-sdk-package-build-output
+          path: ${{ runner.temp }}/sdk-package
+
+      - name: Run all 6 Kernel 8.30.5 format regression suites under JDK 17 -Xcheck:jni
+        timeout-minutes: 10
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/takx-kernel-regressions-hosted"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work:ro" \
+            -v "${RUNNER_TEMP}/sdk-package:/sdk-package:ro" \
+            -v "${RUNNER_TEMP}/takx-kernel-regressions-hosted:/out" \
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
+            python3 -B /work/takx/kernel-regressions/run_hosted_controls.py \
+              --phase qualify \
+              --sdk-package-dir /sdk-package \
+              --java-home /usr/lib/jvm/java-17-openjdk-amd64 \
+              --output /out/run
+
+      - name: Retain verified kernel-regressions hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-kernel-regressions-hosted-receipt
+          path: ${{ runner.temp }}/takx-kernel-regressions-hosted/run/hosted-kernel-regressions-receipt.json
+          if-no-files-found: error
+          retention-days: 14
