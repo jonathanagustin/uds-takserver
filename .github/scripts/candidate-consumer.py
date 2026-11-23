@@ -103,7 +103,9 @@ def published_images(expected):
 def verify_loaded(ref, expected, config_digest):
     details = IMAGES.read_json(command('docker', 'image', 'inspect', ref))[0]
     require(details['Id'] == config_digest and details['Architecture'] == expected['architecture'] and details['Os'] == 'linux',
-            'loaded candidate image identity mismatch')
+            f"loaded candidate image identity mismatch for {ref}: "
+            f"expected {config_digest} linux/{expected['architecture']}, "
+            f"got {details['Id']!r} {details['Os']!r}/{details['Architecture']!r}")
     require(((details.get('Config') or {}).get('Labels') or {}).get(IMAGES.INPUTS_LABEL) == expected['inputs'],
             'loaded candidate image inputs mismatch')
 
