@@ -22,6 +22,7 @@ on:
       - "takx/sqlite-jdbc/**"
       - "takx/ui-java/**"
       - "takx/worldwind-java/**"
+      - "takx/worldwind-consumers/**"
       - ".github/workflows/takx-gl-qualification.yaml"
   workflow_dispatch:
 
@@ -1001,5 +1002,56 @@ jobs:
         with:
           name: takx-kernel-java-hosted-receipt
           path: ${{ runner.temp }}/takx-kernel-java-hosted/hosted-kernel-java-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-worldwind-consumers:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64
+    timeout-minutes: 10
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline worldwind-consumers verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/worldwind-consumers/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/worldwind-consumers -p 'test_*.py' -v
+
+      - name: Fetch pinned upstream TAKX 5.7 and 5.8 commits
+        timeout-minutes: 4
+        run: |
+          set -eu
+          for spec in \
+            "57:0b59a9bb2d0e90dc35c9edfff1c2056daab2b713" \
+            "58:af54a3e1fe8796b6e109e2e5925dbef524ea7e31"; do
+            tag="${spec%%:*}"
+            rev="${spec#*:}"
+            dir="${RUNNER_TEMP}/pinned-takx-${tag}"
+            mkdir -p "${dir}"
+            git -C "${dir}" init -q
+            git -C "${dir}" remote add origin https://github.com/TAK-Product-Center/TAKX.git
+            git -C "${dir}" fetch --depth 1 origin "${rev}"
+            git -C "${dir}" checkout -q FETCH_HEAD
+          done
+
+      - name: Stage and verify all 21 pinned TAKX 5.7 and 5.8 WorldWind consumers live on Linux
+        timeout-minutes: 4
+        run: |
+          python3 -B takx/worldwind-consumers/run_hosted_controls.py \
+            --phase qualify \
+            --takx-57 "${RUNNER_TEMP}/pinned-takx-57" \
+            --takx-58 "${RUNNER_TEMP}/pinned-takx-58" \
+            --output "${RUNNER_TEMP}/takx-worldwind-consumers-hosted"
+
+      - name: Retain verified worldwind-consumers hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-worldwind-consumers-hosted-receipt
+          path: ${{ runner.temp }}/takx-worldwind-consumers-hosted/hosted-worldwind-consumers-receipt.json
           if-no-files-found: error
           retention-days: 14
