@@ -430,6 +430,7 @@ must_relevant() {
       case "${path}" in
         tests/workload-identities/drive.py | tests/workload-identities/retained_state.py | tests/workload-identities/render_inputs.py | tests/workload-identities/package_roundtrip.py | tests/workload-identities/phase_evidence.py | tests/workload-identities/failure_evidence.py | tests/workload-identities/README.md) return 1 ;;
         tests/demo/* | tests/test_* | tests/playwright.demo.config.ts) return 1 ;;
+        tests/zarf_next_live_qualification.py | tests/zarf_beta_contract.py | tests/fixtures/zarf-beta-contract/*) return 1 ;;
         *) return 0 ;;
       esac
       ;;

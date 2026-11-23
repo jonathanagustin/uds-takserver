@@ -65,10 +65,10 @@ switch="values/filesystem-backup-switch.yaml"
 if ! grep -q '###ZARF_VAR_FILESYSTEM_BACKUP###' "${switch}"; then
   fail "${switch} does not read FILESYSTEM_BACKUP"
 fi
-if ! grep -q -- '- ../values/filesystem-backup-switch.yaml' common/zarf.yaml; then
+if ! grep -Eq -- '- (path: )?\.\./values/filesystem-backup-switch\.yaml' common/zarf.yaml; then
   fail "common/zarf.yaml does not pass ${switch} to uds-takserver-config"
 fi
-if ! grep -q -- '- values/filesystem-backup-switch.yaml' zarf.yaml; then
+if ! grep -Eq -- '- (path: )?values/filesystem-backup-switch\.yaml' zarf.yaml; then
   fail "zarf.yaml does not pass ${switch} to uds-cloudtak"
 fi
 
@@ -92,7 +92,7 @@ cloud_class="$(helm template cloudtak charts/cloudtak --namespace cloudtak --set
 if ! grep -q 'storageClassName: "local-path-local"' <<< "${cloud_class}"; then
   fail "CloudTAK render with postgis.storageClass is missing storageClassName"
 fi
-if ! grep -q -- '- values/cloudtak-storage.yaml.tpl' zarf.yaml; then
+if ! grep -Eq -- '- (path: )?values/cloudtak-storage\.yaml\.tpl' zarf.yaml; then
   fail "zarf.yaml does not pass values/cloudtak-storage.yaml.tpl to uds-cloudtak"
 fi
 if ! grep -q 'CLOUDTAK_STORAGE_CLASS: local-path-local' "${config}"; then

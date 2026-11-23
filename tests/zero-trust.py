@@ -243,6 +243,105 @@ def run_probe_pod(namespace, sa_name, pod_manifest, timeout_seconds=PROBE_TIMEOU
         _cleanup_probe(namespace, pod_name, sa_name)
 
 
+def _assert_denied(label, args, expected_substrings, input_text=None):
+    """Run a server dry-run admission check and require rejection with an expected message."""
+    res = kubectl(*args, input_text=input_text, check=False)
+    detail = f"{res.stderr}\n{res.stdout}".strip()
+    if res.returncode == 0:
+        raise RuntimeError(f"{label}: expected admission denial, got allow: {detail[:400]}")
+    if not any(token in detail for token in expected_substrings):
+        raise RuntimeError(
+            f"{label}: expected denial matching {expected_substrings!r}, got: {detail[:400]}",
+        )
+    print(f"denied: {label} rejected at admission")
+
+
+def verify_admission_policies(has_cloudtak=False):
+    """Exercise Pepr validating admission policies via non-mutating server dry-run requests."""
+    _assert_denied(
+        "takserver pod ambient bypass annotation",
+        ("create", "--dry-run=server", "-f", "-"),
+        ("bypass-inbound-capture", "RestrictIstioAmbientOverrides"),
+        input_text=json.dumps({
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {
+                "name": "zt-probe-bad-pod",
+                "namespace": "takserver",
+                "annotations": {"ambient.istio.io/bypass-inbound-capture": "true"},
+            },
+            "spec": {"containers": [{"name": "probe", "image": "registry.invalid/probe:1"}]},
+        }),
+    )
+    _assert_denied(
+        "takserver plaintext 8080 service",
+        ("create", "--dry-run=server", "-f", "-"),
+        ("port 8080",),
+        input_text=json.dumps({
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {"name": "zt-probe-bad-svc", "namespace": "takserver"},
+            "spec": {"ports": [{"port": 8080, "targetPort": 8080}]},
+        }),
+    )
+    _assert_denied(
+        "takserver core-config tls=false patch",
+        (
+            "patch",
+            "configmap",
+            "core-config",
+            "-n",
+            "takserver",
+            "--dry-run=server",
+            "--type=merge",
+            "-p",
+            '{"data":{"CoreConfig.xml":"<connector tls=\\"false\\"/>"}}',
+        ),
+        ('tls="false"',),
+    )
+    _assert_denied(
+        "takserver cert-migration invalid X.509 PEM patch",
+        (
+            "patch",
+            "configmap",
+            "cert-migration",
+            "-n",
+            "takserver",
+            "--dry-run=server",
+            "--type=merge",
+            "-p",
+            '{"binaryData":{"ca.pem":"bm90LWEtY2VydA=="}}',
+        ),
+        ("X.509 PEM",),
+    )
+    _assert_denied(
+        "takclients invalid TakClient callsign",
+        ("create", "--dry-run=server", "-f", "-"),
+        ("callsign",),
+        input_text=json.dumps({
+            "apiVersion": "tak.uds.dev/v1alpha1",
+            "kind": "TakClient",
+            "metadata": {"name": "zt-probe-bad-client", "namespace": "takclients"},
+            "spec": {"callsign": "bad name", "groups": ["Operators"]},
+        }),
+    )
+    if has_cloudtak:
+        _assert_denied(
+            "cloudtak pod hostNetwork",
+            ("create", "--dry-run=server", "-f", "-"),
+            ("hostNetwork", "DisallowHostNamespaces"),
+            input_text=json.dumps({
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "zt-probe-bad-pod", "namespace": "cloudtak"},
+                "spec": {
+                    "hostNetwork": True,
+                    "containers": [{"name": "probe", "image": "registry.invalid/probe:1"}],
+                },
+            }),
+        )
+
+
 def main():
     verify_ambient_namespace("takserver")
 
@@ -264,7 +363,8 @@ def main():
     run_probe_pod("takserver", DEFAULT_PROBE_SA, tak_probe)
 
     cloudtak_pkg = kubectl("get", "package", "cloudtak", "-n", "cloudtak", check=False)
-    if cloudtak_pkg.returncode == 0:
+    has_cloudtak = cloudtak_pkg.returncode == 0
+    if has_cloudtak:
         verify_ambient_namespace("cloudtak")
         cloudtak_image = kubectl(
             "get", "deploy", "cloudtak", "-n", "cloudtak",
@@ -276,6 +376,8 @@ def main():
         run_probe_pod("cloudtak", DEFAULT_PROBE_SA, ct_probe)
     else:
         print("cloudtak package is not installed; skipping CloudTAK east-west probe")
+
+    verify_admission_policies(has_cloudtak=has_cloudtak)
 
 
 if __name__ == "__main__":

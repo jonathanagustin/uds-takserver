@@ -58,8 +58,10 @@ global:
 charts: `takserver.uds-takserver-config`, `takserver.takserver-oidc`,
 `takserver.takserver`, and `cloudtak.uds-cloudtak`. All four default to `{}`, so
 ordinary package defaults stay unchanged. Core charts are outside this interface.
-For example, a file passed with `--values` can retain an existing TAK chart
-resource setting:
+`chartOverrides.takserver.takserver` excludes Zarf-packaged image coordinates,
+pull secrets, and upstream nginx ingress via `excludePaths` (matching the UDS
+package template). For example, a file passed with `--values` can retain an
+existing TAK chart resource setting:
 
 ```yaml
 chartOverrides:

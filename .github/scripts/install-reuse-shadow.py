@@ -24,7 +24,28 @@ WORKFLOW = '.github/workflows/test.yaml'
 POLICY_FILES = (WORKFLOW, '.github/scripts/install-receipt.py',
                 '.github/scripts/collect-install-receipt.py',
                 '.github/scripts/install-artifact-inputs.py',
-                '.github/scripts/checkpoint-identity.py', '.github/scripts/dev-package.sh')
+                '.github/scripts/checkpoint-identity.py', '.github/scripts/dev-package.sh',
+                '.github/scripts/pin-image-tags.sh', '.github/scripts/deploy-slim-core.sh',
+                '.github/scripts/fit-runner.sh', '.github/scripts/test-airgap.sh',
+                '.github/scripts/node-airgap.py', '.github/scripts/redact-then-filter.sh',
+                '.github/scripts/stage-sanitized-logs.sh',
+                '.github/scripts/test-validation-mode.py',
+                'tasks.yaml', 'tasks/test.yaml',
+                'bundle/uds-bundle.yaml', 'bundle/uds-config.yaml',
+                'bundle/airgap-config.yaml', 'bundle/test-values.yaml')
+ALLOWED_RUNNERS = {
+    'amd64': frozenset({'ubuntu-22.04', 'ubuntu-24.04', 'ubuntu-26.04'}),
+    'arm64': frozenset({'ubuntu-22.04-arm', 'ubuntu-24.04-arm', 'ubuntu-26.04-arm'}),
+}
+REQUIRED_INSTALL_SCENARIOS = frozenset({
+    ('install-online', 'amd64'),
+    ('install-online', 'arm64'),
+    ('install-airgap', 'amd64'),
+})
+VERIFIER_SCENARIO_NAME = {
+    'install': 'install-online',
+    'install-airgap': 'install-airgap',
+}
 MAX_BYTES = 4 * 1024 * 1024
 MAX_PAGES = 10
 COMMAND_TIMEOUT = 45
@@ -287,7 +308,7 @@ def current_run(api, receipt, workflow, head):
     return run
 
 
-def qualify(api, receipt, raw, verified, pr_number, target, policy_ref):
+def _qualify_with_job(api, receipt, raw, verified, pr_number, target, policy_ref):
     """Pure read-only policy over injected API/crypto evidence; no skip output exists."""
     validate_receipt(receipt)
     validate_signature(verified, raw, receipt, pr_number)
@@ -340,10 +361,33 @@ def qualify(api, receipt, raw, verified, pr_number, target, policy_ref):
     # the selected attempt and all competing runs after authenticating bytes.
     # This is a point-in-time observation, never an atomic reuse authorization.
     current_run(api, receipt, workflow, pr['head']['sha'])
-    return {'source_run': run['id'], 'attempt': run['run_attempt'], 'job_id': selected[0]['id'],
-            'artifact_id': found[0]['id'], 'scenario': scenario['name'],
-            'architecture': scenario['architecture'], 'tested_commit': source['sha'],
-            'tested_tree': source['tree']['sha'], 'target_commit': target}
+    evidence = {'source_run': run['id'], 'attempt': run['run_attempt'], 'job_id': selected[0]['id'],
+                'artifact_id': found[0]['id'], 'scenario': scenario['name'],
+                'architecture': scenario['architecture'], 'tested_commit': source['sha'],
+                'tested_tree': source['tree']['sha'], 'target_commit': target}
+    return evidence, selected[0]
+
+
+def qualify(api, receipt, raw, verified, pr_number, target, policy_ref):
+    """Pure read-only policy over injected API/crypto evidence; no skip output exists."""
+    evidence, _ = _qualify_with_job(api, receipt, raw, verified, pr_number, target, policy_ref)
+    return evidence
+
+
+def compare_execution_class(job, architecture, expected_runner):
+    """Compare historical GitHub-hosted runner class against expected runner; never authorizes reuse."""
+    allowed = ALLOWED_RUNNERS.get(architecture)
+    require(allowed is not None and isinstance(expected_runner, str) and expected_runner in allowed,
+            'execution-class-expected-runner-invalid')
+    require(isinstance(job, dict) and job.get('runner_group_name') == 'GitHub Actions',
+            'execution-class-runner-group-invalid')
+    labels = job.get('labels')
+    require(isinstance(labels, list) and len(labels) == 1 and isinstance(labels[0], str) and
+            labels[0] in allowed, 'execution-class-job-labels-invalid')
+    return {'historical_runner': labels[0], 'expected_runner': expected_runner,
+            'runner_group': job['runner_group_name'],
+            'execution_class_equal': labels[0] == expected_runner,
+            'reuse_authorized': False}
 
 
 def compare_prospective(receipt, prospective, target):
@@ -373,7 +417,7 @@ def compare_prospective(receipt, prospective, target):
         raise Unavailable('prospective-schema-invalid') from None
 
 
-def shadow(api, raw, verified, pr, target, policy, prospective=None):
+def shadow(api, raw, verified, pr, target, policy, prospective=None, expected_runner=None):
     result = {'schema_version': 1, 'mode': 'shadow', 'reuse_authorized': False,
               'decision': 'execute-fresh', 'evidence_qualified': False,
               'blockers': ['prospective-input-equivalence-not-proven',
@@ -383,17 +427,98 @@ def shadow(api, raw, verified, pr, target, policy, prospective=None):
     try:
         require(len(raw) <= 64 * 1024, 'receipt-too-large')
         receipt = json.loads(raw, object_pairs_hook=unique_fields)
-        result['evidence'] = qualify(api, receipt, raw, verified, pr, target, policy)
+        result['evidence'], selected_job = _qualify_with_job(api, receipt, raw, verified, pr, target, policy)
         result['evidence_qualified'] = True
         if prospective is not None:
             result['prospective_comparison'] = compare_prospective(receipt, prospective, target)
             if not result['prospective_comparison']['inputs_equal']:
                 result['blockers'].insert(0, 'prospective-inputs-differ')
+        if expected_runner is not None:
+            result['execution_class_comparison'] = compare_execution_class(
+                selected_job, receipt['scenario']['architecture'], expected_runner)
+            if not result['execution_class_comparison']['execution_class_equal']:
+                result['blockers'].insert(0, 'execution-class-differs')
     except Unavailable as exc:
         result['blockers'].insert(0, str(exc))
     except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
         result['blockers'].insert(0, 'evidence-malformed-or-unavailable')
     return result
+
+
+def evaluate_scenario_set(results):
+    """Aggregate per-scenario shadow results for cross-scenario consistency; never authorizes reuse."""
+    ordered_missing = lambda pairs: [
+        {'scenario': scenario, 'architecture': arch} for scenario, arch in sorted(pairs)
+    ]
+    summary = {
+        'schema_version': 1, 'mode': 'shadow-set', 'reuse_authorized': False,
+        'decision': 'execute-fresh', 'set_qualified': False, 'complete_install_set': False,
+        'qualified_scenarios': [], 'missing_scenarios': ordered_missing(REQUIRED_INSTALL_SCENARIOS),
+        'verifier_preview': {'schema_version': 1, 'reuse_authorized': False, 'scenarios': []},
+        'blockers': ['prospective-input-equivalence-not-proven',
+                     'execution-class-policy-not-established',
+                     'complete-producer-dependency-policy-not-established',
+                     'consumer-enforcement-not-enabled'],
+    }
+    try:
+        require(isinstance(results, list) and 1 <= len(results) <= len(REQUIRED_INSTALL_SCENARIOS),
+                'scenario-set-empty-or-oversized')
+        seen = set()
+        entries = []
+        binding = None
+        for item in results:
+            require(isinstance(item, dict) and item.get('schema_version') == 1 and
+                    item.get('mode') == 'shadow' and item.get('reuse_authorized') is False and
+                    item.get('decision') == 'execute-fresh' and item.get('evidence_qualified') is True,
+                    'scenario-set-entry-unqualified')
+            if 'prospective_comparison' in item:
+                comp = item['prospective_comparison']
+                require(isinstance(comp, dict) and comp.get('inputs_equal') is True and
+                        comp.get('reuse_authorized') is False, 'scenario-set-prospective-mismatch')
+            if 'execution_class_comparison' in item:
+                comp = item['execution_class_comparison']
+                require(isinstance(comp, dict) and comp.get('execution_class_equal') is True and
+                        comp.get('reuse_authorized') is False, 'scenario-set-execution-class-mismatch')
+            ev = item.get('evidence')
+            require(isinstance(ev, dict), 'scenario-set-evidence-invalid')
+            verifier_scenario = VERIFIER_SCENARIO_NAME.get(ev.get('scenario'))
+            arch = ev.get('architecture')
+            pair = (verifier_scenario, arch)
+            require(pair in REQUIRED_INSTALL_SCENARIOS, 'scenario-set-scenario-invalid')
+            require(pair not in seen, 'scenario-set-duplicate-scenario')
+            seen.add(pair)
+            for field in ('source_run', 'attempt', 'job_id', 'artifact_id'):
+                require(type(ev.get(field)) is int and ev[field] > 0, 'scenario-set-evidence-invalid')
+            for field in ('tested_commit', 'tested_tree', 'target_commit'):
+                val = ev.get(field)
+                require(isinstance(val, str) and SHA.fullmatch(val), 'scenario-set-evidence-invalid')
+            current_binding = (ev['tested_commit'], ev['tested_tree'], ev['target_commit'])
+            if binding is None:
+                binding = current_binding
+            else:
+                require(current_binding == binding, 'scenario-set-commit-or-tree-mismatch')
+            entries.append({
+                'scenario': verifier_scenario, 'architecture': arch,
+                'source_run': ev['source_run'], 'attempt': ev['attempt'],
+                'job_id': ev['job_id'], 'artifact_id': ev['artifact_id'],
+                'tested_commit': ev['tested_commit'], 'tested_tree': ev['tested_tree'],
+                'target_commit': ev['target_commit'],
+                'evidence_url': f"https://github.com/{REPO}/actions/runs/{ev['source_run']}/job/{ev['job_id']}",
+            })
+        missing = REQUIRED_INSTALL_SCENARIOS - seen
+        summary['set_qualified'] = True
+        summary['complete_install_set'] = not missing
+        summary['qualified_scenarios'] = ordered_missing(seen)
+        summary['missing_scenarios'] = ordered_missing(missing)
+        summary['verifier_preview']['scenarios'] = sorted(
+            entries, key=lambda row: (row['scenario'], row['architecture']))
+        if missing:
+            summary['blockers'].insert(0, 'scenario-set-incomplete')
+    except Unavailable as exc:
+        summary['blockers'].insert(0, str(exc))
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        summary['blockers'].insert(0, 'scenario-set-malformed')
+    return summary
 
 
 def bounded_file(path, maximum):
@@ -407,17 +532,39 @@ def bounded_file(path, maximum):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--receipt', type=Path, required=True)
-    parser.add_argument('--bundle', type=Path, required=True)
-    parser.add_argument('--pr', type=int, required=True)
-    parser.add_argument('--target', required=True, help='Exact proposed pushed squash commit SHA')
-    parser.add_argument('--policy-ref', required=True, help='Exact independently reviewed producer/workflow commit')
+    parser.add_argument('--receipt', type=Path)
+    parser.add_argument('--bundle', type=Path)
+    parser.add_argument('--pr', type=int)
+    parser.add_argument('--target', help='Exact proposed pushed squash commit SHA')
+    parser.add_argument('--policy-ref', help='Exact independently reviewed producer/workflow commit')
     parser.add_argument('--prospective', type=Path, help='Actual acquired-input snapshot; never authorizes reuse')
+    parser.add_argument('--expected-runner', help='Expected hosted runner label; never authorizes reuse')
+    parser.add_argument('--scenario-set', nargs='+', type=Path,
+                        help='Bounded per-scenario shadow JSON files to aggregate; never authorizes reuse')
     parser.add_argument('--gh', default='gh', help='GitHub CLI with attestation verification support')
     args = parser.parse_args()
     result = None
+    if args.scenario_set is not None:
+        try:
+            require(all(value is None for value in (
+                args.receipt, args.bundle, args.pr, args.target, args.policy_ref,
+                args.prospective, args.expected_runner)), 'scenario-set-arguments-invalid')
+            require(1 <= len(args.scenario_set) <= len(REQUIRED_INSTALL_SCENARIOS),
+                    'scenario-set-empty-or-oversized')
+            loaded = [json.loads(bounded_file(path, 64 * 1024), object_pairs_hook=unique_fields)
+                      for path in args.scenario_set]
+            result = evaluate_scenario_set(loaded)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, Unavailable):
+            result = {'schema_version': 1, 'mode': 'shadow-set', 'reuse_authorized': False,
+                      'decision': 'execute-fresh', 'set_qualified': False, 'complete_install_set': False,
+                      'blockers': ['scenario-set-input-unavailable']}
+        print(json.dumps(result, sort_keys=True))
+        return
     try:
-        require(args.pr > 0 and SHA.fullmatch(args.target) and SHA.fullmatch(args.policy_ref), 'arguments-invalid')
+        require(args.receipt is not None and args.bundle is not None and args.pr is not None and
+                args.target is not None and args.policy_ref is not None and
+                args.pr > 0 and SHA.fullmatch(args.target) and SHA.fullmatch(args.policy_ref),
+                'arguments-invalid')
         raw = bounded_file(args.receipt, 64 * 1024)
         bundle = bounded_file(args.bundle, MAX_BYTES)
         receipt = json.loads(raw, object_pairs_hook=unique_fields)
@@ -438,7 +585,8 @@ def main():
                                 '--signer-digest', receipt['source']['checkout_commit']])
         prospective = (json.loads(bounded_file(args.prospective, 16384), object_pairs_hook=unique_fields)
                        if args.prospective else None)
-        result = shadow(GitHub(args.gh), raw, verified, args.pr, args.target, args.policy_ref, prospective)
+        result = shadow(GitHub(args.gh), raw, verified, args.pr, args.target, args.policy_ref,
+                        prospective, args.expected_runner)
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, Unavailable):
         result = {'schema_version': 1, 'mode': 'shadow', 'reuse_authorized': False,
                   'decision': 'execute-fresh', 'evidence_qualified': False,

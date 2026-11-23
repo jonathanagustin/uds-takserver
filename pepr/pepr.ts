@@ -7,6 +7,7 @@ import { CloudtakAdmin } from "./capabilities/cloudtak-admin-capability.ts";
 import { CoreDns } from "./capabilities/coredns-rewrite-capability.ts";
 import { GatewayCa } from "./capabilities/gateway-ca-capability.ts";
 import { OidcRender } from "./capabilities/oidc-render-capability.ts";
+import { TakPolicy } from "./capabilities/tak-policy-capability.ts";
 import { onCaMaterial, TakClients } from "./capabilities/takclient-capability.ts";
 import { Workload } from "./capabilities/workload-capability.ts";
 
@@ -14,7 +15,7 @@ import { Workload } from "./capabilities/workload-capability.ts";
 // only job. They name the webhooks and the watcher in a running cluster, and
 // PodMonitor takserver-oidc selects pods by the uuid, so a rename would replace
 // them on upgrade.
-new PeprModule(cfg, [OidcRender, CoreDns, GatewayCa, CloudtakAdmin, Workload, TakClients]);
+new PeprModule(cfg, [OidcRender, CoreDns, GatewayCa, CloudtakAdmin, Workload, TakClients, TakPolicy]);
 
 // The CRL in Secret takserver-crl has a nextUpdate 730 days out. The watcher
 // checks it once a day and writes a new one in the last 60 days, so a quiet

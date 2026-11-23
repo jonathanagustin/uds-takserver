@@ -62,6 +62,30 @@ def _convert_component(component):
         out["charts"] = [_convert_chart(c) for c in component["charts"]]
     if "images" in component:
         out["images"] = [{"name": img} for img in component["images"]]
+    actions = {}
+    if "actions" in component:
+        actions = {k: dict(v) for k, v in component["actions"].items()}
+    if "healthChecks" in component:
+        on_deploy = dict(actions.get("onDeploy") or {})
+        waits = list(on_deploy.get("onSuccess") or [])
+        for hc in component["healthChecks"]:
+            kind = hc["kind"].lower()
+            condition = "available" if kind == "deployment" else "exists"
+            waits.append({
+                "description": f"Wait for {hc['kind']}/{hc['name']}",
+                "wait": {
+                    "cluster": {
+                        "kind": kind,
+                        "name": hc["name"],
+                        "namespace": hc["namespace"],
+                        "condition": condition,
+                    }
+                },
+            })
+        on_deploy["onSuccess"] = waits
+        actions["onDeploy"] = on_deploy
+    if actions:
+        out["actions"] = actions
     return out
 
 
@@ -158,6 +182,11 @@ class BetaStagingTransformTests(unittest.TestCase):
             self.assertNotIn("required", by_name["cloudtak"])
             self.assertNotIn("default", by_name["cloudtak"])
             self.assertTrue(all(isinstance(i, dict) and "name" in i for i in by_name["takserver"]["images"]))
+            self.assertNotIn("healthChecks", by_name["takserver"])
+            self.assertNotIn("healthChecks", by_name["cloudtak"])
+            self.assertEqual(len(by_name["takserver"]["actions"]["onDeploy"]["onSuccess"]), 2)
+            self.assertEqual(len(by_name["cloudtak"]["actions"]["onDeploy"]["onSuccess"]), 2)
+            self.assertEqual(len(by_name["takserver"]["actions"]["onCreate"]["before"]), 1)
 
 
 @unittest.skipUnless(shutil.which("uds") or os.environ.get("CI"), "uds CLI is not installed")
@@ -275,6 +304,18 @@ class ProductionBetaRenderParityTests(unittest.TestCase):
             cwd=self.beta_dir, check=False, capture_output=True, text=True,
         )
         self.assertNotEqual(result.returncode, 0)
+
+    def test_staged_beta_package_passes_zarf_dev_lint(self):
+        result = subprocess.run(
+            [
+                "uds", "zarf", "dev", "lint", ".", "--flavor", "upstream",
+                "--no-color", "--log-level", "warn",
+            ],
+            cwd=self.beta_dir, check=False, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, pv.render_failure(result))
+        combined = f"{result.stdout}\n{result.stderr}"
+        self.assertNotIn("v1alpha1", combined)
 
 
 if __name__ == "__main__":

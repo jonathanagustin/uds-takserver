@@ -80,6 +80,17 @@ TAK still starts because the image makes the directories it writes world-writabl
 
 Both Package CRs set `serviceMesh.mode: ambient`. Passthrough Transport Layer Security (TLS) on 8443, 8446, and 8089 has to reach TAK unchanged, and there is no waypoint and no Authservice in front of TAK. See [Networking](networking.md).
 
+### TAK admission policies
+
+Alongside UDS Core's cluster-wide policies, the `takserver-oidc` Pepr module registers capability `takserver-policy` (fail-closed `ValidatingWebhookConfiguration` entries scoped strictly to namespaces `takserver`, `cloudtak`, and `takclients`, with a Common Expression Language (CEL) `matchConditions` filter limiting `ConfigMap` checks to `core-config` and `cert-migration`):
+
+- **Pods (`takserver`, `cloudtak`):** Enforce UDS Core v1.17 Pod and Istio parity: reject `sidecar.istio.io/inject` labels/annotations, Istio sidecar/traffic/ambient override annotations (preserving only `proxy.istio.io/config` on `takserver-db-setup-*`), `istio-proxy`/`istio-validation` containers, UID/GID `1337`, explicit root (`runAsUser: 0` or `runAsNonRoot: false`), `hostNetwork`/`hostPID`/`hostIPC`, non-core volume types (including `hostPath`), `privileged: true`, `allowPrivilegeEscalation: true`, non-default `procMount`, added Linux capabilities, `seLinuxOptions`, non-default/non-localhost `seccompProfile`, and positive `hostPort` values.
+- **Services (`takserver`):** Reject `NodePort` and `ExternalName` Services as well as plaintext port `8080` (except the statically declared `rest` port on upstream `takserver-ignite`, which runs with `ignite-rest-http` removed and `takserver-deny-plaintext-8080` active).
+- **ConfigMaps (`takserver`):** Reject `core-config` updates containing `tls="false"` connectors and reject malformed X.509 PEM payloads in `cert-migration` `ca.pem` before gateway or CloudTAK propagation.
+- **`TakClient` (`takclients`):** Validate `spec.callsign`, `spec.groups`, and `spec.validityDays` at admission time.
+
+The webhook records decisions on Prometheus counters `pepr_tak_policy_allowed` and `pepr_tak_policy_denied`, and `tests/zero-trust.py` checks these rejections live via `--dry-run=server`.
+
 ## UDS package requirements
 
 The [UDS package requirements](https://docs.defenseunicorns.com/core/concepts/configuration--packaging/package-requirements/) are a pre-publish checklist. These are the items this package does not meet, or meets only through the exception the requirement allows.

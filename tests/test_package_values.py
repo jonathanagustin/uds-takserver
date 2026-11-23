@@ -322,6 +322,36 @@ class PackageValuesTests(unittest.TestCase):
         self.assertNotIn(("Service", "tak-health"), names)
         self.assertNotIn("Issued client certificate", str(find(docs, "Job", "takserver-cert-init")))
 
+    def test_takserver_chart_override_exclude_paths_protect_images_and_ingress(self):
+        _out, docs = render(
+            values=[
+                "chartOverrides.takserver.takserver.takserver.ingress.enabled=true",
+                "chartOverrides.takserver.takserver.takserver.api.image.repository=evil.example/takserver-api",
+                "chartOverrides.takserver.takserver.ignite.image.repository=evil.example/ignite",
+                "chartOverrides.takserver.takserver.postgresql.image.repository=evil.example/postgis",
+                "chartOverrides.takserver.takserver.postgresql.primary.resources.limits.memory=640Mi",
+            ]
+        )
+        ingresses = [doc for doc in docs if doc.get("kind") == "Ingress"]
+        self.assertEqual(ingresses, [])
+        for kind, name in (
+            ("Deployment", "takserver-api"),
+            ("StatefulSet", "takserver-ignite"),
+            ("StatefulSet", "takserver-postgresql"),
+        ):
+            containers = find(docs, kind, name)["spec"]["template"]["spec"]["containers"]
+            images = [container["image"] for container in containers]
+            self.assertTrue(images, f"no containers for {kind}/{name}")
+            for image in images:
+                self.assertNotIn("evil.example/", image)
+                self.assertTrue(
+                    image.startswith("ghcr.io/jonathanagustin/uds-takserver/"),
+                    f"unexpected {kind}/{name} image: {image}",
+                )
+        pg_containers = find(docs, "StatefulSet", "takserver-postgresql")["spec"]["template"]["spec"]["containers"]
+        pg_main = next(container for container in pg_containers if "/uds-takserver/postgis:" in container["image"])
+        self.assertEqual(pg_main["resources"]["limits"]["memory"], "640Mi")
+
 
 _NATS_CHART = "https://github.com/nats-io/k8s/releases/download/nats-1.0.1/nats-1.0.1.tgz"
 _DEPENDENCY_FAILURE = (
