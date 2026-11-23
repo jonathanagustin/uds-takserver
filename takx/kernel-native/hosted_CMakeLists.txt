@@ -83,7 +83,11 @@ foreach(family base dom engine convenience regionator xsd)
 endforeach()
 
 real_library(OpenSSL::SSL STATIC "${CACHES_ROOT}/openssl/lib/libssl.a")
+set_property(TARGET OpenSSL::SSL PROPERTY
+  INTERFACE_INCLUDE_DIRECTORIES "${CACHES_ROOT}/openssl/include")
 real_library(OpenSSL::Crypto STATIC "${CACHES_ROOT}/openssl/lib/libcrypto.a")
+set_property(TARGET OpenSSL::Crypto PROPERTY
+  INTERFACE_INCLUDE_DIRECTORIES "${CACHES_ROOT}/openssl/include")
 real_library(SQLCipher::SQLCipher STATIC "${CACHES_ROOT}/sqlcipher/lib/libsqlite3.a")
 set_target_properties(SQLCipher::SQLCipher PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${CACHES_ROOT}/sqlcipher/include"
@@ -281,9 +285,13 @@ set_property(TARGET takengine PROPERTY LINK_DIRECTORIES "")
 set_property(TARGET takengine PROPERTY LINK_LIBRARIES "${real_dependencies}")
 set_property(TARGET takenginejni PROPERTY LINK_DIRECTORIES "")
 set_property(TARGET takenginejni PROPERTY LINK_LIBRARIES
-  "takengine;UDS::GLES;UDS::GDAL;UDS::Spatialite;SQLCipher::SQLCipher;draco::draco;Cesium3DTilesSelection")
+  "takengine;UDS::GLES;UDS::GDAL;UDS::Spatialite;SQLCipher::SQLCipher;draco::draco;$<LINK_ONLY:CURL::libcurl_static>;Cesium3DTilesSelection")
 
-target_include_directories(takenginejni PRIVATE "${JNI_HEADERS}")
+target_include_directories(takenginejni PRIVATE
+  "${JNI_HEADERS}"
+  "${CACHES_ROOT}/curl/include"
+  "${CACHES_ROOT}/openssl/include")
+target_compile_definitions(takenginejni PRIVATE CURL_STATICLIB)
 foreach(target takengine takenginejni)
   target_link_options(${target} PRIVATE
     "-Wl,--no-undefined"
