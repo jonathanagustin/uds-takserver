@@ -82,11 +82,33 @@ test("validatePodZeroTrust allows compliant pods across container lists and empt
   assert.equal(validatePodZeroTrust({}), undefined);
   assert.equal(
     validatePodZeroTrust({
-      metadata: { labels: { app: "takserver-api" }, annotations: { "proxy.istio.io/config": "{}" } },
+      metadata: {
+        name: "takserver-db-setup-abc",
+        labels: { app: "takserver-db-setup" },
+        annotations: { "proxy.istio.io/config": "{}" },
+      },
       spec: {
-        volumes: [{}, { hostPath: undefined }],
-        initContainers: [{ name: "render-oidc", securityContext: { privileged: false, allowPrivilegeEscalation: false } }],
-        containers: [{ ports: [{}, { hostPort: 0 }] }, { securityContext: {} }],
+        securityContext: {
+          runAsUser: 1000,
+          runAsGroup: 1000,
+          fsGroup: 1000,
+          runAsNonRoot: true,
+          seccompProfile: { type: "RuntimeDefault" },
+        },
+        volumes: [{ name: "undefined-hostpath", hostPath: undefined }, { name: "data", emptyDir: {} }],
+        initContainers: [
+          {
+            name: "render-oidc",
+            securityContext: {
+              privileged: false,
+              allowPrivilegeEscalation: false,
+              procMount: "Default",
+              seccompProfile: {},
+              capabilities: { drop: ["ALL"], add: [] },
+            },
+          },
+        ],
+        containers: [{ ports: [{}, { hostPort: 0 }] }, { securityContext: { seccompProfile: { type: "Localhost" } } }],
         ephemeralContainers: [{ name: "debug" }],
       },
     }),
@@ -94,23 +116,53 @@ test("validatePodZeroTrust allows compliant pods across container lists and empt
   );
 });
 
-test("validatePodZeroTrust rejects sidecar overrides, host namespaces, hostPath, privileged, and hostPorts", () => {
+test("validatePodZeroTrust rejects sidecar overrides, host namespaces, disallowed volumes, securityContext, and hostPorts", () => {
   assert.match(
-    validatePodZeroTrust({ metadata: { labels: { "sidecar.istio.io/inject": "true" } } }) ?? "",
-    /sidecar injection/,
+    validatePodZeroTrust({ metadata: { labels: { "sidecar.istio.io/inject": "false" } } }) ?? "",
+    /sidecar\.istio\.io\/inject/,
   );
   assert.match(
     validatePodZeroTrust({ metadata: { annotations: { "sidecar.istio.io/inject": "true" } } }) ?? "",
-    /sidecar injection/,
+    /sidecar\.istio\.io\/inject/,
   );
   assert.match(
     validatePodZeroTrust({ metadata: { annotations: { "ambient.istio.io/bypass-inbound-capture": "true" } } }) ?? "",
     /bypass-inbound-capture/,
   );
+  assert.match(
+    validatePodZeroTrust({ metadata: { annotations: { "traffic.sidecar.istio.io/excludeOutboundPorts": "8080" } } }) ?? "",
+    /traffic\.sidecar\.istio\.io\/excludeOutboundPorts/,
+  );
+  assert.match(
+    validatePodZeroTrust({ metadata: { annotations: { "sidecar.istio.io/proxyImage": "evil" } } }) ?? "",
+    /sidecar\.istio\.io\/proxyImage/,
+  );
+  assert.match(
+    validatePodZeroTrust({ metadata: { annotations: { "proxy.istio.io/config": "{}" } } }) ?? "",
+    /proxy\.istio\.io\/config/,
+  );
+  assert.match(
+    validatePodZeroTrust({ metadata: { name: "takserver-api-0", annotations: { "proxy.istio.io/config": "{}" } } }) ?? "",
+    /proxy\.istio\.io\/config/,
+  );
   for (const field of ["hostNetwork", "hostPID", "hostIPC"] as const) {
     assert.match(validatePodZeroTrust({ spec: { [field]: true } }) ?? "", /hostNetwork, hostPID, and hostIPC/);
   }
-  assert.match(validatePodZeroTrust({ spec: { volumes: [{ hostPath: { path: "/tmp" } }] } }) ?? "", /hostPath/);
+  assert.match(validatePodZeroTrust({ spec: { volumes: [{ hostPath: { path: "/tmp" } }] } }) ?? "", /volume type hostPath/);
+  assert.match(validatePodZeroTrust({ spec: { volumes: [{ nfs: { server: "1.2.3.4" } }] } }) ?? "", /volume type nfs/);
+  assert.match(validatePodZeroTrust({ spec: { securityContext: { runAsUser: 1337 } } }) ?? "", /1337/);
+  assert.match(validatePodZeroTrust({ spec: { securityContext: { runAsGroup: 1337 } } }) ?? "", /1337/);
+  assert.match(validatePodZeroTrust({ spec: { securityContext: { fsGroup: 1337 } } }) ?? "", /1337/);
+  assert.match(validatePodZeroTrust({ spec: { securityContext: { runAsUser: 0 } } }) ?? "", /run as root/);
+  assert.match(validatePodZeroTrust({ spec: { securityContext: { runAsNonRoot: false } } }) ?? "", /run as root/);
+  assert.match(
+    validatePodZeroTrust({ spec: { securityContext: { seccompProfile: { type: "Unconfined" } } } }) ?? "",
+    /seccompProfile type Unconfined/,
+  );
+  assert.match(
+    validatePodZeroTrust({ spec: { securityContext: { seLinuxOptions: { level: "s0:c123" } } } }) ?? "",
+    /seLinuxOptions/,
+  );
   assert.match(
     validatePodZeroTrust({ spec: { containers: [{ name: "istio-proxy" }] } }) ?? "",
     /istio-proxy/,
@@ -118,6 +170,10 @@ test("validatePodZeroTrust rejects sidecar overrides, host namespaces, hostPath,
   assert.match(
     validatePodZeroTrust({ spec: { initContainers: [{ name: "istio-validation" }] } }) ?? "",
     /istio-validation/,
+  );
+  assert.match(
+    validatePodZeroTrust({ spec: { containers: [{ name: "app", securityContext: { runAsUser: 0 } }] } }) ?? "",
+    /container app must not run as root/,
   );
   assert.match(
     validatePodZeroTrust({ spec: { containers: [{ name: "app", securityContext: { privileged: true } }] } }) ?? "",
@@ -128,6 +184,16 @@ test("validatePodZeroTrust rejects sidecar overrides, host namespaces, hostPath,
       spec: { ephemeralContainers: [{ name: "dbg", securityContext: { allowPrivilegeEscalation: true } }] },
     }) ?? "",
     /allowPrivilegeEscalation: true/,
+  );
+  assert.match(
+    validatePodZeroTrust({ spec: { containers: [{ name: "app", securityContext: { procMount: "Unmasked" } }] } }) ?? "",
+    /procMount Unmasked/,
+  );
+  assert.match(
+    validatePodZeroTrust({
+      spec: { containers: [{ name: "app", securityContext: { capabilities: { add: ["NET_ADMIN"] } } }] },
+    }) ?? "",
+    /must not add capabilities/,
   );
   assert.match(
     validatePodZeroTrust({ spec: { containers: [{ name: "api", ports: [{ hostPort: 8443 }] }] } }) ?? "",
