@@ -2093,3 +2093,165 @@ jobs:
           path: ${{ runner.temp }}/takx-kernel-client-interop-hosted/hosted-kernel-client-interop-receipt.json
           if-no-files-found: error
           retention-days: 14
+
+  qualify-render-context-jni:
+    needs:
+      - qualify-native-gdal-jni
+      - qualify-kernel-java
+      - qualify-kernel-native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline render-context JNI verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/kernel-render-context/run_hosted_jni_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/kernel-render-context -p 'test_run_hosted_jni_controls.py' -v
+
+      - name: Download verified native-gdal-jni, kernel-java, and kernel-native outputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-native-gdal-jni-build-output
+          path: ${{ runner.temp }}/gdal-jni
+
+      - name: Download verified kernel-java classes, JNI headers, and classpath
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-kernel-java-build-output
+          path: ${{ runner.temp }}/kernel-java
+
+      - name: Download verified kernel-native shared libraries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-kernel-native-build-output
+          path: ${{ runner.temp }}/kernel-native
+
+      - name: Fetch pinned atak-civ 8.30.5 sources, tinygltf archives, and minizip headers
+        timeout-minutes: 6
+        run: |
+          set -eu
+          find "${RUNNER_TEMP}/gdal-jni" "${RUNNER_TEMP}/kernel-native" -name '*.so' -exec chmod 755 {} +
+          mkdir -p "${RUNNER_TEMP}/pinned-atak" "${RUNNER_TEMP}/gltf-cache" "${RUNNER_TEMP}/minizip-include/minizip"
+          git -C "${RUNNER_TEMP}/pinned-atak" init -q
+          git -C "${RUNNER_TEMP}/pinned-atak" remote add origin https://github.com/TAK-Product-Center/atak-civ.git
+          git -C "${RUNNER_TEMP}/pinned-atak" fetch --depth 1 origin 9f6893dd657feacc35ec5de03dad721c2e44170e
+          git -C "${RUNNER_TEMP}/pinned-atak" checkout -q FETCH_HEAD
+
+          for entry in \
+            "fa32ead8ec963f96ae6bd4a65d5b8b8361740d25e8915f3f226303d1ac2e6f85|https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/depends/tinygltf-2.4.1-mod.tar.gz" \
+            "2d9a0196d5346a955f3bbb08f890bb808e92b9980dd79d112611501500d68c43|https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/depends/tinygltfloader-0.9.5-mod.tar.gz"; do
+            sha="${entry%%|*}"
+            url="${entry#*|}"
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "${url}" -o "${RUNNER_TEMP}/gltf-cache/${sha}"
+            printf '%s  %s\n' "${sha}" "${RUNNER_TEMP}/gltf-cache/${sha}" | sha256sum -c -
+          done
+
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+            "https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/takthirdparty/distfiles/libkml.tar.gz" \
+            -o "${RUNNER_TEMP}/libkml.tar.gz"
+          printf '%s  %s\n' "39692c0184933424e35ef69e5101f1ff0d664f2b50b972887cfc15fda032d1cb" "${RUNNER_TEMP}/libkml.tar.gz" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/libkml-extract"
+          tar -xzf "${RUNNER_TEMP}/libkml.tar.gz" -C "${RUNNER_TEMP}/libkml-extract"
+          patch --batch --fuzz=0 -p1 \
+            -d "${RUNNER_TEMP}/libkml-extract/libkml-1.3/third_party/zlib-1.2.3/contrib/minizip" \
+            -i "${GITHUB_WORKSPACE}/takx/native-caches/libkml/patches/minizip-zlib-crc-type.patch"
+          cp -a "${RUNNER_TEMP}/libkml-extract/libkml-1.3/third_party/zlib-1.2.3/contrib/minizip"/*.h \
+            "${RUNNER_TEMP}/minizip-include/minizip/"
+
+      - name: Extract published GHCR Layer-0/1/2 native OCI caches
+        timeout-minutes: 8
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/caches/gles"
+          gles_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-gles:1.7.0-amd64 /nonexistent)"
+          docker cp "${gles_cid}:/glvnd/." "${RUNNER_TEMP}/caches/gles/"
+          docker rm "${gles_cid}"
+
+          for spec in \
+            "zlib:1.3.1-amd64" \
+            "expat:2.10.0-amd64" \
+            "quictls:3.0.14-quic1-amd64" \
+            "openssl:3.5.9-amd64" \
+            "nghttp2:1.62.1-amd64" \
+            "libmicrohttpd:1.0.1-amd64" \
+            "protobuf:3.21.0-amd64" \
+            "uriparser:0.9.8-amd64" \
+            "fmt:10.2.1-amd64" \
+            "zstd:1.5.6-amd64" \
+            "meshoptimizer:0.20-amd64" \
+            "asyncplusplus:1.1-amd64" \
+            "tinyxml2:10.0.0-amd64" \
+            "libjpeg-turbo:3.0.3-amd64" \
+            "libwebp:1.4.0-amd64" \
+            "draco:1.5.7-amd64" \
+            "zlib-ng:2.1.5-amd64" \
+            "modp-base64:2020-09-26-amd64" \
+            "abseil:20240116.2-amd64" \
+            "libiconv:1.15-amd64" \
+            "sqlite3:3.46.0-amd64" \
+            "proj:4.9.1-amd64" \
+            "geos:3.4.3-amd64" \
+            "mdbtools:1.0.0-amd64" \
+            "curl:8.23.0-amd64" \
+            "sqlcipher:4.5.7-amd64" \
+            "laszip:3.4.3-amd64" \
+            "assimp:4.0.1-amd64" \
+            "ngtcp2:1.6.0-amd64" \
+            "spdlog:1.14.1-amd64" \
+            "ktx:4.3.1-amd64" \
+            "s2geometry:0.11.1-amd64" \
+            "libxml2:2.13.3-amd64" \
+            "libkml:1.3.0-amd64" \
+            "liblas:1.8.2-amd64" \
+            "gdal:2.4.4-amd64" \
+            "spatialite:4.3.0a-amd64" \
+            "cesium:0.40.1-amd64"; do
+            name="${spec%%:*}"
+            tag="${spec#*:}"
+            mkdir -p "${RUNNER_TEMP}/caches/${name}"
+            cid="$(docker create "ghcr.io/jonathanagustin/uds-takserver/takx-native-${name}:${tag}" "/nonexistent")"
+            docker cp "${cid}:/${name}/." "${RUNNER_TEMP}/caches/${name}/"
+            docker rm "${cid}"
+          done
+
+      - name: Rebuild patched libtakenginejni.so and run render-context/scene JNI controls under JDK 17 -Xcheck:jni
+        timeout-minutes: 15
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/takx-render-context-jni-hosted"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work:ro" \
+            -v "${RUNNER_TEMP}/pinned-atak:/atak:ro" \
+            -v "${RUNNER_TEMP}/gltf-cache:/gltf:ro" \
+            -v "${RUNNER_TEMP}/minizip-include:/minizip:ro" \
+            -v "${RUNNER_TEMP}/caches:/caches:ro" \
+            -v "${RUNNER_TEMP}/gdal-jni:/gdal-jni:ro" \
+            -v "${RUNNER_TEMP}/kernel-java:/kernel-java:ro" \
+            -v "${RUNNER_TEMP}/kernel-native:/kernel-native:ro" \
+            -v "${RUNNER_TEMP}/takx-render-context-jni-hosted:/out" \
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
+            python3 -B /work/takx/kernel-render-context/run_hosted_jni_controls.py \
+              --phase qualify \
+              --atak-source /atak \
+              --gltf-cache /gltf \
+              --minizip-include /minizip \
+              --caches-root /caches \
+              --gdal-jni-dir /gdal-jni \
+              --kernel-java-dir /kernel-java \
+              --kernel-native-dir /kernel-native \
+              --java-home /usr/lib/jvm/java-17-openjdk-amd64 \
+              --output /out/run \
+              --jobs 4
+
+      - name: Retain verified render-context JNI hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-render-context-jni-hosted-receipt
+          path: ${{ runner.temp }}/takx-render-context-jni-hosted/run/hosted-render-context-jni-receipt.json
+          if-no-files-found: error
+          retention-days: 14
