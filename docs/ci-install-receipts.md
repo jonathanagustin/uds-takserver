@@ -159,7 +159,11 @@ python3 .github/scripts/install-reuse-shadow.py \
   --receipt /private/install-receipt-install-amd64.json \
   --bundle /private/install-receipt-install-amd64.jsonl \
   --pr PR_NUMBER --target EXACT_SQUASH_COMMIT --policy-ref REVIEWED_POLICY_COMMIT \
+  --expected-runner ubuntu-22.04 \
   --gh /path/to/gh
+
+python3 .github/scripts/install-reuse-shadow.py \
+  --scenario-set /private/shadow-amd64.json /private/shadow-arm64.json /private/shadow-airgap.json
 ```
 
 Use exact 40-character commit IDs. The policy commit must be selected independently
