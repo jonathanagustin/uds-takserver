@@ -20,6 +20,7 @@ on:
       - "takx/kernel-texture/**"
       - "takx/contour-grid/**"
       - "takx/cot-conformance/**"
+      - "takx/elevation-download-compat/**"
       - "takx/gis-java/**"
       - "takx/mission-package/**"
       - "takx/native-gdal-jni/**"
@@ -1810,5 +1811,64 @@ jobs:
         with:
           name: takx-contour-elevation-hosted-receipt
           path: ${{ runner.temp }}/takx-contour-elevation-hosted/run/hosted-contour-elevation-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-elevation-download-compat:
+    needs:
+      - qualify-sdk-package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline elevation-download-compat verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/elevation-download-compat/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/elevation-download-compat -p 'test_*.py' -v
+
+      - name: Download assembled SDK package artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-sdk-package-build-output
+          path: ${{ runner.temp }}/sdk-package
+
+      - name: Fetch pinned atak-civ 8.30.5 source for ElevationDownloader preimage check and patch
+        timeout-minutes: 4
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/pinned-atak"
+          git -C "${RUNNER_TEMP}/pinned-atak" init -q
+          git -C "${RUNNER_TEMP}/pinned-atak" remote add origin https://github.com/TAK-Product-Center/atak-civ.git
+          git -C "${RUNNER_TEMP}/pinned-atak" fetch --depth 1 origin 9f6893dd657feacc35ec5de03dad721c2e44170e
+          git -C "${RUNNER_TEMP}/pinned-atak" checkout -q FETCH_HEAD
+
+      - name: Compile patched ElevationDownloader and run 53 controls under JDK 17 -Xcheck:jni
+        timeout-minutes: 5
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/takx-elevation-download-compat-hosted"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work:ro" \
+            -v "${RUNNER_TEMP}/pinned-atak:/atak:ro" \
+            -v "${RUNNER_TEMP}/sdk-package:/sdk-package:ro" \
+            -v "${RUNNER_TEMP}/takx-elevation-download-compat-hosted:/out" \
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
+            python3 -B /work/takx/elevation-download-compat/run_hosted_controls.py \
+              --phase qualify \
+              --atak-source /atak \
+              --sdk-package-dir /sdk-package \
+              --java-home /usr/lib/jvm/java-17-openjdk-amd64 \
+              --output /out/run
+
+      - name: Retain verified elevation-download-compat hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-elevation-download-compat-hosted-receipt
+          path: ${{ runner.temp }}/takx-elevation-download-compat-hosted/run/hosted-elevation-download-compat-receipt.json
           if-no-files-found: error
           retention-days: 14
