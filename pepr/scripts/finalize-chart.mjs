@@ -27,7 +27,13 @@ import { copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyChartRbac } from "./rbac-scope.ts";
-import { failurePolicy, pinLiterals, scopeWebhook, splitTakClientWebhook } from "./webhook-scope.ts";
+import {
+  failurePolicy,
+  pinLiterals,
+  scopeValidationWebhook,
+  scopeWebhook,
+  splitTakClientWebhook,
+} from "./webhook-scope.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -38,6 +44,13 @@ const webhook = readFileSync(webhookPath, "utf8");
 const timeout = pkg.pepr.webhookTimeout ?? 10;
 const scoped = scopeWebhook(pinLiterals(webhook, timeout, failurePolicy(pkg.pepr.onError)));
 writeFileSync(webhookPath, splitTakClientWebhook(scoped));
+
+const validationPath = join(chart, "templates", "validation-webhook.yaml");
+const validationWebhook = readFileSync(validationPath, "utf8");
+writeFileSync(
+  validationPath,
+  scopeValidationWebhook(pinLiterals(validationWebhook, timeout, failurePolicy(pkg.pepr.onError))),
+);
 
 rmSync(join(chart, "templates", "namespace.yaml"));
 copyFileSync(join(root, "crds", "takclient.yaml"), join(chart, "templates", "takclient-crd.yaml"));

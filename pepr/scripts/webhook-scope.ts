@@ -19,12 +19,14 @@
 // the chart values equal the build-time ones. This puts the literal back
 // everywhere except the timeoutSeconds and failurePolicy fields.
 
+import { POLICY_CONFIGMAPS } from "../capabilities/tak-policy.ts";
 import { NAMESPACE, TAK_APPS } from "../capabilities/oidc-render.ts";
 import { IGNITE_CONFIGMAP, IGNITE_STATEFULSET, TAK_DEPLOYS } from "../capabilities/workload.ts";
 
 export const TIMEOUT_VALUE = "{{ .Values.admission.webhookTimeout }}";
 export const FAILURE_VALUE = "{{ .Values.admission.failurePolicy }}";
 export const MATCH_CONDITION = "takserver-objects";
+export const VALIDATION_MATCH_CONDITION = "takserver-policy-objects";
 
 function celList(values: readonly string[]): string {
   return `[${values.map(v => `'${v}'`).join(", ")}]`;
@@ -40,6 +42,10 @@ export function matchExpression(): string {
     `has(object.metadata.labels) && 'app' in object.metadata.labels &&`,
     `object.metadata.labels['app'] in ${celList(TAK_APPS)}`,
   ].join(" ");
+}
+
+export function validationMatchExpression(): string {
+  return `request.kind.kind == 'ConfigMap' ? object.metadata.name in ${celList(POLICY_CONFIGMAPS)} : true`;
 }
 
 // Replaces the generated namespaceSelector (and anything else up to `rules:`)
@@ -79,6 +85,33 @@ export function pinLiterals(text: string, timeout: number, policy: string): stri
   return pinned.replace(timeoutField, `$1${TIMEOUT_VALUE}`).replace(policyField, `$1${FAILURE_VALUE}`);
 }
 
+function webhookEntry(
+  header: string,
+  webhookName: string,
+  namespace: string,
+  rules: string,
+  tail: string,
+  match?: { name: string; expression: string },
+): string {
+  const matchBlock = match
+    ? [
+        "    matchConditions:",
+        `      - name: ${match.name}`,
+        "        expression: >-",
+        `          ${match.expression}`,
+        "",
+      ].join("\n")
+    : "";
+  return [
+    header.replace("name: {{ .Values.uuid }}.pepr.dev", `name: ${webhookName}`),
+    `    namespaceSelector:\n      matchLabels:\n        kubernetes.io/metadata.name: ${namespace}\n`,
+    matchBlock,
+    "    rules:\n",
+    rules,
+    tail.replace(/\n*$/, "\n"),
+  ].join("");
+}
+
 // Cuts the TakClient rule out of the TAK webhook entry and adds a second entry
 // that matches only TakClients in namespace takclients (ADR 22). The second
 // entry copies the first one's path, CA bundle, timeout, and failure policy,
@@ -95,14 +128,54 @@ export function splitTakClientWebhook(text: string): string {
   const pods = text.slice(0, ruleStart) + text.slice(ruleEnd);
   const first = pods.slice(entry);
   const selectorStart = first.indexOf("    namespaceSelector:\n");
-  const rulesStart = first.indexOf("    rules:\n");
   const tailStart = first.indexOf("    sideEffects:");
-  const second = [
-    first.slice(0, selectorStart).replace("name: {{ .Values.uuid }}.pepr.dev", "name: takclients.{{ .Values.uuid }}.pepr.dev"),
-    "    namespaceSelector:\n      matchLabels:\n        kubernetes.io/metadata.name: takclients\n",
-    "    rules:\n",
+  const second = webhookEntry(
+    first.slice(0, selectorStart),
+    "takclients.{{ .Values.uuid }}.pepr.dev",
+    "takclients",
     rule,
     first.slice(tailStart),
-  ].join("");
+  );
   return `${pods.replace(/\n*$/, "\n")}${second}`;
+}
+
+// Splits Pepr's cluster-wide validation webhook into fail-closed namespace-scoped
+// entries for takserver, cloudtak, and takclients so unrelated namespaces remain
+// unaffected even when failurePolicy is Fail.
+export function scopeValidationWebhook(text: string): string {
+  const entry = text.indexOf("  - admissionReviewVersions:");
+  const selectorStart = text.indexOf("    namespaceSelector:\n", Math.max(0, entry));
+  const rulesStart = text.indexOf("    rules:\n", Math.max(0, selectorStart));
+  const tailStart = text.indexOf("    sideEffects:", Math.max(0, rulesStart));
+  if (entry < 0 || selectorStart < 0 || rulesStart < 0 || tailStart < 0) {
+    throw new Error("validation-webhook.yaml no longer has the expected webhook anchors");
+  }
+  const rulesText = text.slice(rulesStart + "    rules:\n".length, tailStart);
+  const blocks = rulesText.split(/(?=^      - apiGroups:\n)/m);
+  const byResource = (resource: string): string => {
+    const match = blocks.find(block => new RegExp(`^          - ${resource}$`, "m").test(block));
+    if (!match) {
+      throw new Error(`validation-webhook.yaml is missing the ${resource} rule`);
+    }
+    return match;
+  };
+  const podsRule = byResource("pods");
+  const servicesRule = byResource("services");
+  const configMapsRule = byResource("configmaps");
+  const takClientsRule = byResource("takclients");
+  const header = text.slice(entry, selectorStart);
+  const tail = text.slice(tailStart);
+  return [
+    text.slice(0, entry),
+    webhookEntry(
+      header,
+      "takserver-policy.{{ .Values.uuid }}.pepr.dev",
+      "takserver",
+      `${podsRule}${servicesRule}${configMapsRule}`,
+      tail,
+      { name: VALIDATION_MATCH_CONDITION, expression: validationMatchExpression() },
+    ),
+    webhookEntry(header, "cloudtak-policy.{{ .Values.uuid }}.pepr.dev", "cloudtak", podsRule, tail),
+    webhookEntry(header, "takclients-policy.{{ .Values.uuid }}.pepr.dev", "takclients", takClientsRule, tail),
+  ].join("");
 }

@@ -69,12 +69,13 @@ import { CloudtakAdmin } from "./capabilities/cloudtak-admin-capability.ts";
 import { CoreDns } from "./capabilities/coredns-rewrite-capability.ts";
 import { GatewayCa } from "./capabilities/gateway-ca-capability.ts";
 import { OidcRender } from "./capabilities/oidc-render-capability.ts";
+import { TakPolicy } from "./capabilities/tak-policy-capability.ts";
 import { Workload } from "./capabilities/workload-capability.ts";
 import { TakClients } from "./capabilities/takclient-capability.ts";
 
 const role = clusterRole(
   "takserver-oidc",
-  [OidcRender, CoreDns, GatewayCa, CloudtakAdmin, Workload, TakClients],
+  [OidcRender, CoreDns, GatewayCa, CloudtakAdmin, Workload, TakClients, TakPolicy],
   cfg.pepr.rbacMode,
   cfg.pepr.rbac,
 );
