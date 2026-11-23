@@ -217,6 +217,17 @@ set(libLAS_INCLUDE_DIRS "${CACHES_ROOT}/liblas/include")
 set(draco_INCLUDE_DIRS "${CACHES_ROOT}/draco/include")
 set(cesium-native_INCLUDE_DIRS "${cesium_include_dirs}")
 
+# Satisfy upstream find_package(JNI REQUIRED) when using openjdk-17-jdk-headless
+# (libtakenginejni overrides LINK_LIBRARIES explicitly and does not use jawt).
+find_file(_takx_jawt_header NAMES jawt.h PATHS "$ENV{JAVA_HOME}/include" NO_DEFAULT_PATH)
+if(NOT _takx_jawt_header)
+  find_library(_takx_jvm_lib NAMES jvm
+    PATHS "$ENV{JAVA_HOME}/lib/server" "$ENV{JAVA_HOME}/jre/lib/amd64/server"
+    NO_DEFAULT_PATH REQUIRED)
+  set(JAVA_AWT_INCLUDE_PATH "$ENV{JAVA_HOME}/include" CACHE PATH "Headless JDK include fallback" FORCE)
+  set(JAVA_AWT_LIBRARY "${_takx_jvm_lib}" CACHE FILEPATH "Headless JDK JNI fallback" FORCE)
+endif()
+
 set(kernel_root "${KERNEL_LAYOUT}/takkernel/engine")
 add_subdirectory("${kernel_root}/src/main/cpp" kernel-cpp)
 add_subdirectory("${kernel_root}/src/main/jni" kernel-jni)
