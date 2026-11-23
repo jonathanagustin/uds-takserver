@@ -138,6 +138,43 @@ class ZeroTrustTests(unittest.TestCase):
         self.assertEqual(calls[-2][:4], ("delete", "pod", "zt-probe-denied", "-n"))
         self.assertEqual(calls[-1][:4], ("delete", "sa", "zt-probe-denied", "-n"))
 
+    def test_verify_admission_policies_enforces_dry_run_denials(self):
+        seen = []
+
+        def fake_kubectl(*args, **kwargs):
+            seen.append((args, kwargs.get("input_text")))
+            raw = f"{args} {kwargs.get('input_text') or ''}"
+            if "bypass-inbound-capture" in raw:
+                return subprocess.CompletedProcess(args, 1, "", "denied: ambient.istio.io/bypass-inbound-capture annotation is forbidden")
+            if "zt-probe-bad-svc" in raw:
+                return subprocess.CompletedProcess(args, 1, "", "denied: Services must not publish plaintext port 8080")
+            if "core-config" in raw:
+                return subprocess.CompletedProcess(args, 1, "", 'denied: CoreConfig.xml must not contain plaintext tls="false" connectors')
+            if "cert-migration" in raw:
+                return subprocess.CompletedProcess(args, 1, "", "denied: cert-migration ca.pem must be a valid X.509 PEM certificate")
+            if "zt-probe-bad-client" in raw:
+                return subprocess.CompletedProcess(args, 1, "", "denied: spec.callsign must be 4 to 63")
+            if "hostNetwork" in raw:
+                return subprocess.CompletedProcess(args, 1, "", "denied: hostNetwork, hostPID, and hostIPC are forbidden")
+            self.fail(f"unexpected kubectl call: {args}")
+
+        with patch.object(ZT, "kubectl", side_effect=fake_kubectl):
+            ZT.verify_admission_policies(has_cloudtak=False)
+        self.assertEqual(len(seen), 5)
+
+        seen.clear()
+        with patch.object(ZT, "kubectl", side_effect=fake_kubectl):
+            ZT.verify_admission_policies(has_cloudtak=True)
+        self.assertEqual(len(seen), 6)
+
+        with patch.object(ZT, "kubectl", return_value=subprocess.CompletedProcess((), 0, "ok", "")):
+            with self.assertRaisesRegex(RuntimeError, "expected admission denial, got allow"):
+                ZT.verify_admission_policies(has_cloudtak=False)
+
+        with patch.object(ZT, "kubectl", return_value=subprocess.CompletedProcess((), 1, "", "unrelated error")):
+            with self.assertRaisesRegex(RuntimeError, "expected denial matching"):
+                ZT.verify_admission_policies(has_cloudtak=False)
+
 
 if __name__ == "__main__":
     unittest.main()
