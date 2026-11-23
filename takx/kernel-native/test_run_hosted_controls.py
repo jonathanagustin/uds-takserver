@@ -276,6 +276,16 @@ class HostedKernelNativeControlsTests(unittest.TestCase):
                 bound,
             )
 
+    def test_normalize_source_command_and_clean_env(self) -> None:
+        normalized = runner.normalize_source_command(
+            ["git", "--no-lazy-fetch", "-C", "/atak", "cat-file", "blob", "abc"]
+        )
+        self.assertEqual(normalized, ["git", "-C", "/atak", "cat-file", "blob", "abc"])
+        env = runner._clean_build_env(Path("/usr/lib/jvm/java-17-openjdk-amd64"))
+        self.assertEqual(env["GIT_NO_LAZY_FETCH"], "1")
+        self.assertEqual(env["GIT_CONFIG_KEY_0"], "safe.directory")
+        self.assertEqual(env["GIT_CONFIG_VALUE_0"], "*")
+
 
 if __name__ == "__main__":
     unittest.main()

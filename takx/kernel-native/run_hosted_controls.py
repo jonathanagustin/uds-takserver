@@ -291,6 +291,7 @@ def _clean_build_env(java_home: Path) -> dict[str, str]:
         GIT_CONFIG_COUNT="1",
         GIT_CONFIG_KEY_0="safe.directory",
         GIT_CONFIG_VALUE_0="*",
+        GIT_NO_LAZY_FETCH="1",
     )
     return env
 
@@ -299,6 +300,11 @@ def _clean_jvm_env(java_home: Path, gdal_data: Path) -> dict[str, str]:
     env = _clean_build_env(java_home)
     env["GDAL_DATA"] = str(gdal_data)
     return env
+
+
+def normalize_source_command(argv: list[str]) -> list[str]:
+    """Translate --no-lazy-fetch for Git versions expecting GIT_NO_LAZY_FETCH=1."""
+    return [arg for arg in argv if arg != "--no-lazy-fetch"]
 
 
 def _resolve_regular(candidates: tuple[Path, ...], label: str) -> Path:
@@ -363,7 +369,7 @@ def qualify(
     build_env = _clean_build_env(java_home)
 
     def run_git_step(argv: list[str], _label: str, timeout: int) -> bytes:
-        return subprocess.check_output(argv, env=build_env, timeout=timeout)
+        return subprocess.check_output(normalize_source_command(argv), env=build_env, timeout=timeout)
 
     sources.project(atak_source, output_dir, lock, run_git_step, git="git")
     sources.gltf_headers(gltf_cache, output_dir)
