@@ -1,7 +1,7 @@
 // Copyright 2026 uds-takserver authors
 // SPDX-License-Identifier: GPL-3.0-only
 
-import { a, Capability, type PeprValidateRequest } from "pepr";
+import { a, Capability, metricsCollector, type PeprValidateRequest } from "pepr";
 import type { KubernetesObject } from "kubernetes-fluent-client";
 import { TakClient } from "../cluster.ts";
 import { CLIENT_NAMESPACE, type TakClientDoc } from "./takclient.ts";
@@ -20,6 +20,12 @@ import {
   type ServicePolicyDoc,
 } from "./tak-policy.ts";
 
+export const ALLOWED_METRIC = "tak_policy_allowed";
+export const DENIED_METRIC = "tak_policy_denied";
+
+metricsCollector.addCounter(ALLOWED_METRIC, "TAK validating policy approvals");
+metricsCollector.addCounter(DENIED_METRIC, "TAK validating policy denials");
+
 export const TakPolicy = new Capability({
   name: "takserver-policy",
   description: "Enforce TAK Zero Trust, plaintext, CA PEM, and TakClient admission policies",
@@ -34,7 +40,12 @@ export type ValidateRequest<T extends KubernetesObject> = Pick<
 >;
 
 export function respond<T extends KubernetesObject>(req: ValidateRequest<T>, reason: string | undefined) {
-  return reason ? req.Deny(reason, 422) : req.Approve();
+  if (reason) {
+    metricsCollector.incCounter(DENIED_METRIC);
+    return req.Deny(reason, 422);
+  }
+  metricsCollector.incCounter(ALLOWED_METRIC);
+  return req.Approve();
 }
 
 export function onValidatePod(req: ValidateRequest<InstanceType<typeof a.Pod>>) {

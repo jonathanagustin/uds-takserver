@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
 import forge from "node-forge";
-import { a } from "pepr";
+import { a, metricsCollector } from "pepr";
 import type { TakClient } from "../cluster.ts";
 import {
   onValidateCertMigration,
@@ -200,7 +200,7 @@ test("validateTakClientAdmission delegates to TakClient schema validator", () =>
   assert.match(validateTakClientAdmission({ spec: { callsign: "ab", groups: ["Operators"] } }) ?? "", /callsign/);
 });
 
-test("capability Validate callbacks return Approve() or Deny(..., 422)", () => {
+test("capability Validate callbacks return Approve() or Deny(..., 422) and update metrics", async () => {
   type Pod = InstanceType<typeof a.Pod>;
   type Service = InstanceType<typeof a.Service>;
   type ConfigMap = InstanceType<typeof a.ConfigMap>;
@@ -235,4 +235,8 @@ test("capability Validate callbacks return Approve() or Deny(..., 422)", () => {
     onValidateTakClient(makeRequest<TakClient>({ spec: { callsign: "bad name", groups: ["Operators"] } })).allowed,
     false,
   );
+
+  const metrics = await metricsCollector.getMetrics();
+  assert.match(metrics, /^pepr_tak_policy_allowed 5$/m);
+  assert.match(metrics, /^pepr_tak_policy_denied 5$/m);
 });
