@@ -6,6 +6,7 @@ name: TAKX Mesa Xvfb GL qualification
 on:
   pull_request:
     paths:
+      - "takx/client58-public-api/**"
       - "takx/compat/**"
       - "takx/contour-style/**"
       - "takx/gl-qualification/**"
@@ -1424,5 +1425,46 @@ jobs:
         with:
           name: takx-kernel-regressions-hosted-receipt
           path: ${{ runner.temp }}/takx-kernel-regressions-hosted/run/hosted-kernel-regressions-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-client58-public-api:
+    needs: qualify-kernel-java
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64
+    timeout-minutes: 10
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline client58-public-api verifier and unit tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/client58-public-api/run_hosted_controls.py --phase verify
+          python3 -B -m unittest discover -s takx/client58-public-api -p 'test_*.py' -v
+
+      - name: Download verified kernel-java build output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: takx-kernel-java-build-output
+          path: ${{ runner.temp }}/kernel-java-build
+
+      - name: Build deterministic vehicle-metadata.jar and run 34 CoT controls live under JDK 17 -Xcheck:jni
+        timeout-minutes: 5
+        run: |
+          python3 -B takx/client58-public-api/run_hosted_controls.py \
+            --phase qualify \
+            --kernel-classes "${RUNNER_TEMP}/kernel-java-build/classes" \
+            --public-jars "${RUNNER_TEMP}/kernel-java-build/classpath" \
+            --output "${RUNNER_TEMP}/takx-client58-public-api-hosted"
+
+      - name: Retain verified client58-public-api hosted control receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-client58-public-api-hosted-receipt
+          path: ${{ runner.temp }}/takx-client58-public-api-hosted/hosted-client58-public-api-receipt.json
           if-no-files-found: error
           retention-days: 14
