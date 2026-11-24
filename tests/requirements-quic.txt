@@ -1,8 +1,8 @@
 # QUIC client for tests/quic-cot.py. Versions are pinned. Wheels exist for
 # linux/amd64 and linux/arm64, so the test does not compile them.
-aioquic==1.2.0
+aioquic==1.9.1
 attrs==26.1.0
-certifi==2026.10.23
+certifi==2026.11.20
 cffi==2.1.1
 cryptography==50.0.2
 pycparser==3.12

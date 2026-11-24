@@ -511,7 +511,7 @@ jobs:
         run: python3 .github/scripts/test-validation-mode.py plan
 
       - name: test-flavor
-        uses: defenseunicorns/uds-common/.github/actions/test-flavor@9cb4ebfd9f9a5efd1dbc454bf3aae843d0b57b9f # v1.32.2
+        uses: defenseunicorns/uds-common/.github/actions/test-flavor@807de6f4efca9f51ee5e8d3e466d5f089c9eaab8 # v1.34.1
         id: test-flavor
     outputs:
       upgrade-flavors: ${{ steps.test-flavor.outputs.upgrade-flavors }}
@@ -565,7 +565,7 @@ jobs:
       - name: Set up test Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.12"
+          python-version: "3.15"
           check-latest: false
 
       - name: Verify test Python before cluster work
@@ -624,7 +624,7 @@ jobs:
         if: (env.TEST_TYPE == 'install' || steps.baseline.outputs.available == 'true')
         uses: docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a # v2.4.0
         with:
-          version: v5.7.0
+          version: v5.8.0
 
       - name: Install UDS CLI
         if: (env.TEST_TYPE == 'install' || steps.baseline.outputs.available == 'true')

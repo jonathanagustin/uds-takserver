@@ -38,7 +38,7 @@ jobs:
       security-events: write
       # Publish results for the Scorecard badge.
       id-token: write
-    uses: defenseunicorns/uds-common/.github/workflows/callable-scorecard.yaml@9cb4ebfd9f9a5efd1dbc454bf3aae843d0b57b9f # v1.32.2
+    uses: defenseunicorns/uds-common/.github/workflows/callable-scorecard.yaml@807de6f4efca9f51ee5e8d3e466d5f089c9eaab8 # v1.34.1
     # Only the explicitly received SCORECARD_READ_TOKEN and automatic GitHub
     # token are available here. The upstream interface does not declare its
     # token, so inherit forwards this restricted context across the final hop.

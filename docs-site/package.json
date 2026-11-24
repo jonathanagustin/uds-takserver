@@ -15,10 +15,10 @@
     "test": "playwright test"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.42.7",
+    "@astrojs/starlight": "^0.43.0",
     "astro": "^7.4.7",
     "astro-mermaid": "^2.2.0",
-    "hast-util-from-html": "2.0.3",
+    "hast-util-from-html": "2.1.0",
     "mermaid": "^12.3.0",
     "starlight-github-alerts": "^0.5.0",
     "starlight-links-validator": "^0.27.0",
