@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.28
+# syntax=docker/dockerfile:1.29
 # Copyright 2026 uds-takserver authors
 # SPDX-License-Identifier: GPL-3.0-only
 
@@ -22,7 +22,7 @@
 # npm prune needs npm. This is the same node:26-alpine3.24 tag upstream
 # copies into its image, pinned by the multi-arch index digest. Renovate
 # updates the digest when the tag moves.
-FROM node:26-alpine3.24@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216 AS built
+FROM node:26-alpine3.24@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS built
 COPY --from=cloudtak-upstream /home/etl/api /home/etl/api
 WORKDIR /home/etl/api
 # The API's package.json lists tsx and drizzle-kit as dependencies, and
@@ -43,7 +43,7 @@ RUN npm prune --omit=dev \
 
 # Same base tag as upstream's Dockerfile, pinned by digest. Renovate updates
 # the digest when the tag moves. Alpine packages still float, as upstream.
-FROM nginx:alpine3.24@sha256:785835ea65db4bba6f021acc0f3be91b0fef76a53fe41f8588c6698d2aed0606
+FROM nginx:alpine3.24@sha256:b50897d5c7b1aa08067c3d90c5e8b3e47ec4e3c91c91446f67820228f7b41e34
 # hadolint ignore=DL3018
 RUN apk add --no-cache bash nodejs-current openssl
 COPY --from=built /home/etl/api /home/etl/api
