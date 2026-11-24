@@ -366,6 +366,13 @@
         "held",
         "needs-qualification"
       ]
+    },
+    {
+      "description": "dhi.io images need a registry login Renovate does not have, so the lookup fails and the dashboard reports an error. The TAK Server base is a digest-pinned dhi.io Temurin 17 qualified by hand (ADR 0025, #871); move it deliberately, not through a Renovate update.",
+      "matchPackageNames": [
+        "dhi.io/**"
+      ],
+      "enabled": false
     }
   ],
   "git-submodules": {
