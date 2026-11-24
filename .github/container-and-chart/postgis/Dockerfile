@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.28
+# syntax=docker/dockerfile:1.29
 # Copyright 2026 uds-takserver authors
 # SPDX-License-Identifier: GPL-3.0-only
 
@@ -10,7 +10,7 @@
 # (the previous image, tag 15-3.4). The entrypoint runs pg_upgrade, so this
 # image also installs the PostgreSQL 15 server and its PostGIS library. See
 # adr/0018-upgrade-postgres-in-place.md.
-ARG POSTGRES_IMAGE=postgres:18-bookworm@sha256:5c4783a8cc3f0074912164f94dfa1be4e043438f0f707cf968d7af9a0d31a2c8
+ARG POSTGRES_IMAGE=postgres:18-bookworm@sha256:e742a2668255221388004f3a42b6150a2103f5054ab3a4a93ae9e4f01e551c35
 
 # The pgdg package version, URL encoded for the file names below. The same
 # PostGIS upload is built for PostgreSQL 15 and 18.

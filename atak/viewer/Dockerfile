@@ -13,8 +13,8 @@
 # (supported to 2027-04-30). node-pty only backs the adb shell, which is
 # compiled out, and is not in dist-package-lock.json: the runtime dependencies
 # are plain JavaScript, so the image that ships runs Node 26 LTS.
-ARG BUILD_NODE_IMAGE=node:22.23-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
-ARG NODE_IMAGE=node:26.13-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9
+ARG BUILD_NODE_IMAGE=node:22.23-bookworm-slim@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb
+ARG NODE_IMAGE=node:26.13-bookworm-slim@sha256:0042e17d232a87a2cd485be1da7900fca4d10a4ad11b29e9285da1d2e54798c9
 
 FROM ${BUILD_NODE_IMAGE} AS source
 RUN apt-get update \

@@ -511,7 +511,7 @@ jobs:
         run: python3 .github/scripts/test-validation-mode.py plan
 
       - name: test-flavor
-        uses: defenseunicorns/uds-common/.github/actions/test-flavor@9cb4ebfd9f9a5efd1dbc454bf3aae843d0b57b9f # v1.32.2
+        uses: defenseunicorns/uds-common/.github/actions/test-flavor@807de6f4efca9f51ee5e8d3e466d5f089c9eaab8 # v1.34.1
         id: test-flavor
     outputs:
       upgrade-flavors: ${{ steps.test-flavor.outputs.upgrade-flavors }}
@@ -624,7 +624,7 @@ jobs:
         if: (env.TEST_TYPE == 'install' || steps.baseline.outputs.available == 'true')
         uses: docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a # v2.4.0
         with:
-          version: v5.7.0
+          version: v5.8.0
 
       - name: Install UDS CLI
         if: (env.TEST_TYPE == 'install' || steps.baseline.outputs.available == 'true')
@@ -648,11 +648,19 @@ jobs:
       # (run 40174810574). The amd64 hit took 32s to unpack. The miss saved
       # the same images in about 9s. The ATAK e2e job keeps the 5.5 GB slim
       # checkpoint in the Actions cache, which needs the room.
+      - name: Install pinned k3d
+        if: (env.TEST_TYPE == 'install' || steps.baseline.outputs.available == 'true')
+        uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
+        with:
+          install_args: k3d
+          cache: true
+
       - name: Environment setup
         if: (env.TEST_TYPE == 'install' || steps.baseline.outputs.available == 'true')
         run: |
           echo "MARU_AUTH=\"{\"raw.githubusercontent.com\": \"${{ secrets.GITHUB_TOKEN }}\"}\"" >> "$GITHUB_ENV"
           uds run actions:setup-environment \
+          --set INSTALL_DEPENDENCIES=false \
           --set REGISTRY1_USERNAME="${{ secrets.IRON_BANK_ROBOT_USERNAME }}" \
           --set REGISTRY1_PASSWORD="${{ secrets.IRON_BANK_ROBOT_PASSWORD }}" \
           --set GH_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
