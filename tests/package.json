@@ -1,12 +1,12 @@
 {
   "name": "uds-takserver-tests",
   "private": true,
-  "packageManager": "pnpm@12.18.0",
+  "packageManager": "pnpm@12.23.0",
   "scripts": {
     "test": "playwright test"
   },
   "devDependencies": {
-    "@playwright/test": "1.64.1",
+    "@playwright/test": "1.65.1",
     "maplibre-gl": "npm:@tak-ps/maplibre-gl@6.15.0"
   }
 }

@@ -18,4 +18,4 @@ concurrency:
 
 jobs:
   validate:
-    uses: defenseunicorns/uds-common/.github/workflows/callable-commitlint.yaml@9cb4ebfd9f9a5efd1dbc454bf3aae843d0b57b9f # v1.32.2
+    uses: defenseunicorns/uds-common/.github/workflows/callable-commitlint.yaml@807de6f4efca9f51ee5e8d3e466d5f089c9eaab8 # v1.34.1
