@@ -186,7 +186,7 @@ class WorkflowPermissionTests(unittest.TestCase):
         self.assertIs(checkout['with']['persist-credentials'], False)
         action = next(step for step in job['steps']
                       if step.get('uses', '').startswith('actions/dependency-review-action@'))
-        self.assertEqual(action['uses'], 'actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294')
+        self.assertEqual(action['uses'], 'actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec')
         for target, key, value in (('job', 'if', 'false'), ('action', 'if', "steps.feature.outputs.enabled == 'true'"),
                                    ('job', 'continue-on-error', True), ('action', 'continue-on-error', True),
                                    ('action', 'uses', './unchecked-local-wrapper')):

@@ -104,6 +104,8 @@ jobs:
           kubectl apply -f "${RUNNER_TEMP}/kubevirt-operator.yaml"
           # The release CR with the ImageVolume and Template gates disabled,
           # the same one the Zarf package applies.
+          kubectl wait --for=create crd/kubevirts.kubevirt.io --timeout=3m
+          kubectl wait --for=condition=Established crd/kubevirts.kubevirt.io --timeout=1m
           kubectl apply -f atak/deploy/kubevirt-cr.yaml
           kubectl -n kubevirt wait kv kubevirt --for condition=Available --timeout=15m
 
