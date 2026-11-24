@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 FROM ghcr.io/jonathanagustin/uds-takserver/takx-native-openssl:3.5.9-amd64 AS openssl_cache
-FROM docker.io/library/gcc@sha256:82549aa8f90ada3236a8be70c74543132a76662ef33f0c3271ed802b81584a82 AS builder
+FROM docker.io/library/gcc@sha256:9af0ba1a5281cac2a79aa718b6d21af8670322cf4378198ee306efd5acc1955f AS builder
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 

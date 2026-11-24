@@ -17,7 +17,7 @@
 set -euo pipefail
 
 # renovate: datasource=github-tags depName=defenseunicorns/uds-core versioning=semver
-slim_core_version=1.16.0
+slim_core_version=1.17.2
 # Index digest of each checkpoint version, checked before a pull. A version
 # without an entry (a fresh Renovate bump) is pulled by tag with a warning;
 # the mirror workflow prints the line to add here.

@@ -10,7 +10,7 @@
 # (the previous image, tag 15-3.4). The entrypoint runs pg_upgrade, so this
 # image also installs the PostgreSQL 15 server and its PostGIS library. See
 # adr/0018-upgrade-postgres-in-place.md.
-ARG POSTGRES_IMAGE=postgres:18-bookworm@sha256:194e55feb2597b1465dbee81cc9fd8d204566cd2eb42c8d22fd6c931a38781b1
+ARG POSTGRES_IMAGE=postgres:18-bookworm@sha256:e742a2668255221388004f3a42b6150a2103f5054ab3a4a93ae9e4f01e551c35
 
 # The pgdg package version, URL encoded for the file names below. The same
 # PostGIS upload is built for PostgreSQL 15 and 18.
