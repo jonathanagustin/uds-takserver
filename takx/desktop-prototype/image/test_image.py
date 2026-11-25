@@ -7,6 +7,7 @@ Tests that need keytool and openssl are skipped where those are missing.
 Run: python3 -B -m unittest takx/desktop-prototype/image/test_image.py
 """
 import datetime
+import gzip
 import hashlib
 import io
 import json
@@ -16,6 +17,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 import zipfile
@@ -28,6 +30,7 @@ sys.path.insert(0, str(HERE / "verify"))
 import check_native_closure  # noqa: E402
 import gen_notices  # noqa: E402
 import rfb_probe  # noqa: E402
+import scan_image  # noqa: E402
 import stage_identity  # noqa: E402
 import verify_tree  # noqa: E402
 
@@ -368,6 +371,58 @@ class ProbeTest(unittest.TestCase):
         stream.send(b"x")
         self.assertEqual(sock.sent[-7] & 0x0F, 2)
         self.assertTrue(sock.sent[-6] & 0x80, "client frames must be masked")
+
+
+def tar_bytes(files, compress=False):
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w") as archive:
+        for name, content in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+    return gzip.compress(data.getvalue()) if compress else data.getvalue()
+
+
+class ScanImageTest(unittest.TestCase):
+    PUBLIC, PRIVATE = bytes(range(200)) * 2, bytes(reversed(range(200))) * 2
+
+    def save(self, extra):
+        base = {"tools/jdk/lib/security/cacerts": b"JKS" + self.PUBLIC + b"tail",
+                "var/lib/dpkg/info/libgnutls30.md5sums":
+                    (hashlib.md5(self.key()).hexdigest() + "  usr/lib/libgnutls.so.30\n").encode(),
+                "usr/lib/libgnutls.so.30": self.key(),
+                "usr/bin/parser": b"-----BEGIN PRIVATE" + b" KEY-----\x00constant only"}
+        return tar_bytes({"blobs/sha256/aaa": tar_bytes(base, compress=True), "blobs/sha256/bbb": tar_bytes(extra),
+                          "index.json": b"{}"})
+
+    @staticmethod
+    def key():
+        return b"x-----BEGIN RSA PRIVATE" + b" KEY-----\n" + b"A" * 64 + b"\n"
+
+    def run_scan(self, extra):
+        with tarfile.open(fileobj=io.BytesIO(self.save(extra))) as save:
+            stores, packaged = scan_image.trust_stores(save)
+        certificates = [{"der": self.PUBLIC, "pem_line": None}, {"der": self.PRIVATE, "pem_line": b"UFJJVkFURQ"}]
+        private = [item for item in certificates if not any(item["der"] in store for store in stores)]
+        with tarfile.open(fileobj=io.BytesIO(self.save(extra))) as save:
+            return private, scan_image.scan(save, private, packaged)
+
+    def test_clean_image_passes_and_public_roots_are_not_searched_for(self):
+        private, found = self.run_scan({"opt/app/readme.txt": b"hello"})
+        self.assertEqual([item["der"] for item in private], [self.PRIVATE])
+        self.assertEqual((found["private_ca_hits"], found["private_keys"], found["build_paths"], found["layers"]),
+                         ([], [], [], 2))
+        self.assertEqual(found["pem_keys_in_unmodified_debian_package_files"],
+                         [{"path": "usr/lib/libgnutls.so.30", "package": "libgnutls30"}])
+
+    def test_proxy_ca_key_store_private_key_and_build_path_are_found(self):
+        _private, found = self.run_scan({
+            "etc/ssl/extra.der": b"..." + self.PRIVATE, "etc/ssl/extra.pem": b"line\nUFJJVkFURQ\n",
+            "opt/app/id.p12": b"p", "opt/app/server.pem": self.key(), "var/lib/takx-proto/P/x": b"x"})
+        self.assertEqual(sorted(hit["path"] for hit in found["private_ca_hits"]), ["etc/ssl/extra.der", "etc/ssl/extra.pem"])
+        self.assertEqual([item["path"] for item in found["private_keys"]], ["opt/app/server.pem"])
+        self.assertEqual([item["path"] for item in found["key_stores"]], ["opt/app/id.p12"])
+        self.assertEqual([item["path"] for item in found["build_paths"]], ["var/lib/takx-proto/P/x"])
 
 
 class ShellTest(unittest.TestCase):

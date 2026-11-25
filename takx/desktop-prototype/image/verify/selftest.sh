@@ -12,11 +12,16 @@
 #                                 libraries, one frame from inside the desktop
 #                                 container, one frame through the WebSocket
 #                                 bridge; writes status/selftest.json
+#   selftest.sh browser           Playwright Chromium on the host loads noVNC
+#                                 through exec_relay.py and saves a screenshot
+#                                 (needs node with the playwright module)
 #   selftest.sh stats             memory and CPU of both containers now, and the
 #                                 peak the kernel recorded
 #   selftest.sh supervision       kill websockify, then the JVM; probes and exit
 #                                 codes (ends the session)
 #   selftest.sh audit             readelf-free ELF audit ('ldd -r') in the image
+#   selftest.sh linker            a boot under LD_DEBUG=libs: what the dynamic
+#                                 linker searched; then 'docker stop'
 #   selftest.sh identity          identity stage against a synthetic identity
 #   selftest.sh logs              container logs into the evidence directory
 #   selftest.sh stop              remove the containers and the socket volume
@@ -393,6 +398,68 @@ XML
   return "${rc}"
 }
 
+# One more boot of the desktop alone, with the dynamic linker's own trace
+# (LD_DEBUG=libs) for every process: which directories it searched and which
+# files it tried. Then 'docker stop', to see the session end on SIGTERM.
+do_linker() {
+  local out="${evidence}/linker.txt" rc started
+  do_stop
+  docker volume create --driver local --opt type=tmpfs --opt device=tmpfs \
+    --opt o=size=1m,uid=10001,gid=10001,mode=2770 "${volume}" >/dev/null
+  docker run -d --name "${desktop}" --network none --hostname takx-desktop --add-host takx-desktop:127.0.0.1 \
+    "${hardening[@]}" --user 10001:10001 --cpus 1.5 --memory 5g \
+    --tmpfs /tmp:rw,nosuid,nodev,size=1g,mode=1777 \
+    --tmpfs /run/takx/session:rw,exec,nosuid,nodev,size=2g,uid=10001,gid=10001,mode=0750 \
+    --mount "type=volume,src=${volume},dst=/run/takx/vnc" \
+    -e "EXTRA_JVM_OPTS=${TAKX_SELFTEST_JVM:--Xmx2g}" -e LD_DEBUG=libs -e LD_DEBUG_OUTPUT=/tmp/ld \
+    "${image}" desktop >/dev/null
+  do_wait 300
+  # shellcheck disable=SC2016 # expanded by the shell in the container
+  docker exec -e LD_DEBUG= "${desktop}" bash -c '
+    jvm="$(cat /run/takx/session/jvm.pid)"
+    trace="/tmp/ld.${jvm}"
+    echo "linker trace of the JVM (pid ${jvm}): $(wc -l <"${trace}") lines"
+    echo "lines naming /var/lib/takx-proto in any process trace: $(cat /tmp/ld.* | grep -c "/var/lib/takx-proto" || true)"
+    echo "search path lines of the JVM naming a RUNPATH: $(grep -c "RUNPATH from file" "${trace}" || true)"
+    echo "search path lines of the JVM naming a Kernel library RUNPATH: $(grep "RUNPATH from file" "${trace}" | grep -c takkernel || true)"
+    echo "files the linker tried for the Kernel SONAMEs (none means they were already loaded):"
+    tried="$(grep -E "trying file=.*(libGLESv2|libGLdispatch|libassimp|libgdal|liblas|libtakengine)" "${trace}" || true)"
+    echo "  ${tried:-none}"
+    echo "calling init of the Kernel libraries, in order:"
+    grep -E "calling init: .*/takkernel/" "${trace}" | sed "s/^ *[0-9]*:\s*calling init: /  /"' >"${out}" 2>&1 || true
+  started="$(date +%s)"
+  docker stop -t 30 "${desktop}" >/dev/null
+  rc="$(docker inspect -f '{{.State.ExitCode}}' "${desktop}")"
+  {
+    echo "docker stop (SIGTERM): exit code ${rc} after $(($(date +%s) - started)) s"
+    docker logs "${desktop}" 2>&1 | grep 'takx-desktop:' | tail -n 2
+  } >>"${out}"
+  cat "${out}"
+  do_stop
+  grep -q '^lines naming /var/lib/takx-proto in any process trace: 0$' "${out}" &&
+    grep -q '^docker stop (SIGTERM): exit code 0 ' "${out}"
+}
+
+do_browser() {
+  local relay rc=0 port="${TAKX_SELFTEST_RELAY_PORT:-16080}"
+  if ! node -e "require('playwright')" >/dev/null 2>&1; then
+    echo "selftest: node with the playwright module is not available on this host; browser step not run"
+    return 3
+  fi
+  # The containers keep --network none: the browser reaches port 6080 of the
+  # web container through 'docker exec' (exec_relay.py), nothing is published.
+  python3 -I "${here}/exec_relay.py" "${web}" 6080 "${port}" >"${evidence}/exec-relay.log" 2>&1 &
+  relay=$!
+  sleep 1
+  NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost timeout 150 \
+    node "${here}/browser_probe.js" "http://127.0.0.1:${port}/" "${evidence}/browser-novnc.png" \
+    >"${evidence}/browser-probe.json" 2>"${evidence}/browser-probe.err" || rc=$?
+  kill "${relay}" 2>/dev/null || true
+  wait "${relay}" 2>/dev/null || true
+  cat "${evidence}/browser-probe.json"
+  return "${rc}"
+}
+
 do_logs() {
   docker logs "${desktop}" >"${evidence}/desktop.log" 2>&1 || true
   docker logs "${web}" >"${evidence}/web.log" 2>&1 || true
@@ -407,8 +474,10 @@ case "${1:-}" in
   supervision) do_supervision;;
   audit) do_audit;;
   identity) do_identity;;
+  browser) do_browser;;
+  linker) do_linker;;
   logs) do_logs;;
   stop) do_stop;;
-  -h|--help|"") sed -n '5,41p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
+  -h|--help|"") sed -n '5,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
   *) echo "selftest.sh: unknown step '$1'" >&2; exit 2;;
 esac

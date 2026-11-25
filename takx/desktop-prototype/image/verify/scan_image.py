@@ -16,7 +16,10 @@ Reported:
                    ca-certificates in the image), searched as DER bytes and as
                    PEM text in every file of every layer. This is how a
                    build-time proxy CA would show up
-  private_keys     files with a PEM private key header
+  private_keys     files with a PEM private key (header and base64 body).
+                   A file that is byte-identical to what a Debian package
+                   ships (dpkg md5sums) is listed separately and does not
+                   fail the scan: GnuTLS carries self-test keys in its library
   key_stores       files named *.p12, *.pfx, *.jks, *.key or *.keystore
   build_paths      entries below var/lib/takx-proto, the build work root
   layers, files, bytes
@@ -29,6 +32,7 @@ only, so compressed members are not seen.
 import argparse
 import base64
 import gzip
+import hashlib
 import io
 import json
 import re
@@ -37,7 +41,10 @@ import sys
 import tarfile
 import tempfile
 
-KEY_HEADER = re.compile(rb"-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----")
+# A header alone is a constant of some parser (GnuTLS, GLib, Xtigervnc carry
+# it); a key is the header followed by a base64 body.
+KEY_HEADER = re.compile(rb"-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE" rb" KEY-----\r?\n"
+                        rb"(?:[A-Za-z-]+: [^\n]*\n)*\r?\n?[A-Za-z0-9+/=]{40,}")
 STORE_NAME = re.compile(r"\.(p12|pfx|jks|key|keystore)$", re.I)
 
 
@@ -69,8 +76,8 @@ def layer_streams(save):
 
 
 def trust_stores(save):
-    """Bytes of the public trust stores of the image: JDK cacerts and Debian ca-certificates."""
-    stores = []
+    """Return (public trust store bytes, {path: (package, md5)} of Debian package files)."""
+    stores, packaged = [], {}
     for _layer, archive in layer_streams(save):
         for member in archive:
             if not member.isfile():
@@ -81,13 +88,18 @@ def trust_stores(save):
                 text = archive.extractfile(member).read().decode("ascii", "replace")
                 for body in re.findall(r"-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----", text, re.S):
                     stores.append(base64.b64decode("".join(body.split())))
-    return stores
+            elif member.name.startswith("var/lib/dpkg/info/") and member.name.endswith(".md5sums"):
+                package = member.name.rsplit("/", 1)[1][:-len(".md5sums")]
+                for line in archive.extractfile(member).read().decode("utf-8", "replace").splitlines():
+                    digest, _, path = line.partition("  ")
+                    packaged[path] = (package, digest)
+    return stores, packaged
 
 
-def scan(save, private):
+def scan(save, private, packaged):
     """Return the report fields for one pass over all layers."""
     layers, files, total = 0, 0, 0
-    hits, key_files, stores, build_paths = [], [], [], []
+    hits, key_files, debian_keys, stores, build_paths = [], [], [], [], []
     for layer, archive in layer_streams(save):
         layers += 1
         for member in archive:
@@ -101,12 +113,17 @@ def scan(save, private):
                 stores.append({"layer": layer, "path": member.name, "bytes": member.size})
             data = archive.extractfile(member).read()
             if KEY_HEADER.search(data):
-                key_files.append({"layer": layer, "path": member.name})
+                package, digest = packaged.get(member.name, (None, None))
+                if digest == hashlib.md5(data).hexdigest():  # noqa: S324 - dpkg's own checksum format
+                    debian_keys.append({"path": member.name, "package": package})
+                else:
+                    key_files.append({"layer": layer, "path": member.name})
             for item in private:
                 if item["der"] in data or (item["pem_line"] and item["pem_line"] in data):
                     hits.append({"layer": layer, "path": member.name, "certificate": subject_hint(item["der"])})
     return {"private_ca_hits": hits, "layers": layers, "files": files, "bytes": total, "private_keys": key_files,
-            "key_stores": stores, "build_paths": build_paths}
+            "pem_keys_in_unmodified_debian_package_files": debian_keys, "key_stores": stores,
+            "build_paths": build_paths}
 
 
 def main(argv=None):
@@ -123,14 +140,14 @@ def main(argv=None):
         shutil.copyfileobj(sys.stdin.buffer, stream, 1 << 20)
         stream.seek(0)
         with tarfile.open(fileobj=stream) as save:
-            cacerts = trust_stores(save)
+            cacerts, packaged = trust_stores(save)
         private = [item for item in certificates if not any(item["der"] in store for store in cacerts)]
         known = {item["der"] for item in private}
         for path in options.must_not_contain:
             private += [item for item in bundle_certificates(path) if item["der"] not in known]
         stream.seek(0)
         with tarfile.open(fileobj=stream) as save:
-            found = scan(save, private)
+            found = scan(save, private, packaged)
     report = {"ca_bundle_certificates": len(certificates),
               "bundle_certificates_that_are_public_roots_of_the_image": len(certificates) - len(known),
               "private_ca_searched_for": [subject_hint(item["der"]) for item in private], **found}
