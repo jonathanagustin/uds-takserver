@@ -94,7 +94,8 @@ case "${1:-}" in
     done
     if ! pulled="$(docker pull -q "${reference}" 2>&1)"; then
       case "${pulled}" in
-        *"manifest unknown"*|*"not found"*|*"name unknown"*) say "nothing is stored under ${reference}"; exit 3;;
+        *"manifest unknown"*|*"not found"*|*"name unknown"*|*denied*)
+          say "nothing readable is stored under ${reference}: ${pulled##*: }"; exit 3;;
       esac
       say "pull of ${reference} failed: ${pulled}"; exit 1
     fi

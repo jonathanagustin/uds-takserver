@@ -11,6 +11,9 @@
 # 'arches=arm64,amd64' (default: both). ci/pipeline.py documents it.
 #
 # Jobs follow the dependency waves of takx/desktop-prototype/ci/groups.json.
+# The public inputs are fetched once per architecture (job "inputs") and stored
+# on GHCR; every other job restores them and asks no public source, because
+# Maven Central answers runners that repeat the whole fetch with HTTP 429.
 # Each job restores its prerequisites from the provider cache on GHCR, builds
 # its own providers and pushes them, so later jobs and reruns do not rebuild.
 # amd64 is the control: it uses the hand-built reference images when they can
@@ -141,11 +144,86 @@ jobs:
             echo "- source: ${IMAGE_SOURCE} (reference = hand-built images, existing provider keys apply)"
           } >> "${GITHUB_STEP_SUMMARY}"
 
+  # The pinned inputs of one architecture: restored when an earlier run stored
+  # them for the same pins, otherwise fetched from the public sources here, once,
+  # and stored. A failure here stops the later jobs of that architecture before
+  # they build anything.
+  inputs:
+    needs: [plan, toolchain]
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    name: inputs (${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(needs.plan.outputs.arches) }}
+    outputs:
+      # One output per architecture: matrix legs would overwrite a shared name.
+      amd64: ${{ steps.inputs.outputs.amd64 }}
+      arm64: ${{ steps.inputs.outputs.arm64 }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out the atak-civ submodule
+        run: git submodule update --init --depth 1 upstream/atak-civ
+
+      - name: Free runner disk
+        run: ./.github/scripts/free-runner-disk.sh
+        env:
+          PRUNE_DOCKER: "true"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore the stored inputs or fetch and store them
+        id: inputs
+        env:
+          ARCH: ${{ matrix.arch }}
+          IMAGES: ${{ needs.toolchain.outputs[matrix.arch] }}
+        run: |
+          set -euo pipefail
+          takx/desktop-prototype/ci/enter.sh "${ARCH}" "${IMAGES}" --provide-inputs
+          reference="$(sudo cat "${TAKX_PROTO_ROOT}/status/inputs.ref")"
+          echo "${ARCH}=${reference}" >> "${GITHUB_OUTPUT}"
+
+      - name: Summarize statuses
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 -I -B takx/desktop-prototype/ci/pipeline.py summary "${TAKX_PROTO_ROOT}" >> "${GITHUB_STEP_SUMMARY}"
+          df -h /
+
+      - name: Make logs and status files readable
+        if: always()
+        run: sudo chmod -R a+rX "${TAKX_PROTO_ROOT}/logs" "${TAKX_PROTO_ROOT}/status" || true
+
+      - name: Retain logs and status files
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-proto-${{ matrix.arch }}-inputs-logs
+          path: |
+            /var/lib/takx-proto/logs
+            /var/lib/takx-proto/status
+          if-no-files-found: warn
+          retention-days: 14
+
   # Providers in dependency waves. A leg of a later wave runs even when another
   # architecture failed earlier; a leg whose own prerequisites are missing from
   # the cache stops as "blocked" before it builds anything.
   providers-a:
-    needs: [plan, toolchain]
+    needs: [plan, toolchain, inputs]
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
     name: ${{ matrix.group }} (${{ matrix.arch }})
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
@@ -179,11 +257,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Prepare the runner and fetch the pinned inputs
+      - name: Prepare the runner and restore the pinned inputs
         env:
           ARCH: ${{ matrix.arch }}
           IMAGES: ${{ needs.toolchain.outputs[matrix.arch] }}
-        run: takx/desktop-prototype/ci/enter.sh "${ARCH}" "${IMAGES}"
+          INPUTS: ${{ needs.inputs.outputs[matrix.arch] }}
+        run: takx/desktop-prototype/ci/enter.sh "${ARCH}" "${IMAGES}" --inputs "${INPUTS}"
 
       - name: Restore prerequisites, build and push
         env:
@@ -214,7 +293,7 @@ jobs:
           retention-days: 14
 
   providers-b:
-    needs: [plan, toolchain, providers-a]
+    needs: [plan, toolchain, inputs, providers-a]
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
     name: ${{ matrix.group }} (${{ matrix.arch }})
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
@@ -230,7 +309,7 @@ jobs:
     steps: *provider-steps
 
   providers-c:
-    needs: [plan, toolchain, providers-b]
+    needs: [plan, toolchain, inputs, providers-b]
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
     name: ${{ matrix.group }} (${{ matrix.arch }})
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
@@ -247,7 +326,7 @@ jobs:
 
   # Composed Kernel, client compile, then assembly and boot. Nothing is pushed.
   client:
-    needs: [plan, toolchain, providers-c]
+    needs: [plan, toolchain, inputs, providers-c]
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
     name: kernel, client, boot (${{ matrix.arch }})
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
@@ -280,11 +359,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Prepare the runner and fetch the pinned inputs
+      - name: Prepare the runner and restore the pinned inputs
         env:
           ARCH: ${{ matrix.arch }}
           IMAGES: ${{ needs.toolchain.outputs[matrix.arch] }}
-        run: takx/desktop-prototype/ci/enter.sh "${ARCH}" "${IMAGES}" --runtime
+          INPUTS: ${{ needs.inputs.outputs[matrix.arch] }}
+        run: takx/desktop-prototype/ci/enter.sh "${ARCH}" "${IMAGES}" --inputs "${INPUTS}" --runtime
 
       - name: Restore every provider, build the Kernel and compile the client
         run: takx/desktop-prototype/ci/run-group.sh client
