@@ -22,6 +22,7 @@ _PACKAGE_SPEC.loader.exec_module(_PACKAGE_MODULE)
 
 
 VERSION = re.compile(r"^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+RELEASE_TAG_REFSPEC = "refs/tags/v*:refs/tags/v*"
 
 
 def git(*args):
@@ -108,7 +109,10 @@ def main():
     repository = os.environ.get("GITHUB_REPOSITORY", "jonathanagustin/uds-takserver")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise RuntimeError("Invalid repository name")
-    subprocess.run(["git", "fetch", "origin", "main", "--tags"], check=True)
+    # Only release tags are needed. A broad --tags fetch also updates unrelated
+    # tags, and git refuses the whole fetch when one of them has moved since
+    # checkout. A moved release tag still fails here.
+    subprocess.run(["git", "fetch", "--no-tags", "origin", "main", RELEASE_TAG_REFSPEC], check=True)
     head = os.environ.get("GITHUB_SHA") or git("rev-parse", "HEAD")
     pin = os.environ.get("UPGRADE_BASELINE_TAG") or None
     if pin and not VERSION.fullmatch(pin):
