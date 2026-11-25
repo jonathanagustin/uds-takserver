@@ -3320,6 +3320,11 @@ class Refusals(ServiceCase):
                 names(selector)
         with self.assertRaises(PC.CacheError):
             names({'path': 'inputs/tree'}, '/other')
+        # A selector of a kind this module does not know selects nothing, whatever it is called.
+        for unknown in ({'a': 'one'}, {'a': 'lock'}, {'d': 'lock-entry'}, {'glob': 'git-source'}, {'zz': 'archive'},
+                        {'Consumer': 'one'}, {'KIND': 'toolchain'}):
+            with self.subTest(unknown=unknown), self.assertRaisesRegex(PC.CacheError, '^no fetched input matches '):
+                names(unknown)
         for verified in (1, 2, 0, None, 'true', 'True', [True]):
             records[1]['verified'] = verified
             with self.subTest(verified=verified), self.assertRaisesRegex(
@@ -3472,6 +3477,14 @@ class Refusals(ServiceCase):
         self.assertEqual((service.tree.root, service.prefix, service.override),
                          (Path(os.path.abspath('relative/root')), 'reg.example/x', ''))
         self.assertEqual(set(service.manifest['providers']), EXPECTED)
+
+    def test_importing_the_module_under_any_name_does_not_run_it(self):
+        for name in ('A', 'Provider_cache', '0cache', '__ma', '__main', '__main__x', 'zz'):
+            module_spec = importlib.util.spec_from_file_location(name, HERE / 'provider_cache.py')
+            module = importlib.util.module_from_spec(module_spec)
+            with self.subTest(name=name), mock.patch.object(sys, 'argv', ['provider_cache.py', 'frobnicate']):
+                module_spec.loader.exec_module(module)  # running main() would exit 2 here
+                self.assertEqual(module.SCHEMA, PC.SCHEMA)
 
     def test_help_describes_the_tool(self):
         out = io.StringIO()
