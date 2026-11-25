@@ -489,23 +489,42 @@ class Pipeline(unittest.TestCase):
         self.assertIn('java: no stage script lane9.sh', problems(lambda g: g['java']['run'].append(['lane9.sh'])))
 
     def test_trigger_file_and_request(self):
-        self.assertEqual(PIPELINE.parse_trigger(''), {'arches': ['amd64', 'arm64']})
-        self.assertEqual(PIPELINE.parse_trigger('# note\n\narches = arm64\n'), {'arches': ['arm64']})
-        self.assertEqual(PIPELINE.parse_trigger('arches=arm64, amd64,arm64\n'), {'arches': ['amd64', 'arm64']})
-        for text in ('arches=\n', 'arches=riscv64\n', 'run this\n', 'cache=off\n'):
+        both = ['amd64', 'arm64']
+        self.assertEqual(PIPELINE.parse_trigger(''), {'arches': both, 'providers': 'build'})
+        self.assertEqual(PIPELINE.parse_trigger('# note\n\narches = arm64\n'), {'arches': ['arm64'], 'providers': 'build'})
+        self.assertEqual(PIPELINE.parse_trigger('arches=arm64, amd64,arm64\n'), {'arches': both, 'providers': 'build'})
+        self.assertEqual(PIPELINE.parse_trigger('providers = cached\narches=amd64\n'),
+                         {'arches': ['amd64'], 'providers': 'cached'})
+        self.assertEqual(PIPELINE.parse_trigger('providers=build\n'), {'arches': both, 'providers': 'build'})
+        for text in ('arches=\n', 'arches=riscv64\n', 'run this\n', 'cache=off\n', 'providers=\n', 'providers=skip\n'):
             with self.subTest(text=text), self.assertRaises(PIPELINE.Refusal):
                 PIPELINE.parse_trigger(text)
         with tempfile.TemporaryDirectory() as directory:
             trigger = Path(directory) / 'trigger'
             with self.assertRaisesRegex(PIPELINE.Refusal, 'does not exist'):
                 PIPELINE.plan(trigger, '')
-            self.assertEqual(PIPELINE.plan(trigger, '["arm64"]'), {'arches': ['arm64']})
-            trigger.write_text('arches=amd64\n')
-            self.assertEqual(PIPELINE.plan(trigger, ''), {'arches': ['amd64']})
-            self.assertEqual(PIPELINE.plan(trigger, '["arm64","amd64"]'), {'arches': ['amd64', 'arm64']})
+            self.assertEqual(PIPELINE.plan(trigger, '["arm64"]'), {'arches': ['arm64'], 'providers': 'build'})
+            trigger.write_text('arches=amd64\nproviders=cached\n')
+            self.assertEqual(PIPELINE.plan(trigger, ''), {'arches': ['amd64'], 'providers': 'cached'})
+            # A dispatch request names architectures only and always builds the providers.
+            self.assertEqual(PIPELINE.plan(trigger, '["arm64","amd64"]'), {'arches': both, 'providers': 'build'})
             for bad in ('arm64', '[]', '["x"]', '{"a":1}', '[1]'):
                 with self.subTest(bad=bad), self.assertRaises(PIPELINE.Refusal):
                     PIPELINE.plan(trigger, bad)
+            with contextlib.redirect_stdout(io.StringIO()) as printed:
+                self.assertEqual(PIPELINE.main(['plan', '--trigger', str(trigger)]), 0)
+            self.assertEqual(printed.getvalue(), 'arches=["amd64"]\nproviders=cached\n')
+
+    def test_processor_record_names_the_model_and_known_extensions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            x86 = Path(directory) / 'x86'
+            x86.write_text('processor\t: 0\nmodel name\t: Example CPU @ 2.0GHz\nflags\t\t: fpu sse3 avx2 avx512f zzz\n'
+                           'processor\t: 1\nmodel name\t: Other\nflags\t\t: fpu\n')
+            arm = Path(directory) / 'arm'
+            arm.write_text('processor\t: 0\nFeatures\t: fp asimd sve\nCPU part\t: 0xd40\n')
+            self.assertEqual(PIPELINE.cpu_record(x86), {'model': 'Example CPU @ 2.0GHz', 'extensions': ['sse3', 'avx2', 'avx512f']})
+            self.assertEqual(PIPELINE.cpu_record(arm), {'model': '0xd40', 'extensions': ['asimd', 'sve']})
+            self.assertEqual(PIPELINE.cpu_record(Path(directory) / 'absent'), {'model': 'unknown', 'extensions': []})
 
     def test_summary_lists_statuses_and_the_architecture_tree(self):
         with tempfile.TemporaryDirectory() as directory:

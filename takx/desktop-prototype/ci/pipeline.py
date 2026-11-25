@@ -6,9 +6,12 @@
   pipeline.py plan --trigger FILE [--requested JSON]
       Decide which architectures to build and print them as GitHub outputs.
       The trigger file is plain text; lines starting with '#' are comments and
-      the only setting is 'arches=<comma separated list of amd64, arm64>'.
-      Without that line both are built. A workflow_dispatch request (a JSON
-      list) wins over the file.
+      the settings are 'arches=<comma separated list of amd64, arm64>'
+      (default: both) and 'providers=build|cached' (default: build). With
+      'providers=cached' the three provider waves are skipped and the final
+      job restores every provider from the cache; it stops as blocked when one
+      is missing. A workflow_dispatch request (a JSON list of architectures)
+      wins over the file and always builds the providers.
   pipeline.py check
       Verify groups.json against ../providers.json: every provider is built by
       exactly one group, every prerequisite is built in an earlier wave, and
@@ -76,17 +79,23 @@ def manifest(proto=PROTO):
 
 # ----------------------------------------------------------------------- plan
 def parse_trigger(text):
-    """The settings of a trigger file: {'arches': [...]} (both when unset)."""
-    arches = list(ARCHES)
+    """The settings of a trigger file: {'arches': [...], 'providers': 'build'|'cached'}."""
+    arches, providers = list(ARCHES), 'build'
     for number, line in enumerate(text.splitlines(), 1):
         line = line.strip()
         if not line or line.startswith('#'):
             continue
         key, separator, value = line.partition('=')
-        if not separator or key.strip() != 'arches':
-            raise Refusal('trigger file line %d is not a comment and not arches=...: %r' % (number, line))
-        arches = [item.strip() for item in value.split(',') if item.strip()]
-    return {'arches': validate_arches(arches)}
+        key, value = key.strip(), value.strip()
+        if separator and key == 'arches':
+            arches = [item.strip() for item in value.split(',') if item.strip()]
+        elif separator and key == 'providers':
+            if value not in ('build', 'cached'):
+                raise Refusal('trigger file line %d: providers is build or cached, not %r' % (number, value))
+            providers = value
+        else:
+            raise Refusal('trigger file line %d is not a comment, arches=... or providers=...: %r' % (number, line))
+    return {'arches': validate_arches(arches), 'providers': providers}
 
 
 def validate_arches(arches):
@@ -105,11 +114,10 @@ def plan(trigger, requested):
             arches = validate_arches(json.loads(requested))
         except ValueError:
             raise Refusal('the requested architectures are not a JSON list: %r' % (requested,))
-    elif settings is None:
+        return {'arches': arches, 'providers': 'build'}
+    if settings is None:
         raise Refusal('the trigger file %s does not exist' % trigger)
-    else:
-        arches = settings['arches']
-    return {'arches': arches}
+    return settings
 
 
 # ---------------------------------------------------------------------- check
@@ -229,6 +237,27 @@ def elf_audit(directory, expected):
     return {'expected': expected, 'objects': dict(sorted(counts.items())), 'not_expected': foreign}
 
 
+def cpu_record(path='/proc/cpuinfo'):
+    """Model and vector extensions of the processor a group ran on.
+
+    Hosted runners of one label do not all have the same processor; a native
+    object built with host-specific instructions in one job can fail in another.
+    """
+    model, flags = '', set()
+    try:
+        for line in Path(path).read_text().splitlines():
+            key, _, value = line.partition(':')
+            key, value = key.strip(), value.strip()
+            if key in ('model name', 'CPU part') and not model:
+                model = value
+            elif key in ('flags', 'Features') and not flags:
+                flags = set(value.split())
+    except OSError:
+        pass
+    wanted = ('sse3', 'ssse3', 'sse4_1', 'sse4_2', 'avx', 'avx2', 'fma', 'bmi2', 'avx512f', 'asimd', 'sve', 'sve2')
+    return {'model': model or 'unknown', 'extensions': [name for name in wanted if name in flags]}
+
+
 # ------------------------------------------------------------------------ run
 def arch_name(proto):
     return subprocess.check_output(['bash', str(Path(proto) / 'arch.sh'), 'get', 'arch'], text=True, timeout=30).strip()
@@ -285,7 +314,9 @@ def run_group(name, root, proto):
     prefixes = [p for p in (os.environ.get('TAKX_PROTO_CACHE'), os.environ.get('TAKX_CI_CACHE_FALLBACK'))
                 if p and p != 'off']
     record = {'stage': 'ci-' + name, 'group': name, 'arch': arch, 'stages_from': str(effective), 'restored': {},
-              'commands': [], 'status': 'ok', 'seconds': 0, 'outputs': [], 'notes': ''}
+              'commands': [], 'status': 'ok', 'seconds': 0, 'outputs': [], 'notes': '', 'cpu': cpu_record()}
+    print('ci: processor %s (%s)' % (record['cpu']['model'], ' '.join(record['cpu']['extensions']) or 'none listed'),
+          flush=True)
     started = time.time()
     missing = []
     for provider in restore_list(config, providers):
@@ -378,7 +409,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == 'plan':
-            print('arches=' + json.dumps(plan(args.trigger, args.requested)['arches'], separators=(',', ':')))
+            planned = plan(args.trigger, args.requested)
+            print('arches=' + json.dumps(planned['arches'], separators=(',', ':')))
+            print('providers=' + planned['providers'])
             return 0
         if args.command == 'check':
             problems = check()

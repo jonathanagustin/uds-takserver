@@ -3,10 +3,15 @@
 #
 # A change to this file on claude/awesome-rubin-2godw2 starts the opt-in
 # workflow .github/workflows/takx-desktop-prototype.yaml (ci/pipeline.py plan
-# reads it). Lines starting with '#' are comments; the only setting is
-# 'arches=<comma separated list of amd64, arm64>' (default: both).
+# reads it). Lines starting with '#' are comments; the settings are
+# 'arches=<comma separated list of amd64, arm64>' (default: both) and
+# 'providers=build|cached' (default: build; cached skips the provider waves).
 #
 # run 1: first build on hosted arm64 runners, with the amd64 control.
 # run 2: inputs fetched once per architecture and stored (Maven Central answered
 #        the per-job fetch with HTTP 429); ELF machine audit of the outputs.
+# run 3: Kernel and client from the provider cache only (providers=cached); the
+#        logs of the Kernel controls are uploaded, because the ones that load
+#        the native engine failed on amd64 in run 2; arm64 client lock tracked.
 arches=arm64,amd64
+providers=cached

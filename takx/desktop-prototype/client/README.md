@@ -115,14 +115,20 @@ tracked because JAR manifests carry the build date.
 ## Architecture
 
 The compile is the same on Linux `amd64` and `arm64`; `../arch.sh` holds the
-names that differ. Nothing in this section was run on arm64 yet.
+names that differ. On arm64 it has run on GitHub-hosted `ubuntu-24.04-arm`
+runners only (workflow runs 45702964185 and 45714468510, 2026-11-25): compile
+and packaging with zero compiler errors and the expected class names. No GUI
+was started on arm64.
 
 - **JDK identity.** The specification lock pins four files of the x64 Temurin
   17.0.21+9. On arm64 `build.py` checks the same four files of the aarch64
   archive against `../inputs.arm64.lock.json`; the x64 pins are not reused.
 - **Tracked lock.** amd64 compares with `inputs.lock.json`. arm64 compares with
-  `inputs.lock.arm64.json`, which does not exist yet: the first arm64 run of
-  `client.sh lock` records it.
+  `inputs.lock.arm64.json`. That file is the lock the two workflow runs above
+  wrote, byte for byte the same in both (SHA-256 `35cb6fe7...e4b2ac`), although
+  the second run rebuilt the composed Kernel JAR
+  (`kernel-8.30.5-linux-arm64-public-cpu.jar`, SHA-256 `8ee97f9a...fa7c4` in
+  both). It is the record of that arm64 build, not a validation of it.
 - **Native classifier JARs.** The official `gradle/binCreator.gradle` declares
   only `natives-linux-amd64` (JOGL, GlueGen, JOCL) and `linux-x86_64`
   (FFmpeg). On arm64 `resolve_runtime.py` requests `natives-linux-aarch64` and

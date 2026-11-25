@@ -3,7 +3,18 @@
 
 # Architecture port: notes for the owners of files it did not edit
 
-The arm64 port left `provider_cache.py`, `providers.json`, `assemble/`, `stages/assemble.sh`, `stages/boot.sh`, `stages/capture.sh`, `server/`, `image/`, `README.md` and `STATUS.md` untouched. This note lists what each of them needs, or does not need, for arm64. Nothing here was run on an arm64 machine yet.
+The arm64 port left `provider_cache.py`, `providers.json`, `assemble/`, `stages/assemble.sh`, `stages/boot.sh`, `stages/capture.sh`, `server/`, `image/`, `README.md` and `STATUS.md` untouched. This note lists what each of them needs, or does not need, for arm64. The section below records what has run on arm64 since; the rest of the note was written before that and is marked where a run has answered it.
+
+## Results on GitHub-hosted runners (2026-11-25)
+
+Runs 45702964185 and 45714468510 of `.github/workflows/takx-desktop-prototype.yaml`, on `ubuntu-24.04-arm` (arm64) and `ubuntu-24.04` (amd64). Nothing below is a validation: Kernel 8.30.5 + project patches and CommonCommo 1.17.2 patched, built from the override tree, unqualified. No arm64 GUI was started.
+
+- **arm64 providers.** All 24 passed on the first attempt with the 16 override patches as written: each recipe exited 0, its own tests and receipt checks passed, and the output was pushed to `takx-desktop-proto-ci/cache`. The second run restored all 24. Every ELF object in the 17 native provider directories is `aarch64` (`status/ci-<group>.json`, field `elf`).
+- **arm64 Kernel and client.** `kernel.sh all` and `client.sh all` passed in both runs: 815 native translation units, the ELF audit, the nine Kernel controls in the runtime image, and the TAKX 5.7 compile with zero compiler errors. Both runs wrote the same Kernel JAR (`kernel-8.30.5-linux-arm64-public-cpu.jar`, SHA-256 `8ee97f9a...fa7c4`) and the same client lock, now tracked as `client/inputs.lock.arm64.json`.
+- **arm64 assembly.** Fails as predicted below: `assemble: missing input .../P/kernel-composed/package/kernel-8.30.5-linux-amd64-public-cpu.jar`. The workflow keeps that step visible but does not fail the arm64 leg on it.
+- **amd64 images and cache.** `GITHUB_TOKEN` cannot use the hand-built images or the hand-pushed cache: the pull of the reference toolchain digest answered `manifest unknown`, and `provider_cache.py` classified the registry's answer for `takx-desktop-proto-cache` as unauthorized. amd64 therefore built its own images and all 24 providers once under `takx-desktop-proto-ci`, and restored them in the second run.
+- **amd64 Kernel and client, open.** In the second run the amd64 Kernel controls that load the native engine failed (`stock-basic`, `stock-database`, `stock-logger`, `composed`, both `coexist-*`; exit 1 after about two seconds, no marker printed), while the same controls passed on arm64 and pass in the development sandbox. The cause is not known yet; the workflow now uploads each control's log and records the processor of every job. The client compiled and packaged, but its lock differs from the tracked `client/inputs.lock.json` in four locally built JARs, because the providers were rebuilt in CI images instead of restored from the hand-pushed cache.
+- **Inputs.** In the first run every job repeated the whole fetch and Maven Central answered the last amd64 job with HTTP 429. The inputs are now fetched once per architecture by the `inputs` job, stored as `takx-desktop-proto-ci/inputs:<arch>-<key>` (`ci/inputs.sh`) and restored by every other job.
 
 ## Provider cache (`provider_cache.py`, `providers.json`)
 

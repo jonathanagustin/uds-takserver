@@ -7,8 +7,10 @@
 #
 # It starts only when takx/desktop-prototype/ci/trigger changes on the listed
 # branch, so ordinary pushes of the prototype do not spend runner hours. The
-# trigger file is plain text: '#' comments and an optional line
-# 'arches=arm64,amd64' (default: both). ci/pipeline.py documents it.
+# trigger file is plain text: '#' comments and the optional lines
+# 'arches=arm64,amd64' (default: both) and 'providers=cached' (skip the
+# provider waves and build the Kernel and client from the provider cache;
+# default: build). ci/pipeline.py documents it.
 #
 # Jobs follow the dependency waves of takx/desktop-prototype/ci/groups.json.
 # The public inputs are fetched once per architecture (job "inputs") and stored
@@ -65,6 +67,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       arches: ${{ steps.plan.outputs.arches }}
+      providers: ${{ steps.plan.outputs.providers }}
     steps:
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -224,7 +227,7 @@ jobs:
   # the cache stops as "blocked" before it builds anything.
   providers-a:
     needs: [plan, toolchain, inputs]
-    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.providers != 'cached' }}
     name: ${{ matrix.group }} (${{ matrix.arch }})
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 120
@@ -294,7 +297,7 @@ jobs:
 
   providers-b:
     needs: [plan, toolchain, inputs, providers-a]
-    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.providers != 'cached' }}
     name: ${{ matrix.group }} (${{ matrix.arch }})
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 240
@@ -310,7 +313,7 @@ jobs:
 
   providers-c:
     needs: [plan, toolchain, inputs, providers-b]
-    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.providers != 'cached' }}
     name: ${{ matrix.group }} (${{ matrix.arch }})
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 90
@@ -409,6 +412,11 @@ jobs:
             fi
           done
           sudo cp "${TAKX_PROTO_ROOT}"/overrides/*/tree/.takx-arch-tree.json "${TAKX_PROTO_ROOT}/ci-receipts/" 2>/dev/null || true
+          # The output of each Kernel control and any JVM crash report.
+          sudo mkdir -p "${TAKX_PROTO_ROOT}/ci-receipts/kernel-controls"
+          sudo find "${TAKX_PROTO_ROOT}/P/kernel-composed/controls" "${TAKX_PROTO_ROOT}/P/kernel-composed" -maxdepth 2 \
+            -type f \( -name '*.log' -o -name 'hs_err*' \) -size -8M \
+            -exec cp -t "${TAKX_PROTO_ROOT}/ci-receipts/kernel-controls" {} + 2>/dev/null || true
           sudo chmod -R a+rX "${TAKX_PROTO_ROOT}/logs" "${TAKX_PROTO_ROOT}/status" "${TAKX_PROTO_ROOT}/ci-receipts" || true
 
       - name: Retain logs, status files and receipts
