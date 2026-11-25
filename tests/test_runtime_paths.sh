@@ -137,6 +137,8 @@ check_match ".github/workflows/mdbtools-cache.yaml" ignore
 check_decide false ".github/workflows/mdbtools-cache.yaml"
 check_match ".github/workflows/takx-native-caches.yaml" ignore
 check_decide false ".github/workflows/takx-native-caches.yaml"
+check_match ".github/workflows/takx-desktop-prototype.yaml" ignore
+check_decide false ".github/workflows/takx-desktop-prototype.yaml"
 check_match ".github/workflows/native-cache-extra.yaml" relevant
 check_decide true $'.github/workflows/native-cache.yaml\ncharts/takserver/values.yaml'
 # Mutation tooling is isolated from the Pepr package used by cluster jobs.
