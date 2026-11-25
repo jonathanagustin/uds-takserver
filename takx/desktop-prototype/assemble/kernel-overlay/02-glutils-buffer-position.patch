@@ -1,0 +1,38 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype Kernel Java overlay: the upstream desktop GLUtils hands the
+# pixel buffer to OpenGL at the position Bitmap.copyPixelsToBuffer left it.
+# The Bitmap of this Kernel build (takx/compat) advances the position as
+# Android does, so every upload failed with zero remaining bytes. rewind() is
+# correct for both behaviours.
+--- a/takkernel/engine/src/jre/java/com/atakmap/opengl/GLUtils.java
++++ b/takkernel/engine/src/jre/java/com/atakmap/opengl/GLUtils.java
+@@ -26,12 +26,14 @@
+                     type = GLES30.GL_UNSIGNED_SHORT_5_6_5;
+                     data = Unsafe.allocateDirect(bitmap.getWidth() * bitmap.getHeight() * 2, ByteBuffer.class);
+                     bitmap.copyPixelsToBuffer(data);
++                    data.rewind(); // the desktop Bitmap advances the position, as Android does
+                     break;
+                 case ARGB_8888:
+                     format = GLES30.GL_RGBA;
+                     type = GLES30.GL_UNSIGNED_BYTE;
+                     data = Unsafe.allocateDirect(bitmap.getWidth() * bitmap.getHeight() * 4, ByteBuffer.class);
+                     bitmap.copyPixelsToBuffer(data);
++                    data.rewind(); // the desktop Bitmap advances the position, as Android does
+                     break;
+                 default:
+                     Log.w("GLUtils", "texSubImage2D Bitmap.Config " + bitmap.getConfig() + " not supported.");
+@@ -52,10 +54,12 @@
+                 case RGB_565:
+                     data = Unsafe.allocateDirect(bitmap.getWidth() * bitmap.getHeight() * 2, ByteBuffer.class);
+                     bitmap.copyPixelsToBuffer(data);
++                    data.rewind(); // the desktop Bitmap advances the position, as Android does
+                     break;
+                 case ARGB_8888:
+                     data = Unsafe.allocateDirect(bitmap.getWidth() * bitmap.getHeight() * 4, ByteBuffer.class);
+                     bitmap.copyPixelsToBuffer(data);
++                    data.rewind(); // the desktop Bitmap advances the position, as Android does
+                     break;
+                 default:
+                     Log.w("GLUtil", "texSubImage2D Bitmap.Config " + bitmap.getConfig() + " not supported.");

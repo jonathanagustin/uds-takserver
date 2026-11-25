@@ -45,6 +45,8 @@
 #                         recipe has that flag; 0 runs strictly offline
 #   TAKX_LANE3_GIS_BUILD  gis-java build directory (holds build-state.json);
 #                         default: found from status/gis-java.json outputs
+#   TAKX_PROTO_CACHE      provider cache registry prefix; 'off' neither restores
+#                         nor pushes (also implied by TAKX_LANE3_FETCH=0)
 #
 # A provider whose status file already says "ok" and whose complete.json exists
 # is skipped. Recipes run with one build job.
@@ -61,6 +63,8 @@ atak="$repo/upstream/atak-civ"
 wait_s="${TAKX_LANE3_WAIT_S:-14400}"
 fetch=()
 if [[ "${TAKX_LANE3_FETCH:-1}" == 1 ]]; then fetch=(--fetch-dependencies); fi
+# providers.json describes the default invocation; any other one is not cached.
+[[ "${TAKX_LANE3_FETCH:-1}" == 1 ]] || TAKX_PROTO_CACHE=off
 
 mkdir -p "$root"/{P,failed,logs,status,cache-lane3}
 
@@ -146,6 +150,26 @@ wait_for_status() { # stage dependency seconds: like wait_for, status file only
   return 1
 }
 
+# Input-keyed provider cache (provider_cache.py, providers.json). A provider
+# first asks the cache for a verified copy of its output and is built only when
+# there is none; a fresh ok output is offered to the cache. Neither can fail a
+# provider, and TAKX_PROTO_CACHE=off skips both.
+cache="$repo/takx/desktop-prototype/provider_cache.py"
+
+cache_restored() { # provider marker: 0 when the cache installed a verified P/<provider>
+  [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 1
+  python3 -I "$cache" restore "$1" >>"$root/logs/provider-cache.log" 2>&1 || return 1
+  if [[ "$(status_of "$1")" == ok && -s "$root/P/$1/$2" ]]; then return 0; fi
+  set_aside "$1"; return 1
+}
+
+cache_push() { # provider: best effort
+  [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 0
+  python3 -I "$cache" push "$1" >>"$root/logs/provider-cache.log" 2>&1 \
+    || log "$1 was not pushed to the provider cache; see logs/provider-cache.log"
+  return 0
+}
+
 # provider <name> <recipe dir> <proof env assignments or ''> <outputs csv> -- recipe args...
 # Runs takx/<recipe>/build.py --output P/<name> ..., then the recipe's
 # test_build.py (with the proof variables set, which replays its real controls).
@@ -157,6 +181,9 @@ provider() {
     log "$name already ok, skipping"; return 0
   fi
   set_aside "$name"
+  if cache_restored "$name" complete.json; then
+    log "$name restored from the provider cache, build skipped"; return 0
+  fi
   docker rm -f "takx-$name" >/dev/null 2>&1 || true
   start=$(date +%s)
   printf '\n===== %s lane3 %s: build.py %s\n' "$(date -u +%FT%TZ)" "$name" "$*" >>"$logf"
@@ -192,6 +219,7 @@ provider() {
     "takx/$recipe/build.py exit 0; its tests (test*.py) passed ($(tail -n 3 "$vlog" | tr '\n' ' ' | sed 's/  */ /g')); complete.json sha256 $sha${extra_note:+; $extra_note}" \
     "${outputs[@]}"
   log "$name: ok in ${seconds}s"
+  cache_push "$name"
 }
 
 
@@ -273,6 +301,8 @@ stage_gdal_jni() {
   local gis
   gis="$(gis_build_dir)" || { write_status gdal-jni failed 0 "blocked: gis-java build directory not found"; return 1; }
   log "gdal-jni: gis-java build directory is $gis"
+  # The cache key describes --gis-build P/gis-java only.
+  [[ "$gis" == "$root/P/gis-java" ]] || local TAKX_PROTO_CACHE=off
   local extra_note="default (non-KML) profile; GDAL_JNI_PROOF replay reran the real -Xcheck:jni Java controls; gis-build $gis"
   provider gdal-jni native-gdal-jni "GDAL_JNI_PROOF=$root/P/gdal-jni" \
     complete.json,lib/libgdal.so,lib/libgdalalljni.so -- \

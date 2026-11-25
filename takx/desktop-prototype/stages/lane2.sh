@@ -37,6 +37,9 @@
 #                                entry missing from the cache is fetched from the
 #                                exact locked URL and checked against the lock;
 #                                0 runs strictly offline
+#   TAKX_PROTO_CACHE             provider cache registry prefix; 'off' neither
+#                                restores nor pushes (also implied by
+#                                TAKX_LANE2_FETCH=0)
 #
 # A provider whose status file already says "ok" and whose complete.json exists
 # is skipped. Recipes run with one build job (they hard-code -j1).
@@ -53,6 +56,8 @@ atak="$repo/upstream/atak-civ"
 sqlcipher_wait="${TAKX_LANE2_SQLCIPHER_WAIT_S:-14400}"
 fetch=()
 if [[ "${TAKX_LANE2_FETCH:-1}" == 1 ]]; then fetch=(--fetch-dependencies); fi
+# providers.json describes the default invocation; any other one is not cached.
+[[ "${TAKX_LANE2_FETCH:-1}" == 1 ]] || TAKX_PROTO_CACHE=off
 
 mkdir -p "$root"/{P,failed,logs,status,cache-lane2}
 
@@ -124,6 +129,26 @@ wait_for() { # stage dependency seconds
   return 1
 }
 
+# Input-keyed provider cache (provider_cache.py, providers.json). A provider
+# first asks the cache for a verified copy of its output and is built only when
+# there is none; a fresh ok output is offered to the cache. Neither can fail a
+# provider, and TAKX_PROTO_CACHE=off skips both.
+cache="$repo/takx/desktop-prototype/provider_cache.py"
+
+cache_restored() { # provider marker: 0 when the cache installed a verified P/<provider>
+  [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 1
+  python3 -I "$cache" restore "$1" >>"$root/logs/provider-cache.log" 2>&1 || return 1
+  if [[ "$(status_of "$1")" == ok && -s "$root/P/$1/$2" ]]; then return 0; fi
+  set_aside "$1"; return 1
+}
+
+cache_push() { # provider: best effort
+  [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 0
+  python3 -I "$cache" push "$1" >>"$root/logs/provider-cache.log" 2>&1 \
+    || log "$1 was not pushed to the provider cache; see logs/provider-cache.log"
+  return 0
+}
+
 # provider <name> <recipe dir> <proof env assignments or ''> <outputs csv> -- recipe args...
 # Runs takx/<recipe>/build.py --output P/<name> ..., then the recipe's
 # test_build.py (with the proof variables set, which replays its real controls).
@@ -135,6 +160,9 @@ provider() {
     log "$name already ok, skipping"; return 0
   fi
   set_aside "$name"
+  if cache_restored "$name" complete.json; then
+    log "$name restored from the provider cache, build skipped"; return 0
+  fi
   docker rm -f "takx-$name" >/dev/null 2>&1 || true
   start=$(date +%s)
   printf '\n===== %s lane2 %s: build.py %s\n' "$(date -u +%FT%TZ)" "$name" "$*" >>"$logf"
@@ -170,6 +198,7 @@ provider() {
     "takx/$recipe/build.py exit 0; its test_build.py passed ($(tail -n 3 "$vlog" | tr '\n' ' ' | sed 's/  */ /g')); complete.json sha256 $sha${extra_note:+; $extra_note}" \
     "${outputs[@]}"
   log "$name: ok in ${seconds}s"
+  cache_push "$name"
 }
 
 stage_proj() {

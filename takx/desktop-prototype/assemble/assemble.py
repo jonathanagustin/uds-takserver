@@ -218,7 +218,7 @@ def main():
     started = time.time()
     if os.path.exists(out):
         raise SystemExit('assemble: output %s exists' % out)
-    for stage in ('takx57', 'takx57-runtime-jars', 'kernel-composed', 'commoncommo',
+    for stage in ('takx57', 'takx57-runtime-jars', 'kernel-composed', 'kernel-overlay', 'compat-system-clock', 'commoncommo',
                   'worldwind-interop', 'ui-original', 'ui-wizard-reference'):
         status_ok(root, stage)
 
@@ -254,6 +254,7 @@ def main():
     with open(os.path.join(runtime, 'manifest.json')) as stream:
         closure = json.load(stream)
     members = {LOG4J: [], SLF4J: [], ASPECTJ: [], CDI: [], COMMO: [], KERNEL: [], LIBS: []}
+    first = {}  # resource roots that must precede the sorted members of a module
     left_out = []
     runtime_artifacts = {}
     for entry in closure['jars']:
@@ -301,6 +302,19 @@ def main():
     assembly.put(kernel_jar, os.path.join(module_dir(KERNEL), os.path.basename(kernel_jar)),
                  '%s (takx/desktop-prototype kernel stage; not the private 8.57.11)' % KERNEL_LABEL)
     members[KERNEL].append(os.path.basename(kernel_jar))
+    # The overlay JAR (kernel_overlay.py) holds Kernel classes rebuilt with the
+    # recorded prototype patches; it precedes the Kernel JAR in the module.
+    overlay_dir = need(os.path.join(root, 'P', 'kernel-overlay'))
+    with open(os.path.join(overlay_dir, 'receipt.json')) as stream:
+        overlay = json.load(stream)
+    if overlay['kernel_classes_jar']['sha256'] != sha256(overlay['kernel_classes_jar']['path']) or \
+            sha256(overlay['jar']['path']) != overlay['jar']['sha256']:
+        raise SystemExit('assemble: the Kernel overlay does not match its receipt or the current Kernel classes')
+    overlay_name = os.path.basename(overlay['jar']['path'])
+    assembly.put(overlay['jar']['path'], os.path.join(module_dir(KERNEL), overlay_name),
+                 'desktop-prototype Kernel Java overlay: %d Kernel classes rebuilt with %s'
+                 % (len(overlay['classes']), ', '.join(item['patch'] for item in overlay['patches'])))
+    first[KERNEL] = [overlay_name]
     superseded = []
     for name in sorted(os.listdir(os.path.join(kernel, 'third-party'))):
         artifact = artifact_of(name)
@@ -353,6 +367,12 @@ def main():
                  os.path.join('native', 'linux64', 'libcommoncommojni.so'),
                  '%s JNI library (takx/native-commoncommo)' % COMMO_LABEL, mode=0o755)
 
+    # --- desktop SystemClock JNI library of the Kernel build's android.os.SystemClock
+    clock = need(os.path.join(root, 'P', 'compat-system-clock', 'libuds_desktop_clock.so'))
+    assembly.put(clock, os.path.join('native', 'linux64', 'libuds_desktop_clock.so'),
+                 'takx/compat/build-system-clock.py (project JNI source for android.os.SystemClock of the Kernel build)',
+                 mode=0o755)
+
     # --- modules
     comments = {
         LOG4J: 'Prototype descriptor; official name from bin-creator log4j.xml.',
@@ -367,7 +387,8 @@ def main():
         if not members[module]:
             raise SystemExit('assemble: module %s has no JAR' % module)
         assembly.write(os.path.join(module_dir(module), 'module.xml'),
-                       module_xml(module, sorted(members[module]), MODULE_DEPENDENCIES[module], comments[module]),
+                       module_xml(module, first.get(module, []) + sorted(members[module]),
+                                  MODULE_DEPENDENCIES[module], comments[module]),
                        'hand-written JBoss Modules descriptor')
     assembly.write(os.path.join(module_dir(ALL_LIBS), 'module.xml'),
                    module_xml(ALL_LIBS, [], [(module, dict({'export': 'true', 'services': 'export'},
@@ -423,7 +444,10 @@ def main():
             'border_shapefiles': 'absent',
             'postgresql': 'absent; the default database is hsqldb',
         },
-        'modules': {name: sorted(jars) for name, jars in members.items()},
+        'modules': {name: first.get(name, []) + sorted(jars) for name, jars in members.items()},
+        'kernel_java_overlay': {'patches': overlay['patches'], 'classes': sorted(overlay['classes']),
+                                'jar_sha256': overlay['jar']['sha256'],
+                                'kernel_controls_rerun_with_overlay': False},
         'module_graph_note': 'hand-written; coarser than the official generated one-module-per-artifact graph',
         'left_out': left_out,
         'kernel_dependencies_superseded_by_runtime_closure': superseded,

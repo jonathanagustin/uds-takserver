@@ -20,6 +20,7 @@
 # Environment:
 #   TAKX_PROTO_ROOT       work root, default /var/lib/takx-proto
 #   TAKX_PREREQ_TIMEOUT   seconds to wait for another lane's status file, default 14400
+#   TAKX_PROTO_CACHE      provider cache registry prefix; 'off' neither restores nor pushes
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -79,6 +80,26 @@ set_aside() { # name: move an incomplete earlier output out of the way
 
 already_ok() { # name marker
   [[ -f "$P/$1/$2" && "$(status_of "$1")" == ok ]]
+}
+
+# Input-keyed provider cache (../provider_cache.py, ../providers.json). A step
+# first asks the cache for a verified copy of its output and builds only when
+# there is none; a fresh ok output is offered to the cache. Neither can fail a
+# step, and TAKX_PROTO_CACHE=off skips both.
+cache="$here/../provider_cache.py"
+
+cache_restored() { # name marker: 0 when the cache installed a verified P/<name>
+  [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 1
+  python3 -I "$cache" restore "$1" >>"$ROOT/logs/provider-cache.log" 2>&1 || return 1
+  already_ok "$1" "$2" && return 0
+  set_aside "$1"; return 1
+}
+
+cache_push() { # name: best effort
+  [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 0
+  python3 -I "$cache" push "$1" >>"$ROOT/logs/provider-cache.log" 2>&1 \
+    || echo "lane1: $1 was not pushed to the provider cache; see $ROOT/logs/provider-cache.log" >&2
+  return 0
 }
 
 recipe() { # name -- command...; runs in the toolchain image, log in logs/<name>.log
@@ -164,42 +185,52 @@ finish() { # name rc started notes-when-ok outputs...
 
 do_sqlcipher() {
   already_ok sqlcipher complete.json && { echo "lane1: sqlcipher already ok"; return 0; }
-  set_aside sqlcipher; local t=$SECONDS
+  set_aside sqlcipher
+  cache_restored sqlcipher complete.json && { echo "lane1: sqlcipher restored from the provider cache"; return 0; }
+  local t=$SECONDS
   recipe sqlcipher -- /usr/bin/python3 -B "$repo/takx/native-sqlcipher/build.py" \
     --cache "$ROOT/cache" --output "$P/sqlcipher" --jobs 1
   finish sqlcipher $? $t "native-sqlcipher/build.py --jobs 1 (Tcl 8.6.18, OpenSSL 3.5.9, SQLCipher 4.5.7)." \
-    "$P/sqlcipher"
+    "$P/sqlcipher" && cache_push sqlcipher
 }
 
 do_cesium_acq() {
   already_ok cesium-acq acquired.json && { echo "lane1: cesium-acq already ok"; return 0; }
   [[ "$(status_of sqlcipher)" == ok ]] || { status cesium-acq blocked 0 "sqlcipher is not ok"; return 1; }
   wait_for draco || { status cesium-acq blocked 0 "prerequisite draco (lane 3) is not ok"; return 1; }
-  set_aside cesium-acq; local t=$SECONDS
+  set_aside cesium-acq
+  cache_restored cesium-acq acquired.json && { echo "lane1: cesium-acq restored from the provider cache"; return 0; }
+  local t=$SECONDS
   # The cache holds the 25 pinned archives placed by fetch.sh; acquire.py checks
   # each against its SHA-512 pin (Cesium against its Git blob tree) and would
   # only download an archive that is absent.
   recipe cesium-acq -- /usr/bin/python3 -B "$repo/takx/native-cesium/acquire.py" \
     --output "$P/cesium-acq" --cache "$ROOT/cache-cesium" \
     --sqlcipher-proof "$P/sqlcipher" --draco-proof "$P/draco"
-  finish cesium-acq $? $t "native-cesium/acquire.py over the pre-verified cache-cesium (offline)." "$P/cesium-acq"
+  finish cesium-acq $? $t "native-cesium/acquire.py over the pre-verified cache-cesium (offline)." "$P/cesium-acq" \
+    && cache_push cesium-acq
 }
 
 do_cesium() {
   already_ok cesium complete.json && { echo "lane1: cesium already ok"; return 0; }
   [[ "$(status_of cesium-acq)" == ok ]] || { status cesium blocked 0 "cesium-acq is not ok"; return 1; }
-  set_aside cesium; local t=$SECONDS
+  set_aside cesium
+  cache_restored cesium complete.json && { echo "lane1: cesium restored from the provider cache"; return 0; }
+  local t=$SECONDS
   recipe cesium -- /usr/bin/python3 -B "$repo/takx/native-cesium/build.py" \
     --sources "$P/cesium-acq" --output "$P/cesium" \
     --sqlcipher-proof "$P/sqlcipher" --draco-proof "$P/draco"
-  finish cesium $? $t "native-cesium/build.py, fresh single pass, no --resume." "$P/cesium" "$P/cesium-acq"
+  finish cesium $? $t "native-cesium/build.py, fresh single pass, no --resume." "$P/cesium" "$P/cesium-acq" \
+    && cache_push cesium
 }
 
 do_kml() {
   already_ok kml complete.json && { echo "lane1: kml already ok"; return 0; }
   [[ "$(status_of cesium)" == ok ]] || { status kml blocked 0 "cesium is not ok"; return 1; }
   wait_for las assimp scene || { status kml blocked 0 "prerequisite las/assimp/scene (other lanes) is not ok"; return 1; }
-  set_aside kml; local t=$SECONDS
+  set_aside kml
+  cache_restored kml complete.json && { echo "lane1: kml restored from the provider cache"; return 0; }
+  local t=$SECONDS
   recipe kml -- /usr/bin/python3 -B "$repo/takx/native-kml/build.py" \
     --output "$P/kml" \
     --libkml-archive "$ROOT/src/atak-civ-lfs/takthirdparty/distfiles/libkml.tar.gz" \
@@ -207,7 +238,8 @@ do_kml() {
     --las-proof "$P/las" --assimp-proof "$P/assimp" \
     --minizip-root "$P/scene" --minizip-proof "$P/scene" \
     --cesium-proof "$P/cesium"
-  finish kml $? $t "native-kml/build.py with a fresh Cesium producer (no stopped snapshot)." "$P/kml"
+  finish kml $? $t "native-kml/build.py with a fresh Cesium producer (no stopped snapshot)." "$P/kml" \
+    && cache_push kml
 }
 
 (($#)) || set -- all

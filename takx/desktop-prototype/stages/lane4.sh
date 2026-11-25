@@ -53,6 +53,8 @@
 #   TAKX_PROTO_ROOT   work root
 #   TAKX_LANE4_FETCH  1 (default) passes --fetch-dependencies to kernel-java and
 #                     lets gis-java download a missing archive; 0 is offline
+#   TAKX_PROTO_CACHE  provider cache registry prefix; 'off' neither restores
+#                     nor pushes (also implied by TAKX_LANE4_FETCH=0)
 #
 # A stage whose status file says "ok" and whose marker output exists is skipped.
 set -euo pipefail
@@ -64,6 +66,8 @@ run="$repo/takx/desktop-prototype/run-in-toolchain.sh"
 jdk=/tools/temurin-17.0.21_9/jdk-17.0.21+9
 atak="$repo/upstream/atak-civ"
 fetch="${TAKX_LANE4_FETCH:-1}"
+# providers.json describes the default invocation; any other one is not cached.
+[[ "$fetch" == 1 ]] || TAKX_PROTO_CACHE=off
 
 mkdir -p "$root"/{P,failed,logs,status,cache-lane4}
 
@@ -107,6 +111,26 @@ need() { # stage dependency marker-relative-to-P/dependency
   fi
 }
 
+# Input-keyed provider cache (provider_cache.py, providers.json). A stage
+# first asks the cache for a verified copy of its output and is built only when
+# there is none; a fresh ok output is offered to the cache. Neither can fail a
+# stage, and TAKX_PROTO_CACHE=off skips both.
+cache="$repo/takx/desktop-prototype/provider_cache.py"
+
+cache_restored() { # stage marker: 0 when the cache installed a verified P/<stage>
+  [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 1
+  python3 -I "$cache" restore "$1" >>"$root/logs/provider-cache.log" 2>&1 || return 1
+  if [[ "$(status_of "$1")" == ok && -s "$root/P/$1/$2" ]]; then return 0; fi
+  set_aside "$1"; return 1
+}
+
+cache_push() { # stage: best effort
+  [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 0
+  python3 -I "$cache" push "$1" >>"$root/logs/provider-cache.log" 2>&1 \
+    || log "$1 was not pushed to the provider cache; see logs/provider-cache.log"
+  return 0
+}
+
 # stage <name> <recipe dir> <marker> <verify env or ''> <outputs csv> -- docker-env... -- command...
 # Runs the command detached in the toolchain image, then the recipe's own
 # test*.py. The stage is ok only if the command exits 0, the marker and every
@@ -121,6 +145,9 @@ stage() {
     log "$name already ok, skipping"; return 0
   fi
   set_aside "$name"
+  if cache_restored "$name" "$marker"; then
+    log "$name restored from the provider cache, build skipped"; return 0
+  fi
   docker rm -f "takx-$name" >/dev/null 2>&1 || true
   start=$(date +%s)
   printf '\n===== %s lane4 %s: %s\n' "$(date -u +%FT%TZ)" "$name" "$*" >>"$logf"
@@ -155,6 +182,7 @@ stage() {
     "takx/$recipe exit 0; its tests (test*.py) passed ($(tail -n 3 "$vlog" | tr '\n' ' ' | sed 's/  */ /g')); $marker sha256 $(sha256sum "$out/$marker" | cut -d' ' -f1); compile-only, no native library loaded${extra_note:+; $extra_note}" \
     "${outputs[@]}"
   log "$name: ok in ${seconds}s"
+  cache_push "$name"
 }
 
 javapath="PATH=$jdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

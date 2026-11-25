@@ -1,0 +1,32 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype Kernel Java overlay: the context binding of the project
+# render-context patch returns the client-owned surface object, which TAKX 5.7
+# requires. Applied by assemble/kernel_overlay.py to a copy of the composed
+# Kernel Java sources; the Kernel JAR itself is not changed.
+--- a/takkernel/engine/src/main/java/com/atakmap/map/opengl/RenderContextBinding.java
++++ b/takkernel/engine/src/main/java/com/atakmap/map/opengl/RenderContextBinding.java
+@@ -192,7 +192,21 @@
+     @Override public boolean attach() { return delegate().attach(); }
+     @Override public boolean detach() { return delegate().detach(); }
+     @Override public boolean isMainContext() { return true; }
+-    @Override public RenderSurface getRenderSurface() { return surface; }
++    // TAKX 5.7 downcasts the surface of a renderer's context to its own
++    // component types (ApplicationGlobe.makeWwd, AnimationFactory, the
++    // WorldWind bridge layers) and compares it by identity, so the surface
++    // object the client supplied is returned whenever it implements the
++    // legacy interface. This holds while the client keeps one surface object
++    // per renderer across context replacement, as TAKX does; size listeners
++    // are then registered on the client surface directly. Other delegates
++    // keep the forwarding surface.
++    @Override public synchronized RenderSurface getRenderSurface() {
++        if (delegate != null) {
++            gov.tak.api.engine.map.RenderSurface actual = delegate.getRenderSurface();
++            if (actual instanceof RenderSurface) return (RenderSurface)actual;
++        }
++        return surface;
++    }
+ 
+     private final class Surface implements RenderSurface, RenderSurface2 {
+         private final Map<OnSizeChangedListener, OnSizeChangedListener> listeners = new IdentityHashMap<>();

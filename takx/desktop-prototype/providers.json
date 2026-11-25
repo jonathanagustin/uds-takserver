@@ -1,0 +1,322 @@
+{
+ "copyright": "# Copyright 2026 uds-takserver authors",
+ "license": "# SPDX-License-Identifier: GPL-3.0-only",
+ "description": [
+  "Manifest of the provider cache of the desktop prototype (provider_cache.py).",
+  "One entry per provider/stage that stages/lane1.sh..lane4.sh build. Paths under",
+  "'recipes', 'recipe', 'uses' and 'locks' are relative to the repository root;",
+  "'marker' is relative to P/<provider>; 'fetched' selects records of",
+  "status/fetch.json. 'invocation' is the argv/env template the lane runs in the",
+  "toolchain image: {root} is the work root, {repo} the repository, {timestamp} a",
+  "run-time value that is never rendered, and the other names come from",
+  "'variables'. Changing anything a provider's key is derived from gives it, and",
+  "every provider downstream of it, a new key."
+ ],
+ "schema": 1,
+ "variables": {
+  "jdk": "/tools/temurin-17.0.21_9/jdk-17.0.21+9",
+  "cmake": "/workspace/takx-native-tools/venv/bin/cmake",
+  "ninja": "/workspace/takx-native-tools/venv/bin/ninja",
+  "javapath": "PATH=/tools/temurin-17.0.21_9/jdk-17.0.21+9/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ },
+ "recipe_exclude": ["__pycache__", "*.pyc", "README*", "test_*"],
+ "recipes": {
+  "takx/native-deps": {"uses": []},
+  "takx/native-las": {"uses": ["takx/native-deps"]},
+  "takx/native-sqlcipher": {"uses": ["takx/native-deps", "takx/native-las"]},
+  "takx/native-cesium": {"uses": ["takx/native-deps", "takx/native-sqlcipher"]},
+  "takx/native-proj": {"uses": ["takx/native-deps", "takx/native-las"]},
+  "takx/native-geos": {"uses": ["takx/native-deps", "takx/native-las"]},
+  "takx/native-assimp": {"uses": ["takx/native-deps", "takx/native-las"]},
+  "takx/native-mdbtools": {"uses": ["takx/native-deps", "takx/native-las"]},
+  "takx/native-gles": {"uses": ["takx/native-deps", "takx/native-las"]},
+  "takx/native-crypto": {"uses": ["takx/native-deps", "takx/native-las", "takx/native-sqlcipher"]},
+  "takx/kernel-spatial-db": {"uses": ["takx/native-deps", "takx/native-las", "takx/native-geos",
+   "takx/native-proj", "takx/native-sqlcipher", "takx/native-assimp"]},
+  "takx/native-commoncommo": {"uses": ["takx/native-deps", "takx/native-las", "takx/kernel-spatial-db",
+   "takx/native-crypto", "takx/source_inputs.py", "takx/test-tls.py", "takx/sources.lock.json",
+   "takx/CommonCommoSmoke.java", "takx/CommonCommoSignalSmoke.java", "takx/CommonCommoRoutingSmoke.java",
+   "takx/CommonCommoTlsSmoke.java", "takx/patches/010*.patch", "takx/dependency-patches/curl*.patch"]},
+  "takx/kernel-scene": {"uses": ["takx/native-deps", "takx/native-assimp", "takx/native-las",
+   "takx/native-proj"]},
+  "takx/native-kml": {"uses": ["takx/native-deps", "takx/kernel-scene", "takx/native-las"]},
+  "takx/native-curl": {"uses": ["takx/native-deps", "takx/native-sqlcipher", "takx/kernel-scene",
+   "takx/native-las", "takx/native-assimp"]},
+  "takx/gis-java": {"uses": ["takx/native-gdal-jni/kml_profile.py"]},
+  "takx/kernel-java": {"uses": ["takx/gis-java",
+   "takx/patches/0001-kernel-remove-unused-colorfilter-import.patch", "takx/compat/src/main/java"]},
+  "takx/native-gdal-jni": {"uses": ["takx/jni_diagnostics.py", "takx/kernel-scene", "takx/kernel-java",
+   "takx/gis-java", "takx/native-deps", "takx/native-las", "takx/native-assimp", "takx/native-proj"]},
+  "takx/worldwind-java": {"uses": ["takx/kernel-java", "takx/gis-java", "LICENSE"]},
+  "takx/worldwind-consumers": {"uses": []},
+  "takx/ui-java": {"uses": []}
+ },
+ "providers": {
+  "sqlcipher": {
+   "lane": "lane1.sh", "recipe": "takx/native-sqlcipher", "prerequisites": [],
+   "locks": ["takx/native-sqlcipher/inputs.lock.json"],
+   "fetched": [{"consumer": "native-sqlcipher"}],
+   "marker": "complete.json",
+   "invocation": {"env": ["PYTHONDONTWRITEBYTECODE=1"], "argv": [
+    "/usr/bin/python3", "-B", "{repo}/takx/native-sqlcipher/build.py",
+    "--cache", "{root}/cache", "--output", "{root}/P/sqlcipher", "--jobs", "1"]}
+  },
+  "cesium-acq": {
+   "lane": "lane1.sh", "recipe": "takx/native-cesium", "prerequisites": ["sqlcipher", "draco"],
+   "locks": ["takx/native-cesium/inputs.lock.json", "takx/native-cesium/metadata.lock.json",
+    "takx/native-cesium/cesium-tree.json"],
+   "fetched": [{"kind": "cesium-source"}],
+   "marker": "acquired.json",
+   "invocation": {"env": ["PYTHONDONTWRITEBYTECODE=1"], "argv": [
+    "/usr/bin/python3", "-B", "{repo}/takx/native-cesium/acquire.py",
+    "--output", "{root}/P/cesium-acq", "--cache", "{root}/cache-cesium",
+    "--sqlcipher-proof", "{root}/P/sqlcipher", "--draco-proof", "{root}/P/draco"]}
+  },
+  "cesium": {
+   "lane": "lane1.sh", "recipe": "takx/native-cesium", "prerequisites": ["cesium-acq", "sqlcipher", "draco"],
+   "locks": ["takx/native-cesium/inputs.lock.json", "takx/native-cesium/metadata.lock.json",
+    "takx/native-cesium/cesium-tree.json", "takx/native-cesium/build-plan.json"],
+   "fetched": [{"kind": "cesium-source"}],
+   "marker": "complete.json",
+   "invocation": {"env": ["PYTHONDONTWRITEBYTECODE=1"], "argv": [
+    "/usr/bin/python3", "-B", "{repo}/takx/native-cesium/build.py",
+    "--sources", "{root}/P/cesium-acq", "--output", "{root}/P/cesium",
+    "--sqlcipher-proof", "{root}/P/sqlcipher", "--draco-proof", "{root}/P/draco"]}
+  },
+  "kml": {
+   "lane": "lane1.sh", "recipe": "takx/native-kml", "prerequisites": ["cesium", "las", "assimp", "scene"],
+   "locks": ["takx/native-kml/inputs.lock.json", "takx/native-kml/source-postimages.json"],
+   "fetched": [{"consumer": "native-kml"},
+    {"path": "src/atak-civ-lfs/takthirdparty/distfiles/libkml.tar.gz"}],
+   "marker": "complete.json",
+   "invocation": {"env": ["PYTHONDONTWRITEBYTECODE=1"], "argv": [
+    "/usr/bin/python3", "-B", "{repo}/takx/native-kml/build.py", "--output", "{root}/P/kml",
+    "--libkml-archive", "{root}/src/atak-civ-lfs/takthirdparty/distfiles/libkml.tar.gz",
+    "--expat-archive", "{root}/inputs/native-kml/expat-2.10.0.tar.xz",
+    "--las-proof", "{root}/P/las", "--assimp-proof", "{root}/P/assimp",
+    "--minizip-root", "{root}/P/scene", "--minizip-proof", "{root}/P/scene",
+    "--cesium-proof", "{root}/P/cesium"]}
+  },
+  "proj": {
+   "lane": "lane2.sh", "recipe": "takx/native-proj", "prerequisites": [],
+   "locks": ["takx/native-proj/inputs.lock.json"],
+   "fetched": [{"consumer": "native-proj"}],
+   "marker": "complete.json",
+   "invocation": {"env": [], "argv": [
+    "python3", "-B", "{repo}/takx/native-proj/build.py", "--output", "{root}/P/proj",
+    "--cache", "{root}/cache-lane2/proj", "--cmake", "{cmake}", "--fetch-dependencies"]}
+  },
+  "geos": {
+   "lane": "lane2.sh", "recipe": "takx/native-geos", "prerequisites": [],
+   "locks": ["takx/native-geos/inputs.lock.json", "takx/native-geos/patch.json"],
+   "fetched": [{"consumer": "native-geos"}],
+   "marker": "complete.json",
+   "invocation": {"env": [], "argv": [
+    "python3", "-B", "{repo}/takx/native-geos/build.py", "--output", "{root}/P/geos",
+    "--cache", "{root}/cache-lane2/geos", "--fetch-dependencies"]}
+  },
+  "assimp": {
+   "lane": "lane2.sh", "recipe": "takx/native-assimp", "prerequisites": [],
+   "locks": ["takx/native-assimp/inputs.lock.json"],
+   "fetched": [{"consumer": "native-assimp"}],
+   "marker": "complete.json",
+   "invocation": {"env": [], "argv": [
+    "python3", "-B", "{repo}/takx/native-assimp/build.py", "--output", "{root}/P/assimp",
+    "--cache", "{root}/cache-lane2/assimp", "--jdk-home", "{jdk}", "--cmake", "{cmake}",
+    "--ninja", "{ninja}", "--fetch-dependencies"]}
+  },
+  "spatial": {
+   "lane": "lane2.sh", "recipe": "takx/kernel-spatial-db",
+   "prerequisites": ["proj", "geos", "assimp", "sqlcipher"],
+   "locks": ["takx/kernel-spatial-db/inputs.lock.json"],
+   "fetched": [{"consumer": "kernel-spatial-db"}],
+   "marker": "complete.json",
+   "invocation": {"env": [], "argv": [
+    "python3", "-B", "{repo}/takx/kernel-spatial-db/build.py", "--output", "{root}/P/spatial",
+    "--cache", "{root}/cache-lane2/spatial", "--source", "{repo}/upstream/atak-civ",
+    "--proj-proof", "{root}/P/proj", "--geos-proof", "{root}/P/geos",
+    "--sqlcipher-proof", "{root}/P/sqlcipher", "--zlib-proof", "{root}/P/assimp",
+    "--fetch-dependencies"]}
+  },
+  "crypto": {
+   "lane": "lane2.sh", "recipe": "takx/native-crypto", "prerequisites": ["sqlcipher"],
+   "locks": ["takx/native-crypto/inputs.lock.json"],
+   "fetched": [{"consumer": "native-crypto"}],
+   "marker": "complete.json",
+   "invocation": {"env": [], "argv": [
+    "python3", "-B", "{repo}/takx/native-crypto/build.py", "--output", "{root}/P/crypto",
+    "--cache", "{root}/cache-lane2/crypto", "--modern-proof", "{root}/P/sqlcipher",
+    "--fetch-dependencies"]}
+  },
+  "commoncommo": {
+   "lane": "lane2.sh", "recipe": "takx/native-commoncommo",
+   "prerequisites": ["assimp", "spatial", "crypto"],
+   "locks": ["takx/native-commoncommo/inputs.lock.json", "takx/native-commoncommo/producer-c992.lock.json",
+    "takx/sources.lock.json"],
+   "fetched": [{"consumer": "native-commoncommo"}, {"consumer": "commoncommo"}],
+   "marker": "complete.json",
+   "invocation": {"env": [], "argv": [
+    "python3", "-B", "{repo}/takx/native-commoncommo/build.py", "--output", "{root}/P/commoncommo",
+    "--cache", "{root}/cache-lane2/commoncommo", "--source", "{repo}/upstream/atak-civ",
+    "--spatial-proof", "{root}/P/spatial", "--zlib-proof", "{root}/P/assimp",
+    "--quictls-proof", "{root}/P/crypto",
+    "--tools-root", "{root}/cache-commoncommo-tools/root",
+    "--tool-metadata", "{root}/cache-commoncommo-tools/metadata",
+    "--java-home", "{jdk}", "--fetch-dependencies"]}
+  },
+  "draco": {
+   "lane": "lane3.sh", "recipe": "takx/native-deps", "prerequisites": [],
+   "locks": ["takx/native-deps/inputs.lock.json"],
+   "fetched": [{"consumer": "native-deps"}],
+   "marker": "complete.json",
+   "invocation": {"env": [], "argv": [
+    "python3", "-B", "{repo}/takx/native-deps/build.py", "--output", "{root}/P/draco",
+    "--source", "{repo}/upstream/atak-civ", "--cache", "{root}/cache-lane3/draco",
+    "--cmake", "{cmake}", "--ninja", "{ninja}", "--jobs", "1", "--fetch-dependencies"]}
+  },
+  "las": {
+   "lane": "lane3.sh", "recipe": "takx/native-las", "prerequisites": [],
+   "locks": ["takx/native-las/inputs.lock.json"],
+   "fetched": [{"consumer": "native-las"}],
+   "marker": "complete.json",
+   "invocation": {"env": [], "argv": [
+    "python3", "-B", "{repo}/takx/native-las/build.py", "--output", "{root}/P/las",
+    "--cache", "{root}/cache-lane3/las", "--cmake", "{cmake}", "--ninja", "{ninja}",
+    "--fetch-dependencies"]}
+  },
+  "mdb": {
+   "lane": "lane3.sh", "recipe": "takx/native-mdbtools", "prerequisites": [],
+   "locks": ["takx/native-mdbtools/inputs.lock.json", "takx/native-mdbtools/patch.json"],
+   "fetched": [{"consumer": "native-mdbtools"}],
+   "marker": "complete.json",
+   "invocation": {"env": [], "argv": [
+    "python3", "-B", "{repo}/takx/native-mdbtools/build.py", "--output", "{root}/P/mdb",
+    "--cache", "{root}/cache-lane3/mdb", "--fetch-dependencies", "--with-upstream-fixture"]}
+  },
+  "gles": {
+   "lane": "lane3.sh", "recipe": "takx/native-gles", "prerequisites": ["draco"],
+   "locks": ["takx/native-gles/inputs.lock.json"],
+   "fetched": [{"consumer": "native-gles"}],
+   "marker": "complete.json",
+   "invocation": {"env": [], "argv": [
+    "python3", "-B", "{repo}/takx/native-gles/build.py", "--output", "{root}/P/gles",
+    "--cache", "{root}/cache-lane3/gles", "--headers", "{root}/P/draco/install/include",
+    "--ninja", "{ninja}", "--fetch-dependencies"]}
+  },
+  "scene": {
+   "lane": "lane3.sh", "recipe": "takx/kernel-scene", "prerequisites": ["proj", "assimp"],
+   "locks": ["takx/kernel-scene/inputs.lock.json"],
+   "fetched": [{"path": "src/atak-civ-lfs/depends/gdal-2.4.4-mod.tar.gz"},
+    {"path": "src/atak-civ-lfs/takthirdparty/distfiles/libkml.tar.gz"}],
+   "marker": "complete.json",
+   "invocation": {"env": [], "argv": [
+    "python3", "-B", "{repo}/takx/kernel-scene/build.py", "--output", "{root}/P/scene",
+    "--source", "{repo}/upstream/atak-civ",
+    "--gdal-archive", "{root}/src/atak-civ-lfs/depends/gdal-2.4.4-mod.tar.gz",
+    "--libkml-archive", "{root}/src/atak-civ-lfs/takthirdparty/distfiles/libkml.tar.gz",
+    "--proj-proof", "{root}/P/proj", "--assimp-proof", "{root}/P/assimp"]}
+  },
+  "gdal-jni": {
+   "lane": "lane3.sh", "recipe": "takx/native-gdal-jni",
+   "prerequisites": ["scene", "proj", "assimp", "gis-java"],
+   "locks": ["takx/kernel-scene/inputs.lock.json", "takx/kernel-java/inputs.lock.json",
+    "takx/gis-java/sources.lock.json", "takx/native-deps/inputs.lock.json",
+    "takx/native-las/inputs.lock.json", "takx/native-assimp/inputs.lock.json",
+    "takx/native-proj/inputs.lock.json"],
+   "fetched": [{"path": "src/atak-civ-lfs/depends/gdal-2.4.4-mod.tar.gz"},
+    {"path": "src/atak-civ-lfs/takthirdparty/distfiles/libkml.tar.gz"}],
+   "marker": "complete.json",
+   "invocation": {"env": [], "argv": [
+    "python3", "-B", "{repo}/takx/native-gdal-jni/build.py", "--output", "{root}/P/gdal-jni",
+    "--dependency-root", "{root}/P/scene", "--dependency-proof", "{root}/P/scene",
+    "--dependency-producer", "{root}/P/scene/producer",
+    "--gdal-archive", "{root}/src/atak-civ-lfs/depends/gdal-2.4.4-mod.tar.gz",
+    "--libkml-archive", "{root}/src/atak-civ-lfs/takthirdparty/distfiles/libkml.tar.gz",
+    "--proj-proof", "{root}/P/proj", "--assimp-proof", "{root}/P/assimp",
+    "--gis-build", "{root}/P/gis-java", "--java-home", "{jdk}"]}
+  },
+  "curl": {
+   "lane": "lane3.sh", "recipe": "takx/native-curl", "prerequisites": ["sqlcipher", "assimp"],
+   "locks": ["takx/native-curl/inputs.lock.json", "takx/native-curl/source.lock.json"],
+   "fetched": [{"consumer": "native-curl"}],
+   "marker": "complete.json",
+   "invocation": {"env": [], "argv": [
+    "python3", "-B", "{repo}/takx/native-curl/build.py", "--output", "{root}/P/curl",
+    "--archive", "{root}/inputs/native-curl/curl-8.23.0.tar.xz",
+    "--openssl-proof", "{root}/P/sqlcipher", "--zlib-proof", "{root}/P/assimp"]}
+  },
+  "gis-java": {
+   "lane": "lane4.sh", "recipe": "takx/gis-java", "prerequisites": [],
+   "locks": ["takx/gis-java/sources.lock.json", "takx/gis-java/data/resources.lock.json"],
+   "fetched": [{"consumer": "gis-java"}],
+   "marker": "build-state.json",
+   "invocation": {"env": ["{javapath}", "GIS_JAVA_SWIG=/usr/bin/swig",
+    "GIS_JAVA_CACHE_DIR={root}/cache-gis-java", "GIS_JAVA_BUILD_DIR={root}/P/gis-java",
+    "GIS_JAVA_OFFLINE=false"], "argv": [
+    "python3", "-B", "{repo}/takx/gis-java/build.py"]}
+  },
+  "kernel-java": {
+   "lane": "lane4.sh", "recipe": "takx/kernel-java", "prerequisites": ["gis-java"],
+   "locks": ["takx/kernel-java/inputs.lock.json"],
+   "fetched": [{"consumer": "kernel-java"}],
+   "marker": "result.json",
+   "invocation": {"env": ["{javapath}"], "argv": [
+    "python3", "-B", "{repo}/takx/kernel-java/build.py", "--scope", "engine-shared",
+    "--profile", "patched", "--source", "{repo}/upstream/atak-civ",
+    "--classpath-dir", "{root}/cache-lane4/kernel-java-classpath",
+    "--gis-build", "{root}/P/gis-java", "--output", "{root}/P/kernel-java",
+    "--java-home", "{jdk}", "--fetch-dependencies", "--jni-headers"]}
+  },
+  "worldwind-java": {
+   "lane": "lane4.sh", "recipe": "takx/worldwind-java", "prerequisites": ["gis-java"],
+   "locks": ["takx/worldwind-java/inputs.lock.json"],
+   "fetched": [{"consumer": "worldwind-java"}, {"path": "src/WorldWindJava"}],
+   "marker": "build-state.json",
+   "invocation": {"env": ["{javapath}"], "argv": [
+    "python3", "-B", "{repo}/takx/worldwind-java/build.py",
+    "--source", "{root}/src/WorldWindJava", "--public-jars", "{root}/inputs/worldwind-java",
+    "--gis-build", "{root}/P/gis-java", "--output", "{root}/P/worldwind-java"]}
+  },
+  "worldwind-interop": {
+   "lane": "lane4.sh", "recipe": "takx/worldwind-java", "prerequisites": ["gis-java"],
+   "locks": ["takx/worldwind-java/inputs.lock.json", "takx/worldwind-java/interop.lock.json"],
+   "fetched": [{"consumer": "worldwind-java"}, {"path": "src/WorldWindJava"}],
+   "marker": "build-state.json",
+   "invocation": {"env": ["{javapath}"], "argv": [
+    "python3", "-B", "{repo}/takx/worldwind-java/build.py", "--interop",
+    "--source", "{root}/src/WorldWindJava", "--public-jars", "{root}/inputs/worldwind-java",
+    "--gis-build", "{root}/P/gis-java", "--output", "{root}/P/worldwind-interop"]}
+  },
+  "consumers57": {
+   "lane": "lane4.sh", "recipe": "takx/worldwind-consumers", "prerequisites": [],
+   "locks": ["takx/worldwind-consumers/sources.lock.json"],
+   "fetched": [{"path": "src/takx57"}],
+   "marker": "staging-receipt.json",
+   "invocation": {"env": ["{javapath}"], "argv": [
+    "python3", "-B", "{repo}/takx/worldwind-consumers/stage.py",
+    "--source", "{root}/src/takx57", "--output", "{root}/P/consumers57"]}
+  },
+  "ui-original": {
+   "lane": "lane4.sh", "recipe": "takx/ui-java", "prerequisites": [],
+   "locks": ["takx/ui-java/inputs.lock.json"],
+   "fetched": [{"consumer": "ui-java"}],
+   "marker": "receipt.json",
+   "invocation": {"env": ["{javapath}"], "argv": [
+    "python3", "-B", "{repo}/takx/ui-java/build.py", "--sources-dir", "{root}/inputs/ui-java",
+    "--classpath-dir", "{root}/inputs/ui-java", "--java-home", "{jdk}", "--profile", "original",
+    "--output", "{root}/P/ui-original",
+    "--failure-report", "{root}/logs/ui-original-failure-{timestamp}.json"]}
+  },
+  "ui-wizard-reference": {
+   "lane": "lane4.sh", "recipe": "takx/ui-java", "prerequisites": [],
+   "locks": ["takx/ui-java/inputs.lock.json"],
+   "fetched": [{"consumer": "ui-java"}],
+   "marker": "receipt.json",
+   "invocation": {"env": ["{javapath}"], "argv": [
+    "python3", "-B", "{repo}/takx/ui-java/build.py", "--sources-dir", "{root}/inputs/ui-java",
+    "--classpath-dir", "{root}/inputs/ui-java", "--java-home", "{jdk}", "--profile", "wizard-reference",
+    "--output", "{root}/P/ui-wizard-reference",
+    "--failure-report", "{root}/logs/ui-wizard-reference-failure-{timestamp}.json"]}
+  }
+ }
+}
