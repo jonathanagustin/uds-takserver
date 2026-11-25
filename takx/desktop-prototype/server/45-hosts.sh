@@ -21,7 +21,14 @@ lb() { kubectl -n "$1" get svc "$2" -o jsonpath='{.status.loadBalancer.ingress[0
 admin="$(lb istio-admin-gateway admin-ingressgateway)"
 tenant="$(lb istio-tenant-gateway tenant-ingressgateway)"
 passthrough="$(lb istio-passthrough-gateway passthrough-ingressgateway)"
-[[ -n "${admin}" ]] && [[ -n "${tenant}" ]] && [[ -n "${passthrough}" ]]
+# One test per address: in an && list only the last command triggers errexit,
+# so a chained check let an empty admin or tenant address through.
+for address in "${admin}" "${tenant}" "${passthrough}"; do
+  if [[ -z "${address}" ]]; then
+    echo "45-hosts.sh: a gateway has no load balancer address yet" >&2
+    exit 1
+  fi
+done
 
 begin="# BEGIN takx-desktop-prototype"
 end="# END takx-desktop-prototype"
