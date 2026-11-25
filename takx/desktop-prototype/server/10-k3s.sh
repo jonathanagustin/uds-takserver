@@ -20,11 +20,11 @@ BOOTSTRAP="${BOOTSTRAP:-/home/user/marketplace/plugins/ccw-k3s/skills/cluster/sc
 # is deployed (status file present) only headroom above the kubelet eviction
 # threshold is needed.
 need_gib=12
-[ -s "${STATUS_DIR}/server-tak.json" ] && need_gib=2
+[[ -s "${STATUS_DIR}/server-tak.json" ]] && need_gib=2
 need_gib="${MIN_FREE_GIB:-${need_gib}}"
 avail_kb="$(df --output=avail -k / | tail -1 | tr -d ' ')"
 echo "disk available: $((avail_kb / 1024)) MiB, needed: ${need_gib} GiB"
-if [ "${avail_kb}" -lt $((need_gib * 1024 * 1024)) ]; then
+if [[ "${avail_kb}" -lt $((need_gib * 1024 * 1024)) ]]; then
   echo "less than ${need_gib} GiB available; image pulls would trip the kubelet eviction threshold" >&2
   exit 1
 fi

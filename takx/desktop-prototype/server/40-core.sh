@@ -20,7 +20,7 @@ patch_cni() {
   for _ in $(seq 1 180); do
     path="$(kubectl -n istio-system get ds istio-cni-node \
       -o jsonpath='{.spec.template.spec.volumes[?(@.name=="cni-host-procfs")].hostPath.path}' 2>/dev/null || true)"
-    if [ "${path}" = "/proc" ]; then
+    if [[ "${path}" = "/proc" ]]; then
       kubectl -n istio-system get ds istio-cni-node -o json | python3 -c '
 import json, sys
 spec = json.load(sys.stdin)["spec"]["template"]["spec"]
@@ -41,7 +41,7 @@ mkdir -p "${out}"
 cd "${WORK}"
 pattern="${out}/uds-bundle-takx-proto-core-amd64-*.tar.zst"
 bundle="$(compgen -G "${pattern}" | head -1 || true)"
-if [ -z "${bundle}" ]; then
+if [[ -z "${bundle}" ]]; then
   "${UDS}" create "${here}/core" --confirm --no-color --output "${out}"
   bundle="$(compgen -G "${pattern}" | head -1)"
 fi

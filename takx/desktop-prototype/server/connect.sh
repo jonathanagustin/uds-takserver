@@ -38,50 +38,50 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo="$(cd "$here/../../.." && pwd)"
+repo="$(cd "${here}/../../.." && pwd)"
 root="${TAKX_PROTO_ROOT:-/var/lib/takx-proto}"
-run="$repo/takx/desktop-prototype/run-in-toolchain.sh"
-dist="${TAKX_CONNECT_DIST:-$root/dist/takx57}"
+run="${repo}/takx/desktop-prototype/run-in-toolchain.sh"
+dist="${TAKX_CONNECT_DIST:-${root}/dist/takx57}"
 name=takx-connect
 
-mkdir -p "$root"/{runs,logs,status,connect}
+mkdir -p "${root}"/{runs,logs,status,connect}
 # shellcheck disable=SC1091
-source "$root/server/endpoints.env"
+source "${root}/server/endpoints.env"
 
-current() { cat "$root/connect/current" 2>/dev/null || true; }
-inside() { docker exec -e DISPLAY=:99 "$name" "$@"; }
+current() { cat "${root}/connect/current" 2>/dev/null || true; }
+inside() { docker exec -e DISPLAY=:99 "${name}" "$@"; }
 
 launch() { # attempt [takx arguments...]
   local attempt="$1" envs=() pair; shift
-  docker rm -f "$name" >/dev/null 2>&1 || true
-  for pair in ${TAKX_BOOT_ENV:-}; do envs+=(-e "$pair"); done
-  mkdir -p "$root/connect/$attempt"
-  echo "$attempt" >"$root/connect/current"
-  "$run" --runtime -d --name "$name" --docker-arg --shm-size=1g \
-    --docker-arg "--add-host=$TAK_CERT_NAME:${TAKX_CONNECT_SERVER_IP:-$PASSTHROUGH_GATEWAY_IP}" "${envs[@]}" \
+  docker rm -f "${name}" >/dev/null 2>&1 || true
+  for pair in ${TAKX_BOOT_ENV:-}; do envs+=(-e "${pair}"); done
+  mkdir -p "${root}/connect/${attempt}"
+  echo "${attempt}" >"${root}/connect/current"
+  "${run}" --runtime -d --name "${name}" --docker-arg --shm-size=1g \
+    --docker-arg "--add-host=${TAK_CERT_NAME}:${TAKX_CONNECT_SERVER_IP:-${PASSTHROUGH_GATEWAY_IP}}" "${envs[@]}" \
     -e "EXTRA_JVM_OPTS=${TAKX_BOOT_JVM_OPTS:-}" -- \
-    "$repo/takx/desktop-prototype/assemble/session.sh" "$dist" "$root/runs/$attempt" "$root/logs/$attempt.log" "$@" >/dev/null
-  echo "connect: $attempt started; log $root/logs/$attempt.log" >&2
+    "${repo}/takx/desktop-prototype/assemble/session.sh" "${dist}" "${root}/runs/${attempt}" "${root}/logs/${attempt}.log" "$@" >/dev/null
+  echo "connect: ${attempt} started; log ${root}/logs/${attempt}.log" >&2
 }
 
 case "${1:-}" in
   start)
     shift; n=1
-    [[ -s "$dist/manifest.json" ]] || { echo "connect: no assembled tree at $dist" >&2; exit 1; }
-    while [[ -e "$root/logs/connect-$n.log" || -e "$root/runs/connect-$n" ]]; do n=$((n + 1)); done
+    [[ -s "${dist}/manifest.json" ]] || { echo "connect: no assembled tree at ${dist}" >&2; exit 1; }
+    while [[ -e "${root}/logs/connect-${n}.log" || -e "${root}/runs/connect-${n}" ]]; do n=$((n + 1)); done
     (($#)) || set -- -create
-    launch "connect-$n" "$@";;
+    launch "connect-${n}" "$@";;
   restart)
     shift; attempt="$(current)"
-    [[ -d "$root/runs/$attempt/ProjectData" ]] || { echo "connect: no current attempt to restart" >&2; exit 1; }
-    launch "$attempt" "$@";;
+    [[ -d "${root}/runs/${attempt}/ProjectData" ]] || { echo "connect: no current attempt to restart" >&2; exit 1; }
+    launch "${attempt}" "$@";;
   exec) shift; inside "$@";;
   shot)
-    out="$root/connect/$(current)/shots"; mkdir -p "$out"; chmod 700 "$out"
-    inside ffmpeg -nostdin -loglevel error -y -f x11grab -video_size 1920x1080 -i :99 -frames:v 1 "$out/${2:?name}.png"
-    echo "$out/$2.png";;
-  evidence) shift; exec python3 -I "$here/connect_evidence.py" "$root" "$(current)" "$@";;
-  stop) docker rm -f "$name" >/dev/null 2>&1 || true;;
+    out="${root}/connect/$(current)/shots"; mkdir -p "${out}"; chmod 700 "${out}"
+    inside ffmpeg -nostdin -loglevel error -y -f x11grab -video_size 1920x1080 -i :99 -frames:v 1 "${out}/${2:?name}.png"
+    echo "${out}/$2.png";;
+  evidence) shift; exec python3 -I "${here}/connect_evidence.py" "${root}" "$(current)" "$@";;
+  stop) docker rm -f "${name}" >/dev/null 2>&1 || true;;
   -h|--help|"") sed -n '5,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
   *) echo "connect.sh: unknown target '$1'" >&2; exit 2;;
 esac

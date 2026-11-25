@@ -15,7 +15,7 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 rc=0
-python3 -I "$here/provider_cache.py" push "$@" || rc=$?
+python3 -I "${here}/provider_cache.py" push "$@" || rc=$?
 # 3 means "skipped cleanly" (not ok yet, cache off, not logged in).
-if [[ "$rc" == 3 ]]; then exit 0; fi
-exit "$rc"
+if [[ "${rc}" == 3 ]]; then exit 0; fi
+exit "${rc}"

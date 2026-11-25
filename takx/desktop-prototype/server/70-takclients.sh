@@ -15,7 +15,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=takx/desktop-prototype/server/env.sh
 . "${here}/env.sh"
 umask 077
-[ "$#" -gt 0 ] || set -- takx-desktop:Operators takx-outsider:TakxIsolation
+[[ "$#" -gt 0 ]] || set -- takx-desktop:Operators takx-outsider:TakxIsolation
 
 for pair in "$@"; do
   name="${pair%%:*}"

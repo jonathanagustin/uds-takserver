@@ -52,14 +52,14 @@ while (($#)); do
   esac
 done
 # shellcheck disable=SC1091
-source "$root/server/endpoints.env"
-secrets="$root/secrets/$client"
-casecrets="$root/secrets/${cafrom:-$client}"
-ca="$casecrets/truststore.p12"
-[[ -s "$secrets/client.p12" && -s "$ca" && -s "$secrets/password.txt" && -s "$casecrets/password.txt" ]] || { echo "connect-configure.sh: incomplete identity $secrets" >&2; exit 1; }
+source "${root}/server/endpoints.env"
+secrets="${root}/secrets/${client}"
+casecrets="${root}/secrets/${cafrom:-${client}}"
+ca="${casecrets}/truststore.p12"
+[[ -s "${secrets}/client.p12" && -s "${ca}" && -s "${secrets}/password.txt" && -s "${casecrets}/password.txt" ]] || { echo "connect-configure.sh: incomplete identity ${secrets}" >&2; exit 1; }
 
-docker exec -i -e DISPLAY=:99 -e LABEL="$label" -e ADDRESS="${address:-$TAK_CERT_NAME}" -e PORT="$TAK_STREAM_PORT" \
-  -e CA="$ca" -e CERT="$secrets/client.p12" -e CA_SECRET_FILE="$casecrets/password.txt" -e SECRET_FILE="$secrets/password.txt" -e OK="$ok" "$name" bash -s <<'DRIVE'
+docker exec -i -e DISPLAY=:99 -e LABEL="${label}" -e ADDRESS="${address:-${TAK_CERT_NAME}}" -e PORT="${TAK_STREAM_PORT}" \
+  -e CA="${ca}" -e CERT="${secrets}/client.p12" -e CA_SECRET_FILE="${casecrets}/password.txt" -e SECRET_FILE="${secrets}/password.txt" -e OK="${ok}" "${name}" bash -s <<'DRIVE'
 set -euo pipefail
 click() { xdotool mousemove --sync "$1" "$2"; sleep 0.35; xdotool click 1; sleep 0.4; }
 field() { click "$1" "$2"; xdotool key ctrl+a; xdotool type --delay 25 -- "$3"; sleep 0.3; }
@@ -85,4 +85,4 @@ field 1620 499 "$CERT"                    # Client Cert File
 secret 1610 531 "$SECRET_FILE"            # Client Password
 if [[ "$OK" == 1 ]]; then click 1713 583; fi
 DRIVE
-echo "connect-configure.sh: form filled for '$client', CA from '${cafrom:-$client}' (${address:-$TAK_CERT_NAME}:$TAK_STREAM_PORT, SSL)$( ((ok)) && echo ', OK pressed')" >&2
+echo "connect-configure.sh: form filled for '${client}', CA from '${cafrom:-${client}}' (${address:-${TAK_CERT_NAME}}:${TAK_STREAM_PORT}, SSL)$( ((ok)) && echo ', OK pressed')" >&2

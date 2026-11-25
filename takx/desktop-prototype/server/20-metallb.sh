@@ -17,7 +17,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 METALLB_VERSION="${METALLB_VERSION:-v0.15.2}"
 manifest="${WORK}/metallb-native-${METALLB_VERSION}.yaml"
 
-[ -s "${manifest}" ] || curl -sfL --retry 3 -o "${manifest}" \
+[[ -s "${manifest}" ]] || curl -sfL --retry 3 -o "${manifest}" \
   "https://raw.githubusercontent.com/metallb/metallb/${METALLB_VERSION}/config/manifests/metallb-native.yaml"
 sha256sum "${manifest}"
 kubectl apply -f "${manifest}"

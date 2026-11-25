@@ -33,18 +33,18 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo="$(cd "$here/../../.." && pwd)"
+repo="$(cd "${here}/../../.." && pwd)"
 root="${TAKX_PROTO_ROOT:-/var/lib/takx-proto}"
-run="$repo/takx/desktop-prototype/run-in-toolchain.sh"
-boot="$here/boot.sh"
-media="$repo/demo/out/takx"
+run="${repo}/takx/desktop-prototype/run-in-toolchain.sh"
+boot="${here}/boot.sh"
+media="${repo}/demo/out/takx"
 name=takx-boot
 seconds="${TAKX_CAPTURE_SECONDS:-170}"
 
-mkdir -p "$root"/{capture,logs,status} "$media"
+mkdir -p "${root}"/{capture,logs,status} "${media}"
 
 status() { # status seconds notes outputs...
-  python3 -I - "$root/status/capture.json" "$@" <<'PY'
+  python3 -I - "${root}/status/capture.json" "$@" <<'PY'
 import json, os, sys
 path, status, seconds, notes, *outputs = sys.argv[1:]
 tmp = path + '.tmp.%d' % os.getpid()
@@ -58,14 +58,14 @@ PY
 
 do_record() {
   local attempt dir
-  "$boot" stop
-  TAKX_BOOT_ENV="TAKX_BOOT_DELAY_S=8 ${TAKX_BOOT_ENV:-}" "$boot" start --trust-sandbox-ca
-  attempt="$(cat "$root/runs/current")"
-  dir="$root/capture/$attempt"
-  [[ ! -e "$dir" ]] || { echo "capture: $dir exists" >&2; exit 1; }
-  mkdir -p "$dir"
+  "${boot}" stop
+  TAKX_BOOT_ENV="TAKX_BOOT_DELAY_S=8 ${TAKX_BOOT_ENV:-}" "${boot}" start --trust-sandbox-ca
+  attempt="$(cat "${root}/runs/current")"
+  dir="${root}/capture/${attempt}"
+  [[ ! -e "${dir}" ]] || { echo "capture: ${dir} exists" >&2; exit 1; }
+  mkdir -p "${dir}"
   # Everything below runs inside the boot container, next to the X server.
-  docker exec -i -e DISPLAY=:99 -e DIR="$dir" -e SECONDS_TOTAL="$seconds" "$name" bash -s <<'DRIVE' >"$dir/drive.log" 2>&1
+  docker exec -i -e DISPLAY=:99 -e DIR="${dir}" -e SECONDS_TOTAL="${seconds}" "${name}" bash -s <<'DRIVE' >"${dir}/drive.log" 2>&1
 set -u
 for _ in $(seq 100); do xdpyinfo >/dev/null 2>&1 && break; sleep 0.1; done
 ffmpeg -nostdin -loglevel warning -y -f x11grab -draw_mouse 1 -framerate 30 -video_size 1920x1080 -i :99 \
@@ -139,15 +139,15 @@ kill -INT "$recorder" 2>/dev/null
 wait "$recorder"
 mark "recording ends"
 DRIVE
-  [[ -s "$dir/master.mkv" && -s "$dir/events.tsv" ]] || { status failed 0 "no master recording; see $dir/drive.log"; exit 1; }
-  echo "$attempt" >"$root/capture/current"
-  echo "capture: recorded $dir/master.mkv" >&2
+  [[ -s "${dir}/master.mkv" && -s "${dir}/events.tsv" ]] || { status failed 0 "no master recording; see ${dir}/drive.log"; exit 1; }
+  echo "${attempt}" >"${root}/capture/current"
+  echo "capture: recorded ${dir}/master.mkv" >&2
 }
 
 do_finish() {
   local attempt dir start
-  attempt="$(cat "$root/capture/current")"; dir="$root/capture/$attempt"; start=$(date +%s)
-  "$run" --runtime --mount "$media:$media" -e "DIR=$dir" -e "OUT=$media" -- bash -euo pipefail -c '
+  attempt="$(cat "${root}/capture/current")"; dir="${root}/capture/${attempt}"; start=$(date +%s)
+  "${run}" --runtime --mount "${media}:${media}" -e "DIR=${dir}" -e "OUT=${media}" -- bash -euo pipefail -c '
     at() { awk -F"\t" -v k="$1" "index(\$2,k)==1{print \$1; exit}" "$DIR/events.tsv"; }
     enc() { # output start duration
       ffmpeg -nostdin -loglevel error -y -ss "$2" -t "$3" -i "$DIR/master.mkv" -an -vf fps=30,format=yuv420p \
@@ -185,7 +185,7 @@ do_finish() {
     awk -F"\t" -v d="$length" -v s="$raw_start" -v e="$raw_end" "BEGIN{OFS=\"\t\"; print \"# seconds in the master recording\", \"action (raw take = \" s \" s to \" e \" s of the master)\"} \$1<=d{print} \$1>d{print \$1, \$2 \" [after the recording ended; not in the footage]\"}" \
       "$DIR/events.tsv" >"$OUT/takx57-events.tsv"
   '
-  python3 -I - "$media" "$dir" "$attempt" <<'PY'
+  python3 -I - "${media}" "${dir}" "${attempt}" <<'PY'
 import glob, hashlib, json, os, re, sys
 media, source, attempt = sys.argv[1:]
 report = {'attempt': attempt, 'master': os.path.join(source, 'master.mkv'), 'files': {}}
@@ -230,8 +230,8 @@ for name, item in report['files'].items():
 sys.exit(0 if ok else 1)
 PY
   status ok "$(($(date +%s) - start))" \
-    "attempt $attempt: lossless x11grab master and H.264 yuv420p 1920x1080 30 fps deliverables in demo/out/takx (git-ignored, never committed); ffprobe, signalstats and freezedetect checks passed (capture.json); Kernel 8.30.5 + project patches and CommonCommo 1.17.2 patched; what the frames show is described in demo/out/takx/PROVENANCE.md" \
-    "$media/capture.json" "$dir/master.mkv" "$dir/events.tsv"
+    "attempt ${attempt}: lossless x11grab master and H.264 yuv420p 1920x1080 30 fps deliverables in demo/out/takx (git-ignored, never committed); ffprobe, signalstats and freezedetect checks passed (capture.json); Kernel 8.30.5 + project patches and CommonCommo 1.17.2 patched; what the frames show is described in demo/out/takx/PROVENANCE.md" \
+    "${media}/capture.json" "${dir}/master.mkv" "${dir}/events.tsv"
 }
 
 case "${1:-}" in

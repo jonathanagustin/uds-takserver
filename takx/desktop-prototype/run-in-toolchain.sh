@@ -51,16 +51,16 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo="$(cd "$here/../.." && pwd)"
+repo="$(cd "${here}/../.." && pwd)"
 root="${TAKX_PROTO_ROOT:-/var/lib/takx-proto}"
 ca="${TAKX_PROTO_CA-}"
-if [[ -z "$ca" && -s /root/.ccr/ca-bundle.crt ]]; then ca=/root/.ccr/ca-bundle.crt; fi
+if [[ -z "${ca}" && -s /root/.ccr/ca-bundle.crt ]]; then ca=/root/.ccr/ca-bundle.crt; fi
 
 image=takx-desktop-proto:toolchain
 name=""
 detach=0
 log=""
-workdir="$root"
+workdir="${root}"
 truststore_only=0
 extra=()
 envs=()
@@ -85,13 +85,13 @@ while (($#)); do
   esac
 done
 
-mkdir -p "$root"/{cache,src,P,logs,status,failed,ca}
+mkdir -p "${root}"/{cache,src,P,logs,status,failed,ca}
 
 base=(--init
-  -v "$repo:$repo:ro"
-  -v "$root:$root"
-  -e "TAKX_PROTO_ROOT=$root"
-  -e "TAKX_PROTO_REPO=$repo"
+  -v "${repo}:${repo}:ro"
+  -v "${root}:${root}"
+  -e "TAKX_PROTO_ROOT=${root}"
+  -e "TAKX_PROTO_REPO=${repo}"
   -e HOME=/tmp)
 if [[ -f "${repo}/.takx-arch-tree.base" ]]; then
   # Running from an architecture tree: it holds copies of takx/ and LICENSE
@@ -109,26 +109,26 @@ if [[ -n "${TAKX_PROTO_ARCH:-}" ]]; then
   arch="$(takx_arch)" || exit 2
   base+=(--platform "$(takx_arch_get docker "${arch}")" -e "TAKX_PROTO_ARCH=${arch}")
 fi
-if [[ -n "$ca" ]]; then
-  [[ -s "$ca" ]] || { echo "run-in-toolchain.sh: CA bundle '$ca' is missing or empty" >&2; exit 2; }
-  base+=(-v "$ca:/ca.crt:ro"
+if [[ -n "${ca}" ]]; then
+  [[ -s "${ca}" ]] || { echo "run-in-toolchain.sh: CA bundle '${ca}' is missing or empty" >&2; exit 2; }
+  base+=(-v "${ca}:/ca.crt:ro"
     -e SSL_CERT_FILE=/ca.crt -e CURL_CA_BUNDLE=/ca.crt -e GIT_SSL_CAINFO=/ca.crt
     -e PIP_CERT=/ca.crt -e REQUESTS_CA_BUNDLE=/ca.crt)
 fi
 
-truststore="$root/ca/java-cacerts.p12"
+truststore="${root}/ca/java-cacerts.p12"
 build_truststore() {
   # JDK roots plus every certificate of the mounted bundle, written once and
   # published atomically. The fingerprint file ties it to the bundle it came from.
   local want have=""
-  want="$(sha256sum "$ca" | cut -d' ' -f1)"
-  [[ -s "$truststore.source-sha256" ]] && have="$(cat "$truststore.source-sha256")"
-  if [[ -s "$truststore" && "$want" == "$have" ]]; then return 0; fi
+  want="$(sha256sum "${ca}" | cut -d' ' -f1)"
+  [[ -s "${truststore}.source-sha256" ]] && have="$(cat "${truststore}.source-sha256")"
+  if [[ -s "${truststore}" && "${want}" == "${have}" ]]; then return 0; fi
   (
     flock 9
-    [[ -s "$truststore.source-sha256" ]] && have="$(cat "$truststore.source-sha256")"
-    if [[ -s "$truststore" && "$want" == "$have" ]]; then exit 0; fi
-    docker run --rm "${base[@]}" "$image" bash -euo pipefail -c '
+    [[ -s "${truststore}.source-sha256" ]] && have="$(cat "${truststore}.source-sha256")"
+    if [[ -s "${truststore}" && "${want}" == "${have}" ]]; then exit 0; fi
+    docker run --rm "${base[@]}" "${image}" bash -euo pipefail -c '
       work="$(mktemp -d)"; out="$1"
       keytool -importkeystore -noprompt -srckeystore "$JAVA_HOME/lib/security/cacerts" \
         -srcstorepass changeit -destkeystore "$work/store.p12" -deststoretype PKCS12 \
@@ -140,25 +140,25 @@ build_truststore() {
       done
       keytool -list -keystore "$work/store.p12" -storepass changeit | grep -c trustedCertEntry >&2
       cp "$work/store.p12" "$out.tmp.$$" && mv "$out.tmp.$$" "$out"
-    ' truststore "$truststore" 2>"$root/logs/java-truststore.log"
-    echo "$want" > "$truststore.source-sha256"
-  ) 9>"$root/ca/.lock"
+    ' truststore "${truststore}" 2>"${root}/logs/java-truststore.log"
+    echo "${want}" > "${truststore}.source-sha256"
+  ) 9>"${root}/ca/.lock"
 }
 
 if ((truststore_only)); then
-  [[ -n "$ca" ]] || { echo "run-in-toolchain.sh: no CA bundle; the JDK trust store applies" >&2; exit 0; }
+  [[ -n "${ca}" ]] || { echo "run-in-toolchain.sh: no CA bundle; the JDK trust store applies" >&2; exit 0; }
   build_truststore
-  echo "$truststore"
+  echo "${truststore}"
   exit 0
 fi
-if [[ -n "$ca" && -s "$truststore" ]]; then base+=(-e "TAKX_JAVA_TRUSTSTORE=$truststore"); fi
+if [[ -n "${ca}" && -s "${truststore}" ]]; then base+=(-e "TAKX_JAVA_TRUSTSTORE=${truststore}"); fi
 
 (($#)) || { echo "run-in-toolchain.sh: no command given" >&2; exit 2; }
 
-args=(run "${base[@]}" -w "$workdir")
-if [[ -n "$name" ]]; then args+=(--name "$name"); fi
+args=(run "${base[@]}" -w "${workdir}")
+if [[ -n "${name}" ]]; then args+=(--name "${name}"); fi
 if ((detach)); then
-  [[ -n "$name" ]] || { echo "run-in-toolchain.sh: -d needs --name" >&2; exit 2; }
+  [[ -n "${name}" ]] || { echo "run-in-toolchain.sh: -d needs --name" >&2; exit 2; }
   args+=(-d)
 else
   args+=(--rm)
@@ -166,15 +166,15 @@ else
 fi
 if ((${#extra[@]})); then args+=("${extra[@]}"); fi
 if ((${#envs[@]})); then args+=("${envs[@]}"); fi
-args+=("$image")
+args+=("${image}")
 
-if [[ -n "$log" ]]; then
-  case "$log" in "$root"/*) ;; *) echo "run-in-toolchain.sh: --log must be under $root" >&2; exit 2;; esac
+if [[ -n "${log}" ]]; then
+  case "${log}" in "${root}"/*) ;; *) echo "run-in-toolchain.sh: --log must be under ${root}" >&2; exit 2;; esac
   # A '..' component would name a file outside the work root after all.
-  case "/${log#"$root"/}/" in */../*) echo "run-in-toolchain.sh: --log must be under $root" >&2; exit 2;; esac
-  mkdir -p "$(dirname "$log")"
+  case "/${log#"${root}"/}/" in */../*) echo "run-in-toolchain.sh: --log must be under ${root}" >&2; exit 2;; esac
+  mkdir -p "$(dirname "${log}")"
   # The command runs as given; only its output is redirected, and the exit
   # status of the container is the exit status of the command.
-  exec docker "${args[@]}" bash -c 'log="$1"; shift; exec "$@" >>"$log" 2>&1' takx-log "$log" "$@"
+  exec docker "${args[@]}" bash -c 'log="$1"; shift; exec "$@" >>"$log" 2>&1' takx-log "${log}" "$@"
 fi
 exec docker "${args[@]}" "$@"

@@ -24,20 +24,20 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 takx_arch_enter "${BASH_SOURCE[0]}" "$@"
 root="${TAKX_PROTO_ROOT:-/var/lib/takx-proto}"
 jobs="${TAKX_FETCH_JOBS:-4}"
-mkdir -p "$root/logs" "$root/status"
-log="$root/logs/fetch.log"
+mkdir -p "${root}/logs" "${root}/status"
+log="${root}/logs/fetch.log"
 
 if [[ "${TAKX_FETCH_ON_HOST:-0}" == 1 ]]; then
-  python3 -I -B "$here/fetch_inputs.py" --root "$root" --jobs "$jobs" "$@" 2>&1 | tee -a "$log"
+  python3 -I -B "${here}/fetch_inputs.py" --root "${root}" --jobs "${jobs}" "$@" 2>&1 | tee -a "${log}"
   exit "${PIPESTATUS[0]}"
 fi
 docker image inspect takx-desktop-proto:toolchain >/dev/null 2>&1 || {
   echo "fetch.sh: build takx-desktop-proto:toolchain first (see Dockerfile)" >&2; exit 2; }
 # The Java trust store is not needed by this stage, but every later stage that
 # lets a JVM reach the network expects it, so create it here once.
-"$here/run-in-toolchain.sh" --java-truststore >/dev/null
+"${here}/run-in-toolchain.sh" --java-truststore >/dev/null
 set +e
-"$here/run-in-toolchain.sh" -- python3 -I -B "$here/fetch_inputs.py" --root "$root" --jobs "$jobs" "$@" 2>&1 | tee -a "$log"
+"${here}/run-in-toolchain.sh" -- python3 -I -B "${here}/fetch_inputs.py" --root "${root}" --jobs "${jobs}" "$@" 2>&1 | tee -a "${log}"
 status="${PIPESTATUS[0]}"
 set -e
-exit "$status"
+exit "${status}"

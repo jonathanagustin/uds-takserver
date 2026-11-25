@@ -16,8 +16,8 @@
 set -euo pipefail
 
 tree="$1"; rundir="$2"; shift 2
-cd "$tree"
-mkdir -p "$rundir"/{ProjectData,tmp,home}
+cd "${tree}"
+mkdir -p "${rundir}"/{ProjectData,tmp,home}
 
 mapfile -t vmoptions < <(grep -v '^[[:space:]]*$' template-64bit.vmoptions)
 # prototype-launch.env (written by assemble.py) names where the stock loader
@@ -27,14 +27,14 @@ mapfile -t vmoptions < <(grep -v '^[[:space:]]*$' template-64bit.vmoptions)
 # classes through the system class loader.
 # shellcheck disable=SC1091
 source ./prototype-launch.env
-library_path="$PWD/native/linux64:$rundir/tmp/$KERNEL_STOCK_LOADER_SUBDIR"
+library_path="${PWD}/native/linux64:${rundir}/tmp/${KERNEL_STOCK_LOADER_SUBDIR}"
 
 # shellcheck disable=SC2086
 exec java "${vmoptions[@]}" \
-  -Djava.library.path="$library_path" \
-  -Dprojectdata.dir="$rundir/ProjectData" \
-  -Djava.io.tmpdir="$rundir/tmp" \
-  -Duser.home="$rundir/home" \
+  -Djava.library.path="${library_path}" \
+  -Dprojectdata.dir="${rundir}/ProjectData" \
+  -Djava.io.tmpdir="${rundir}/tmp" \
+  -Duser.home="${rundir}/home" \
   ${EXTRA_JVM_OPTS:-} \
   -cp "$(printf '%s:' boot/*.jar)conf" \
   org.jboss.modules.Main -mp modules takx-bootstrap "$@"

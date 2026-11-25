@@ -61,23 +61,23 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo="$(cd "$here/../../.." && pwd)"
+repo="$(cd "${here}/../../.." && pwd)"
 root="${TAKX_PROTO_ROOT:-/var/lib/takx-proto}"
-run="$repo/takx/desktop-prototype/run-in-toolchain.sh"
-server="$repo/takx/desktop-prototype/server"
-connect="$server/connect.sh"
-cloudtak="$server/connect-cloudtak.sh"
+run="${repo}/takx/desktop-prototype/run-in-toolchain.sh"
+server="${repo}/takx/desktop-prototype/server"
+connect="${server}/connect.sh"
+cloudtak="${server}/connect-cloudtak.sh"
 cloudtak_display="${TAKX_CLOUDTAK_DISPLAY:-:97}"
-media="$repo/demo/out/takx"
+media="${repo}/demo/out/takx"
 name=takx-connect
 read -r peer_x peer_y <<<"${TAKX_CAPTURE_PEER_XY:-755 687}"
 
-mkdir -p "$root"/{connect,status} "$media"
+mkdir -p "${root}"/{connect,status} "${media}"
 # shellcheck disable=SC1091
-source "$root/server/endpoints.env"
+source "${root}/server/endpoints.env"
 
 status() { # status seconds notes outputs...
-  python3 -I - "$root/status/capture-connected.json" "$@" <<'PY'
+  python3 -I - "${root}/status/capture-connected.json" "$@" <<'PY'
 import json, os, sys
 path, status, seconds, notes, *outputs = sys.argv[1:]
 tmp = path + '.tmp.%d' % os.getpid()
@@ -91,10 +91,10 @@ PY
 
 await_log() { # pattern seconds: wait until the client log has one more matching line than before
   local pattern="$1" budget="$2" log="$3" before now
-  before="$(grep -c "$pattern" "$log" || true)"
+  before="$(grep -c "${pattern}" "${log}" || true)"
   shift 3; "$@"
-  for _ in $(seq "$budget"); do
-    now="$(grep -c "$pattern" "$log" || true)"
+  for _ in $(seq "${budget}"); do
+    now="$(grep -c "${pattern}" "${log}" || true)"
     ((now > before)) && return 0
     sleep 1
   done
@@ -104,62 +104,62 @@ await_log() { # pattern seconds: wait until the client log has one more matching
 do_record() {
   local attempt n dir log t0 recorder before end_takx end_browser previous
   # Off the record: the browser peer signs in.
-  "$cloudtak" start
-  mkdir -p "$root/connect/cloudtak"
-  "$cloudtak" signin >"$root/connect/cloudtak/signin.json" ||
-    { status failed 0 "CloudTAK sign-in failed; see $root/connect/cloudtak"; exit 1; }
+  "${cloudtak}" start
+  mkdir -p "${root}/connect/cloudtak"
+  "${cloudtak}" signin >"${root}/connect/cloudtak/signin.json" ||
+    { status failed 0 "CloudTAK sign-in failed; see ${root}/connect/cloudtak"; exit 1; }
 
-  "$connect" start
-  attempt="$(cat "$root/connect/current")"; n="${attempt#connect-}"
-  dir="$root/connect/$attempt/capture"; log="$root/logs/$attempt.log"
-  mkdir -p "$dir"
-  cp "$root/connect/cloudtak/signin.json" "$dir/cloudtak-signin.json"
-  status running 0 "attempt $attempt: booting"
-  for _ in $(seq 100); do docker exec -e DISPLAY=:99 "$name" xdotool search --onlyvisible --name 'TAKX 5.7' >/dev/null 2>&1 && break; sleep 3; done
+  "${connect}" start
+  attempt="$(cat "${root}/connect/current")"; n="${attempt#connect-}"
+  dir="${root}/connect/${attempt}/capture"; log="${root}/logs/${attempt}.log"
+  mkdir -p "${dir}"
+  cp "${root}/connect/cloudtak/signin.json" "${dir}/cloudtak-signin.json"
+  status running 0 "attempt ${attempt}: booting"
+  for _ in $(seq 100); do docker exec -e DISPLAY=:99 "${name}" xdotool search --onlyvisible --name 'TAKX 5.7' >/dev/null 2>&1 && break; sleep 3; done
   sleep 50   # project load and first globe frames
 
   # Off the record: the credential form.
-  await_log 'Stream connection to ssl:.* is up' 60 "$log" "$server/connect-configure.sh" takx-desktop ||
-    { status failed 0 "attempt $attempt: no 'Stream connection ... is up' in $log after the form"; exit 1; }
+  await_log 'Stream connection to ssl:.* is up' 60 "${log}" "${server}/connect-configure.sh" takx-desktop ||
+    { status failed 0 "attempt ${attempt}: no 'Stream connection ... is up' in ${log} after the form"; exit 1; }
   sleep 6
-  await_log 'TAK Server Disconnected' 20 "$log" docker exec -e DISPLAY=:99 "$name" bash -c \
+  await_log 'TAK Server Disconnected' 20 "${log}" docker exec -e DISPLAY=:99 "${name}" bash -c \
     'xdotool mousemove --sync 1769 241; sleep 0.4; xdotool click 1; sleep 0.5; xdotool mousemove --sync 1500 700' ||
-    { status failed 0 "attempt $attempt: the connection did not report Disconnected after unticking 'enabled'"; exit 1; }
+    { status failed 0 "attempt ${attempt}: the connection did not report Disconnected after unticking 'enabled'"; exit 1; }
   sleep 5   # let the notification toast leave the screen
   # The browser keeps the markers of an earlier take: clear them, then show
   # the overview.
-  if [[ -s "$root/connect/capture-current" ]]; then
-    previous="$(cat "$root/connect/capture-current")"; previous="${previous#connect-}"
-    "$cloudtak" remove "SYNTHETIC-PEER-$previous" >/dev/null 2>&1 || true
-    "$cloudtak" remove "SYNTHETIC-TAKX-$previous" >/dev/null 2>&1 || true
+  if [[ -s "${root}/connect/capture-current" ]]; then
+    previous="$(cat "${root}/connect/capture-current")"; previous="${previous#connect-}"
+    "${cloudtak}" remove "SYNTHETIC-PEER-${previous}" >/dev/null 2>&1 || true
+    "${cloudtak}" remove "SYNTHETIC-TAKX-${previous}" >/dev/null 2>&1 || true
   fi
-  "$cloudtak" close >/dev/null
-  "$cloudtak" view -20 -20 3.2 >/dev/null
+  "${cloudtak}" close >/dev/null
+  "${cloudtak}" view -20 -20 3.2 >/dev/null
 
   # Two silent real clients for the whole take.
-  python3 -I "$server/connect_peer.py" "$root/secrets/takx-outsider" --connect "$PASSTHROUGH_GATEWAY_IP" \
-    --listen 150 --out "$dir/outsider.json" >/dev/null 2>"$dir/outsider.err" &
+  python3 -I "${server}/connect_peer.py" "${root}/secrets/takx-outsider" --connect "${PASSTHROUGH_GATEWAY_IP}" \
+    --listen 150 --out "${dir}/outsider.json" >/dev/null 2>"${dir}/outsider.err" &
   local outsider=$!
-  python3 -I "$server/connect_peer.py" "$root/secrets/takx-peer" --connect "$PASSTHROUGH_GATEWAY_IP" \
-    --listen 150 --out "$dir/peer.json" >/dev/null 2>"$dir/peer.err" &
+  python3 -I "${server}/connect_peer.py" "${root}/secrets/takx-peer" --connect "${PASSTHROUGH_GATEWAY_IP}" \
+    --listen 150 --out "${dir}/peer.json" >/dev/null 2>"${dir}/peer.err" &
   local peer=$!
 
   # Both displays, lossless. ffmpeg starts grabbing some seconds before its
   # output file shows anything, so a master's own time zero is found at the
   # end: its duration minus the moment it was told to stop (offsets.env).
-  rm -f "$dir/master.mkv" "$dir/cloudtak-master.mkv" "$dir/events.tsv"
-  docker exec -d "$name" bash -c "exec ffmpeg -nostdin -loglevel warning -y -f x11grab -draw_mouse 1 -framerate 30 \
-    -video_size 1920x1080 -i :99 -t 200 -c:v libx264 -preset ultrafast -qp 0 '$dir/master.mkv' >'$dir/ffmpeg.log' 2>&1"
+  rm -f "${dir}/master.mkv" "${dir}/cloudtak-master.mkv" "${dir}/events.tsv"
+  docker exec -d "${name}" bash -c "exec ffmpeg -nostdin -loglevel warning -y -f x11grab -draw_mouse 1 -framerate 30 \
+    -video_size 1920x1080 -i :99 -t 200 -c:v libx264 -preset ultrafast -qp 0 '${dir}/master.mkv' >'${dir}/ffmpeg.log' 2>&1"
   ffmpeg -nostdin -loglevel warning -y -f x11grab -draw_mouse 0 -framerate 30 -video_size 1920x1080 \
-    -i "$cloudtak_display" -t 200 -c:v libx264 -preset ultrafast -qp 0 "$dir/cloudtak-master.mkv" >"$dir/cloudtak-ffmpeg.log" 2>&1 &
+    -i "${cloudtak_display}" -t 200 -c:v libx264 -preset ultrafast -qp 0 "${dir}/cloudtak-master.mkv" >"${dir}/cloudtak-ffmpeg.log" 2>&1 &
   recorder=$!
-  for _ in $(seq 400); do [[ -s "$dir/master.mkv" && -s "$dir/cloudtak-master.mkv" ]] && break; sleep 0.05; done
+  for _ in $(seq 400); do [[ -s "${dir}/master.mkv" && -s "${dir}/cloudtak-master.mkv" ]] && break; sleep 0.05; done
   t0="$(date +%s.%N)"   # zero of events.tsv
 
-  mark_at() { printf '%.2f\t%s\t%s\n' "$(awk -v a="$1" -v b="$t0" 'BEGIN{print a-b}')" "$(date -u -d "@$1" +%T)" "$2" >>"$dir/events.tsv"; }
+  mark_at() { printf '%.2f\t%s\t%s\n' "$(awk -v a="$1" -v b="${t0}" 'BEGIN{print a-b}')" "$(date -u -d "@$1" +%T)" "$2" >>"${dir}/events.tsv"; }
   mark() { mark_at "$(date +%s.%N)" "$1"; }
-  takx() { docker exec -e DISPLAY=:99 "$name" bash -c 'click() { xdotool mousemove --sync "$1" "$2"; sleep 0.35; xdotool click 1; }; '"$1"; }
-  ups() { grep -c 'Stream connection to ssl:.* is up' "$log" || true; }
+  takx() { docker exec -e DISPLAY=:99 "${name}" bash -c 'click() { xdotool mousemove --sync "$1" "$2"; sleep 0.35; xdotool click 1; }; '"$1"; }
+  ups() { grep -c 'Stream connection to ssl:.* is up' "${log}" || true; }
 
   sleep 2
   mark "recording starts: TAKX with the TAK Server dock open, connection disabled, status red; CloudTAK signed in, overview of the South Atlantic"
@@ -167,29 +167,29 @@ do_record() {
   before="$(ups)"
   mark "TAKX: tick the connection's enabled box"
   takx 'click 1769 241'
-  for _ in $(seq 100); do [[ "$(ups)" -gt "$before" ]] && break; sleep 0.1; done
-  mark "TAKX client log: stream connection is up ($(ups) > $before)"
+  for _ in $(seq 100); do [[ "$(ups)" -gt "${before}" ]] && break; sleep 0.1; done
+  mark "TAKX client log: stream connection is up ($(ups) > ${before})"
   takx 'xdotool mousemove --sync 1500 620'
   sleep 4
 
-  mark "CloudTAK: Geometry Editing > Coordinate Input, name SYNTHETIC-PEER-$n, position -10, -25"
-  "$cloudtak" place "SYNTHETIC-PEER-$n" -10 -25 >"$dir/cloudtak-place.json" 2>"$dir/cloudtak-place.err" ||
+  mark "CloudTAK: Geometry Editing > Coordinate Input, name SYNTHETIC-PEER-${n}, position -10, -25"
+  "${cloudtak}" place "SYNTHETIC-PEER-${n}" -10 -25 >"${dir}/cloudtak-place.json" 2>"${dir}/cloudtak-place.err" ||
     mark "CloudTAK: place FAILED (see cloudtak-place.err)"
-  if [[ -s "$dir/cloudtak-place.json" ]]; then
-    mark_at "$(date -u -d "$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["broadcast_clicked_utc"])' "$dir/cloudtak-place.json")" +%s.%N)" \
+  if [[ -s "${dir}/cloudtak-place.json" ]]; then
+    mark_at "$(date -u -d "$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["broadcast_clicked_utc"])' "${dir}/cloudtak-place.json")" +%s.%N)" \
       "CloudTAK: Share > Broadcast To All Users clicked"
   fi
   sleep 1.5
-  mark "TAKX: hover the CloudTAK marker on the globe: label SYNTHETIC-PEER-$n"
-  takx "xdotool mousemove --sync $((peer_x - 40)) $((peer_y - 30)); sleep 0.3; xdotool mousemove --sync $peer_x $peer_y"
+  mark "TAKX: hover the CloudTAK marker on the globe: label SYNTHETIC-PEER-${n}"
+  takx "xdotool mousemove --sync $((peer_x - 40)) $((peer_y - 30)); sleep 0.3; xdotool mousemove --sync ${peer_x} ${peer_y}"
   sleep 4.5
-  "$cloudtak" close >/dev/null
-  "$cloudtak" view -20 -20 3.2 >/dev/null   # browser back to the overview
+  "${cloudtak}" close >/dev/null
+  "${cloudtak}" view -20 -20 3.2 >/dev/null   # browser back to the overview
 
   mark "TAKX: Point Dropper: open"
   takx 'click 744 95'; sleep 3
-  mark "TAKX: Point Dropper: type the prefix SYNTHETIC-TAKX and the index $n"
-  takx "click 1505 302; sleep 0.3; xdotool type --delay 60 SYNTHETIC-TAKX; sleep 0.3; click 1650 302; sleep 0.3; xdotool type --delay 60 $n; sleep 0.4"
+  mark "TAKX: Point Dropper: type the prefix SYNTHETIC-TAKX and the index ${n}"
+  takx "click 1505 302; sleep 0.3; xdotool type --delay 60 SYNTHETIC-TAKX; sleep 0.3; click 1650 302; sleep 0.3; xdotool type --delay 60 ${n}; sleep 0.4"
   mark "TAKX: Point Dropper: choose the neutral affiliation"
   takx 'click 1558 352'; sleep 1
   mark "TAKX: Point Dropper: type the location -30.0, -15.0 (open South Atlantic)"
@@ -198,8 +198,8 @@ do_record() {
   takx 'click 1732 602; sleep 3; xdotool key Escape; sleep 1'
   mark "TAKX: placed marker: radial menu > details"
   takx 'click 625 841; sleep 2.5; click 793 695; sleep 2.5'
-  mark "TAKX: Device Configuration: name the marker SYNTHETIC-TAKX-$n"
-  takx "click 1125 233; sleep 0.3; xdotool key ctrl+a; xdotool type --delay 60 SYNTHETIC-TAKX-$n; sleep 0.8; click 1046 918; sleep 2.5"
+  mark "TAKX: Device Configuration: name the marker SYNTHETIC-TAKX-${n}"
+  takx "click 1125 233; sleep 0.3; xdotool key ctrl+a; xdotool type --delay 60 SYNTHETIC-TAKX-${n}; sleep 0.8; click 1046 918; sleep 2.5"
   mark "TAKX: named marker: open its radial menu"
   takx 'click 733 602; sleep 2.5'
   mark "TAKX: radial menu: Send"
@@ -208,46 +208,46 @@ do_record() {
   takx 'click 961 745; sleep 1; xdotool mousemove --sync 700 580; sleep 0.3; xdotool mousemove --sync 733 603'
   sleep 4.5
 
-  mark "CloudTAK: search box, type SYNTHETIC-TAKX-$n, select the map feature, open its details"
-  "$cloudtak" find "SYNTHETIC-TAKX-$n" 30 >"$dir/cloudtak-find.json" 2>"$dir/cloudtak-find.err" ||
+  mark "CloudTAK: search box, type SYNTHETIC-TAKX-${n}, select the map feature, open its details"
+  "${cloudtak}" find "SYNTHETIC-TAKX-${n}" 30 >"${dir}/cloudtak-find.json" 2>"${dir}/cloudtak-find.err" ||
     mark "CloudTAK: find FAILED (see cloudtak-find.err)"
   sleep 3
   mark "CloudTAK: back to the overview, both markers on the map"
-  "$cloudtak" view -20 -20 3.2 >/dev/null
+  "${cloudtak}" view -20 -20 3.2 >/dev/null
   sleep 2
   mark "TAKX: TAK Server dock: open again, connection still green"
   takx 'click 1720 95'; sleep 4.5
   mark "driving ends"
-  docker exec "$name" pkill -INT -x ffmpeg || true
+  docker exec "${name}" pkill -INT -x ffmpeg || true
   end_takx="$(date +%s.%N)"
-  kill -INT "$recorder" 2>/dev/null || true
+  kill -INT "${recorder}" 2>/dev/null || true
   end_browser="$(date +%s.%N)"
-  wait "$recorder" || true
-  for _ in $(seq 50); do docker exec "$name" pgrep -x ffmpeg >/dev/null || break; sleep 0.2; done
+  wait "${recorder}" || true
+  for _ in $(seq 50); do docker exec "${name}" pgrep -x ffmpeg >/dev/null || break; sleep 0.2; done
   mark "recording ends"
   lead() { # master, stop time: seconds from the master's first frame to the zero of events.tsv
-    awk -v d="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$1")" -v e="$2" -v z="$t0" 'BEGIN{printf "%.2f", d - (e - z)}'
+    awk -v d="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$1")" -v e="$2" -v z="${t0}" 'BEGIN{printf "%.2f", d - (e - z)}'
   }
-  printf 'TAKX_LEAD=%s\nCLOUDTAK_LEAD=%s\n' "$(lead "$dir/master.mkv" "$end_takx")" "$(lead "$dir/cloudtak-master.mkv" "$end_browser")" >"$dir/offsets.env"
+  printf 'TAKX_LEAD=%s\nCLOUDTAK_LEAD=%s\n' "$(lead "${dir}/master.mkv" "${end_takx}")" "$(lead "${dir}/cloudtak-master.mkv" "${end_browser}")" >"${dir}/offsets.env"
 
-  wait "$peer" || true
-  wait "$outsider" || true
-  [[ -s "$dir/master.mkv" && -s "$dir/cloudtak-master.mkv" && -s "$dir/events.tsv" ]] ||
-    { status failed 0 "a master recording is missing; see $dir"; exit 1; }
-  "$connect" evidence stream --name "capture-stream" >/dev/null || true
-  "$connect" evidence stream --identity takx-cloudtak --name "capture-stream-cloudtak" >/dev/null || true
-  "$connect" evidence search "SYNTHETIC-TAKX-$n" --name "capture-takx-marker" >/dev/null || true
-  "$connect" evidence search "SYNTHETIC-PEER-$n" --name "capture-peer-marker" >/dev/null || true
-  echo "$attempt" >"$root/connect/capture-current"
-  status recorded 0 "attempt $attempt: masters recorded; run finish"
-  echo "capture-connected: recorded $dir/master.mkv and cloudtak-master.mkv" >&2
+  wait "${peer}" || true
+  wait "${outsider}" || true
+  [[ -s "${dir}/master.mkv" && -s "${dir}/cloudtak-master.mkv" && -s "${dir}/events.tsv" ]] ||
+    { status failed 0 "a master recording is missing; see ${dir}"; exit 1; }
+  "${connect}" evidence stream --name "capture-stream" >/dev/null || true
+  "${connect}" evidence stream --identity takx-cloudtak --name "capture-stream-cloudtak" >/dev/null || true
+  "${connect}" evidence search "SYNTHETIC-TAKX-${n}" --name "capture-takx-marker" >/dev/null || true
+  "${connect}" evidence search "SYNTHETIC-PEER-${n}" --name "capture-peer-marker" >/dev/null || true
+  echo "${attempt}" >"${root}/connect/capture-current"
+  status recorded 0 "attempt ${attempt}: masters recorded; run finish"
+  echo "capture-connected: recorded ${dir}/master.mkv and cloudtak-master.mkv" >&2
 }
 
 do_finish() {
   local attempt dir start
-  attempt="$(cat "$root/connect/capture-current")"; dir="$root/connect/$attempt/capture"; start=$(date +%s)
+  attempt="$(cat "${root}/connect/capture-current")"; dir="${root}/connect/${attempt}/capture"; start=$(date +%s)
   # shellcheck disable=SC2016
-  "$run" --runtime --mount "$media:$media" -e "DIR=$dir" -e "OUT=$media" -- bash -euo pipefail -c '
+  "${run}" --runtime --mount "${media}:${media}" -e "DIR=${dir}" -e "OUT=${media}" -- bash -euo pipefail -c '
     at() { awk -F"\t" -v k="$1" "index(\$3,k)==1{print \$1; exit}" "$DIR/events.tsv"; }
     enc() { # output start duration
       ffmpeg -nostdin -loglevel error -y -ss "$2" -t "$3" -i "$DIR/$MASTER" -an -vf fps=30,format=yuv420p \
@@ -291,7 +291,7 @@ do_finish() {
     { printf "# seconds (add %s for the position in the TAKX takes, %s in the CloudTAK takes)\tUTC\taction\n" "$TAKX_LEAD" "$CLOUDTAK_LEAD"
       cat "$DIR/events.tsv"; } >"$OUT/takx57-connected-events.tsv"
   '
-  python3 -I - "$media" "$dir" "$attempt" <<'PY'
+  python3 -I - "${media}" "${dir}" "${attempt}" <<'PY'
 import glob, hashlib, json, os, re, sys
 media, source, attempt = sys.argv[1:]
 report = {'attempt': attempt, 'masters': [os.path.join(source, 'master.mkv'), os.path.join(source, 'cloudtak-master.mkv')], 'files': {}}
@@ -337,9 +337,9 @@ for name, item in report['files'].items():
 sys.exit(0 if ok else 1)
 PY
   status ok "$(($(date +%s) - start))" \
-    "attempt $attempt: lossless x11grab master and H.264 yuv420p 1920x1080 30 fps deliverables in demo/out/takx (git-ignored, never committed); ffprobe, signalstats and freezedetect checks passed (capture-connected.json). 'ok' is the automatic media check only: what the frames show and the connection evidence are in STATUS.md and demo/out/takx/PROVENANCE.md" \
-    "$media/capture-connected.json" "$dir/master.mkv" "$dir/cloudtak-master.mkv" "$dir/events.tsv" \
-    "$dir/cloudtak-place.json" "$dir/cloudtak-find.json" "$dir/peer.json" "$dir/outsider.json"
+    "attempt ${attempt}: lossless x11grab master and H.264 yuv420p 1920x1080 30 fps deliverables in demo/out/takx (git-ignored, never committed); ffprobe, signalstats and freezedetect checks passed (capture-connected.json). 'ok' is the automatic media check only: what the frames show and the connection evidence are in STATUS.md and demo/out/takx/PROVENANCE.md" \
+    "${media}/capture-connected.json" "${dir}/master.mkv" "${dir}/cloudtak-master.mkv" "${dir}/events.tsv" \
+    "${dir}/cloudtak-place.json" "${dir}/cloudtak-find.json" "${dir}/peer.json" "${dir}/outsider.json"
 }
 
 case "${1:-}" in

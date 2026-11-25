@@ -68,22 +68,22 @@ if [[ -f "${here}/../arch.sh" ]]; then
   . "${here}/../arch.sh"
   takx_arch_enter "${BASH_SOURCE[0]}" "$@"
 fi
-repo="$(cd "$here/../../.." && pwd)"
+repo="$(cd "${here}/../../.." && pwd)"
 root="${TAKX_PROTO_ROOT:-/var/lib/takx-proto}"
-run="$repo/takx/desktop-prototype/run-in-toolchain.sh"
+run="${repo}/takx/desktop-prototype/run-in-toolchain.sh"
 jdk=/tools/temurin-17.0.21_9/jdk-17.0.21+9
-atak="$repo/upstream/atak-civ"
+atak="${repo}/upstream/atak-civ"
 fetch="${TAKX_LANE4_FETCH:-1}"
 # providers.json describes the default invocation; any other one is not cached.
-[[ "$fetch" == 1 ]] || TAKX_PROTO_CACHE=off
+[[ "${fetch}" == 1 ]] || TAKX_PROTO_CACHE=off
 
-mkdir -p "$root"/{P,failed,logs,status,cache-lane4}
+mkdir -p "${root}"/{P,failed,logs,status,cache-lane4}
 
 log() { printf '%s lane4: %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
 
 write_status() { # stage status seconds notes outputs...
   local stage="$1" status="$2" seconds="$3" notes="$4"; shift 4
-  python3 -I - "$root/status/$stage.json" "$stage" "$status" "$seconds" "$notes" "$@" <<'PY'
+  python3 -I - "${root}/status/${stage}.json" "${stage}" "${status}" "${seconds}" "${notes}" "$@" <<'PY'
 import json, os, sys
 path, stage, status, seconds, notes, *outputs = sys.argv[1:]
 tmp = path + '.tmp.%d' % os.getpid()
@@ -96,7 +96,7 @@ PY
 }
 
 status_of() { # stage -> ok|failed|missing
-  python3 -I - "$root/status/$1.json" <<'PY' 2>/dev/null || echo missing
+  python3 -I - "${root}/status/$1.json" <<'PY' 2>/dev/null || echo missing
 import json, sys
 print(json.load(open(sys.argv[1]))['status'])
 PY
@@ -104,17 +104,17 @@ PY
 
 set_aside() { # stage: move an existing output dir to failed/<stage>-<n>
   local name="$1" n=1
-  [[ -e "$root/P/$name" ]] || return 0
-  while [[ -e "$root/failed/$name-$n" ]]; do n=$((n + 1)); done
-  mv "$root/P/$name" "$root/failed/$name-$n"
-  log "moved previous P/$name to failed/$name-$n"
+  [[ -e "${root}/P/${name}" ]] || return 0
+  while [[ -e "${root}/failed/${name}-${n}" ]]; do n=$((n + 1)); done
+  mv "${root}/P/${name}" "${root}/failed/${name}-${n}"
+  log "moved previous P/${name} to failed/${name}-${n}"
 }
 
 need() { # stage dependency marker-relative-to-P/dependency
   local stage="$1" dep="$2" marker="$3"
-  if [[ "$(status_of "$dep")" != ok || ! -s "$root/P/$dep/$marker" ]]; then
-    log "$stage is blocked: prerequisite '$dep' is not ok"
-    write_status "$stage" failed 0 "blocked: prerequisite $dep is not ok; recipe not run"
+  if [[ "$(status_of "${dep}")" != ok || ! -s "${root}/P/${dep}/${marker}" ]]; then
+    log "${stage} is blocked: prerequisite '${dep}' is not ok"
+    write_status "${stage}" failed 0 "blocked: prerequisite ${dep} is not ok; recipe not run"
     return 1
   fi
 }
@@ -123,18 +123,18 @@ need() { # stage dependency marker-relative-to-P/dependency
 # first asks the cache for a verified copy of its output and is built only when
 # there is none; a fresh ok output is offered to the cache. Neither can fail a
 # stage, and TAKX_PROTO_CACHE=off skips both.
-cache="$repo/takx/desktop-prototype/provider_cache.py"
+cache="${repo}/takx/desktop-prototype/provider_cache.py"
 
 cache_restored() { # stage marker: 0 when the cache installed a verified P/<stage>
   [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 1
-  python3 -I "$cache" restore "$1" >>"$root/logs/provider-cache.log" 2>&1 || return 1
-  if [[ "$(status_of "$1")" == ok && -s "$root/P/$1/$2" ]]; then return 0; fi
+  python3 -I "${cache}" restore "$1" >>"${root}/logs/provider-cache.log" 2>&1 || return 1
+  if [[ "$(status_of "$1")" == ok && -s "${root}/P/$1/$2" ]]; then return 0; fi
   set_aside "$1"; return 1
 }
 
 cache_push() { # stage: best effort
   [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 0
-  python3 -I "$cache" push "$1" >>"$root/logs/provider-cache.log" 2>&1 \
+  python3 -I "${cache}" push "$1" >>"${root}/logs/provider-cache.log" 2>&1 \
     || log "$1 was not pushed to the provider cache; see logs/provider-cache.log"
   return 0
 }
@@ -145,105 +145,105 @@ cache_push() { # stage: best effort
 # listed output exist and the tests pass.
 stage() {
   local name="$1" recipe="$2" marker="$3" verifyenv="$4" outs="$5"; shift 6
-  local out="$root/P/$name" logf="$root/logs/$name.log" vlog="$root/logs/$name-verify.log"
+  local out="${root}/P/${name}" logf="${root}/logs/${name}.log" vlog="${root}/logs/${name}-verify.log"
   local start rc seconds item outputs=() envargs=() venv=()
   while [[ "$1" != -- ]]; do envargs+=(-e "$1"); shift; done
   shift
-  if [[ "$(status_of "$name")" == ok && -s "$out/$marker" ]]; then
-    log "$name already ok, skipping"; return 0
+  if [[ "$(status_of "${name}")" == ok && -s "${out}/${marker}" ]]; then
+    log "${name} already ok, skipping"; return 0
   fi
-  set_aside "$name"
-  if cache_restored "$name" "$marker"; then
-    log "$name restored from the provider cache, build skipped"; return 0
+  set_aside "${name}"
+  if cache_restored "${name}" "${marker}"; then
+    log "${name} restored from the provider cache, build skipped"; return 0
   fi
-  docker rm -f "takx-$name" >/dev/null 2>&1 || true
+  docker rm -f "takx-${name}" >/dev/null 2>&1 || true
   start=$(date +%s)
-  printf '\n===== %s lane4 %s: %s\n' "$(date -u +%FT%TZ)" "$name" "$*" >>"$logf"
-  log "$name: running takx/$recipe (log $logf)"
-  "$run" -d --name "takx-$name" --log "$logf" "${envargs[@]}" -- "$@" >/dev/null
-  rc="$(docker wait "takx-$name")"
-  docker rm "takx-$name" >/dev/null 2>&1 || true
+  printf '\n===== %s lane4 %s: %s\n' "$(date -u +%FT%TZ)" "${name}" "$*" >>"${logf}"
+  log "${name}: running takx/${recipe} (log ${logf})"
+  "${run}" -d --name "takx-${name}" --log "${logf}" "${envargs[@]}" -- "$@" >/dev/null
+  rc="$(docker wait "takx-${name}")"
+  docker rm "takx-${name}" >/dev/null 2>&1 || true
   seconds=$(($(date +%s) - start))
-  if [[ "$rc" != 0 || ! -s "$out/$marker" ]]; then
-    log "$name: recipe failed (exit $rc) after ${seconds}s"
-    write_status "$name" failed "$seconds" "takx/$recipe exit $rc; see logs/$name.log and the retained output directory"
+  if [[ "${rc}" != 0 || ! -s "${out}/${marker}" ]]; then
+    log "${name}: recipe failed (exit ${rc}) after ${seconds}s"
+    write_status "${name}" failed "${seconds}" "takx/${recipe} exit ${rc}; see logs/${name}.log and the retained output directory"
     return 1
   fi
-  IFS=, read -r -a outputs <<<"$outs"
+  IFS=, read -r -a outputs <<<"${outs}"
   for item in "${!outputs[@]}"; do
-    [[ -e "$out/${outputs[$item]}" ]] || {
-      write_status "$name" failed "$seconds" "expected output ${outputs[$item]} is missing"; return 1; }
-    outputs[$item]="$out/${outputs[$item]}"
+    [[ -e "${out}/${outputs[${item}]}" ]] || {
+      write_status "${name}" failed "${seconds}" "expected output ${outputs[${item}]} is missing"; return 1; }
+    outputs[${item}]="${out}/${outputs[${item}]}"
   done
-  for item in $verifyenv; do venv+=(-e "$item"); done
-  printf '\n===== %s lane4 %s: unittest test*.py %s\n' "$(date -u +%FT%TZ)" "$name" "$verifyenv" >>"$vlog"
-  if ! "$run" -e "PATH=$jdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-      -e "JAVA_HOME=$jdk" "${venv[@]}" -- python3 -B -m unittest discover \
-      -s "$repo/takx/$recipe" -p 'test*.py' -v >>"$vlog" 2>&1; then
+  for item in ${verifyenv}; do venv+=(-e "${item}"); done
+  printf '\n===== %s lane4 %s: unittest test*.py %s\n' "$(date -u +%FT%TZ)" "${name}" "${verifyenv}" >>"${vlog}"
+  if ! "${run}" -e "PATH=${jdk}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+      -e "JAVA_HOME=${jdk}" "${venv[@]}" -- python3 -B -m unittest discover \
+      -s "${repo}/takx/${recipe}" -p 'test*.py' -v >>"${vlog}" 2>&1; then
     seconds=$(($(date +%s) - start))
-    log "$name: recipe passed but its tests failed"
-    write_status "$name" failed "$seconds" "recipe exit 0 but its tests failed; see logs/$name-verify.log"
+    log "${name}: recipe passed but its tests failed"
+    write_status "${name}" failed "${seconds}" "recipe exit 0 but its tests failed; see logs/${name}-verify.log"
     return 1
   fi
   seconds=$(($(date +%s) - start))
-  write_status "$name" ok "$seconds" \
-    "takx/$recipe exit 0; its tests (test*.py) passed ($(tail -n 3 "$vlog" | tr '\n' ' ' | sed 's/  */ /g')); $marker sha256 $(sha256sum "$out/$marker" | cut -d' ' -f1); compile-only, no native library loaded${extra_note:+; $extra_note}" \
+  write_status "${name}" ok "${seconds}" \
+    "takx/${recipe} exit 0; its tests (test*.py) passed ($(tail -n 3 "${vlog}" | tr '\n' ' ' | sed 's/  */ /g')); ${marker} sha256 $(sha256sum "${out}/${marker}" | cut -d' ' -f1); compile-only, no native library loaded${extra_note:+; ${extra_note}}" \
     "${outputs[@]}"
-  log "$name: ok in ${seconds}s"
-  cache_push "$name"
+  log "${name}: ok in ${seconds}s"
+  cache_push "${name}"
 }
 
-javapath="PATH=$jdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+javapath="PATH=${jdk}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 stage_gis_java() {
   # gis-java is configured by environment and builds in place; a directory
   # left with .building by an interrupted run is refused by the recipe, so it
   # is set aside by stage() like any other failed output.
   local offline=true
-  [[ "$fetch" == 1 ]] && offline=false
+  [[ "${fetch}" == 1 ]] && offline=false
   local extra_note="SWIG 4.3.0 sources generated from the two atak-civ archives; jar hashes are not reproducible (jar --create), kernel-java checks the class bytes"
   stage gis-java gis-java build-state.json "" \
     build-state.json,gdal-2.4.4-mod-java.jar,assimp-4.0.1-mod-jassimp-java.jar -- \
-    "$javapath" "GIS_JAVA_SWIG=/usr/bin/swig" "GIS_JAVA_CACHE_DIR=$root/cache-gis-java" \
-    "GIS_JAVA_BUILD_DIR=$root/P/gis-java" "GIS_JAVA_OFFLINE=$offline" -- \
-    python3 -B "$repo/takx/gis-java/build.py"
+    "${javapath}" "GIS_JAVA_SWIG=/usr/bin/swig" "GIS_JAVA_CACHE_DIR=${root}/cache-gis-java" \
+    "GIS_JAVA_BUILD_DIR=${root}/P/gis-java" "GIS_JAVA_OFFLINE=${offline}" -- \
+    python3 -B "${repo}/takx/gis-java/build.py"
 }
 
 stage_kernel_java() {
   need kernel-java gis-java build-state.json || return 1
   # The recipe may add downloaded JARs to --classpath-dir, so it gets its own
   # copy of the fetched by-name inputs; every JAR is hash-checked by the recipe.
-  local cp="$root/cache-lane4/kernel-java-classpath" flags=()
-  mkdir -p "$cp"
+  local cp="${root}/cache-lane4/kernel-java-classpath" flags=()
+  mkdir -p "${cp}"
   local jar
-  for jar in "$root"/inputs/kernel-java/*.jar; do
-    [[ -e "$cp/$(basename "$jar")" ]] || cp "$jar" "$cp"/
+  for jar in "${root}"/inputs/kernel-java/*.jar; do
+    [[ -e "${cp}/$(basename "${jar}")" ]] || cp "${jar}" "${cp}"/
   done
-  [[ "$fetch" == 1 ]] && flags=(--fetch-dependencies)
+  [[ "${fetch}" == 1 ]] && flags=(--fetch-dependencies)
   local extra_note="scope engine-shared, profile patched, --jni-headers; output must not be moved (inputs.json holds absolute paths)"
   stage kernel-java kernel-java result.json "" \
     result.json,inputs.json,classes,jni-headers,classpath,class-hashes.json,jni-header-hashes.json -- \
-    "$javapath" -- \
-    python3 -B "$repo/takx/kernel-java/build.py" --scope engine-shared --profile patched \
-    --source "$atak" --classpath-dir "$cp" --gis-build "$root/P/gis-java" \
-    --output "$root/P/kernel-java" --java-home "$jdk" "${flags[@]}" --jni-headers
+    "${javapath}" -- \
+    python3 -B "${repo}/takx/kernel-java/build.py" --scope engine-shared --profile patched \
+    --source "${atak}" --classpath-dir "${cp}" --gis-build "${root}/P/gis-java" \
+    --output "${root}/P/kernel-java" --java-home "${jdk}" "${flags[@]}" --jni-headers
 }
 
 stage_gdal_jni() {
   # lane3.sh owns the native-gdal-jni invocation (flags per the native-kernel
   # map, step 16); this lane only supplies the gis-java build it waits for.
   need gdal-jni gis-java build-state.json || return 1
-  TAKX_LANE3_GIS_BUILD="$root/P/gis-java" TAKX_LANE3_WAIT_S=0 "$here/lane3.sh" gdal-jni
+  TAKX_LANE3_GIS_BUILD="${root}/P/gis-java" TAKX_LANE3_WAIT_S=0 "${here}/lane3.sh" gdal-jni
 }
 
 worldwind() { # stage-name jar-name [--interop]
   local name="$1" jar="$2"; shift 2
-  need "$name" gis-java build-state.json || return 1
-  stage "$name" worldwind-java build-state.json "" "build-state.json,$jar" -- \
-    "$javapath" -- \
-    python3 -B "$repo/takx/worldwind-java/build.py" "$@" --source "$root/src/WorldWindJava" \
-    --public-jars "$root/inputs/worldwind-java" --gis-build "$root/P/gis-java" \
-    --output "$root/P/$name"
+  need "${name}" gis-java build-state.json || return 1
+  stage "${name}" worldwind-java build-state.json "" "build-state.json,${jar}" -- \
+    "${javapath}" -- \
+    python3 -B "${repo}/takx/worldwind-java/build.py" "$@" --source "${root}/src/WorldWindJava" \
+    --public-jars "${root}/inputs/worldwind-java" --gis-build "${root}/P/gis-java" \
+    --output "${root}/P/${name}"
 }
 
 stage_worldwind_java() {
@@ -258,18 +258,18 @@ stage_worldwind_interop() {
 
 stage_consumers57() {
   local extra_note="staged from official TAKX 5.7 0b59a9bb; test_stage.py reran exact staging with TAKX_SOURCE_DIR"
-  stage consumers57 worldwind-consumers staging-receipt.json "TAKX_SOURCE_DIR=$root/src/takx57" \
-    staging-receipt.json,Platform,Client -- "$javapath" -- \
-    python3 -B "$repo/takx/worldwind-consumers/stage.py" --source "$root/src/takx57" \
-    --output "$root/P/consumers57"
+  stage consumers57 worldwind-consumers staging-receipt.json "TAKX_SOURCE_DIR=${root}/src/takx57" \
+    staging-receipt.json,Platform,Client -- "${javapath}" -- \
+    python3 -B "${repo}/takx/worldwind-consumers/stage.py" --source "${root}/src/takx57" \
+    --output "${root}/P/consumers57"
 }
 
 ui() { # stage-name profile outputs
   local name="$1" profile="$2" outs="$3"
-  stage "$name" ui-java receipt.json "" "receipt.json,$outs" -- "$javapath" -- \
-    python3 -B "$repo/takx/ui-java/build.py" --sources-dir "$root/inputs/ui-java" \
-    --classpath-dir "$root/inputs/ui-java" --java-home "$jdk" --profile "$profile" \
-    --output "$root/P/$name" --failure-report "$root/logs/$name-failure-$(date +%s).json"
+  stage "${name}" ui-java receipt.json "" "receipt.json,${outs}" -- "${javapath}" -- \
+    python3 -B "${repo}/takx/ui-java/build.py" --sources-dir "${root}/inputs/ui-java" \
+    --classpath-dir "${root}/inputs/ui-java" --java-home "${jdk}" --profile "${profile}" \
+    --output "${root}/P/${name}" --failure-report "${root}/logs/${name}-failure-$(date +%s).json"
 }
 
 stage_ui_original() {
@@ -289,7 +289,7 @@ stage_java_classpath() {
   # rebuilt project artifact normally differs from the frozen lock digest.
   local start seconds
   start=$(date +%s)
-  if ! python3 -I - "$root" "$repo/takx/client-compiler/inputs.lock.json" <<'PY'
+  if ! python3 -I - "${root}" "${repo}/takx/client-compiler/inputs.lock.json" <<'PY'
 import hashlib, json, os, sys
 root, lock_path = sys.argv[1:]
 lock = json.load(open(lock_path))
@@ -408,17 +408,17 @@ PY
 extra_note=""
 failed=0
 for target in "$@"; do
-  case "$target" in
+  case "${target}" in
     all)
       # Later stages check their own prerequisites, so one failure blocks only
       # the stages that depend on it.
       for name in gis_java kernel_java gdal_jni worldwind_java worldwind_interop consumers57 \
           ui_original ui_wizard_reference java_classpath; do
-        "stage_$name" || failed=1
+        "stage_${name}" || failed=1
       done;;
     gis-java|kernel-java|gdal-jni|worldwind-java|worldwind-interop|consumers57|ui-original|ui-wizard-reference|java-classpath)
       "stage_${target//-/_}" || failed=1;;
-    *) echo "lane4.sh: unknown stage '$target'" >&2; exit 2;;
+    *) echo "lane4.sh: unknown stage '${target}'" >&2; exit 2;;
   esac
 done
-exit "$failed"
+exit "${failed}"

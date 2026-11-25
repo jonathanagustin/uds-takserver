@@ -42,7 +42,7 @@ for url in "https://sso.${DOMAIN}/realms/uds/.well-known/openid-configuration" "
   curl -sS -o /dev/null -w "%{http_code} %{remote_ip} ${url}\n" "${url}" || fail=1
 done
 
-if [ -s "${dir}/client.pem" ]; then
+if [[ -s "${dir}/client.pem" ]]; then
   note "mutual TLS as ${identity}: TAK CA as the only trust root, server name ${TAK_CERT_NAME} checked"
   if openssl s_client -connect "${PASSTHROUGH_GATEWAY_IP}:${TAK_STREAM_PORT}" \
       -CAfile "${dir}/ca.pem" -verify_return_error -verify_hostname "${TAK_CERT_NAME}" \

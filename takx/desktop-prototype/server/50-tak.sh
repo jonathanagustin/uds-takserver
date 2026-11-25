@@ -14,7 +14,7 @@ mkdir -p "${out}"
 cd "${WORK}"
 pattern="${out}/uds-bundle-takx-proto-tak-amd64-*.tar.zst"
 bundle="$(compgen -G "${pattern}" | head -1 || true)"
-if [ -z "${bundle}" ]; then
+if [[ -z "${bundle}" ]]; then
   "${UDS}" create "${here}/tak" --confirm --no-color --output "${out}"
   bundle="$(compgen -G "${pattern}" | head -1)"
 fi

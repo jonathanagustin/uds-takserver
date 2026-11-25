@@ -11,7 +11,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 . "${here}/env.sh"
 
 pinned="$(sed -n 's/^"aqua:defenseunicorns\/uds-cli" = "\(.*\)"$/\1/p' "${here}/../../../mise.toml")"
-if [ "${pinned}" != "${UDS_VERSION}" ]; then
+if [[ "${pinned}" != "${UDS_VERSION}" ]]; then
   echo "mise.toml pins uds-cli ${pinned}, env.sh has ${UDS_VERSION}" >&2
   exit 1
 fi
@@ -19,7 +19,7 @@ dest="${TOOLS}/uds-${UDS_VERSION}"
 asset="uds-cli_v${UDS_VERSION}_Linux_amd64"
 base="https://github.com/defenseunicorns/uds-cli/releases/download/v${UDS_VERSION}"
 mkdir -p "${dest}"
-if [ ! -x "${dest}/uds" ]; then
+if [[ ! -x "${dest}/uds" ]]; then
   curl -sfL --retry 3 -o "${dest}/${asset}" "${base}/${asset}"
   curl -sfL --retry 3 -o "${dest}/checksums.txt" "${base}/checksums.txt"
   (cd "${dest}" && grep " ${asset}\$" checksums.txt | sha256sum -c -)

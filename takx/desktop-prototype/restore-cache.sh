@@ -21,8 +21,8 @@ if [[ $# -gt 0 && "$1" == *.tsv ]]; then
   shift
 fi
 rc=0
-python3 -I "$here/provider_cache.py" restore "$@" || rc=$?
+python3 -I "${here}/provider_cache.py" restore "$@" || rc=$?
 # 3 means some provider was skipped cleanly (nothing cached, already built
 # prerequisites missing, cache off); the lanes build those.
-if [[ "$rc" == 3 ]]; then exit 0; fi
-exit "$rc"
+if [[ "${rc}" == 3 ]]; then exit 0; fi
+exit "${rc}"

@@ -32,16 +32,16 @@ if [[ -f "${here}/../arch.sh" ]]; then
   . "${here}/../arch.sh"
   takx_arch_enter "${BASH_SOURCE[0]}" "$@"
 fi
-repo="$(cd "$here/../../.." && pwd)"
+repo="$(cd "${here}/../../.." && pwd)"
 ROOT="${TAKX_PROTO_ROOT:-/var/lib/takx-proto}"
-run="$here/../run-in-toolchain.sh"
-P="$ROOT/P"
+run="${here}/../run-in-toolchain.sh"
+P="${ROOT}/P"
 wait_limit="${TAKX_PREREQ_TIMEOUT:-14400}"
-mkdir -p "$P" "$ROOT/logs" "$ROOT/status" "$ROOT/failed"
+mkdir -p "${P}" "${ROOT}/logs" "${ROOT}/status" "${ROOT}/failed"
 
 status() { # stage status seconds notes outputs...
   local stage="$1" state="$2" seconds="$3" notes="$4"; shift 4
-  python3 -I - "$ROOT/status/$stage.json" "$stage" "$state" "$seconds" "$notes" "$@" <<'PY'
+  python3 -I - "${ROOT}/status/${stage}.json" "${stage}" "${state}" "${seconds}" "${notes}" "$@" <<'PY'
 import json, os, sys
 path, stage, state, seconds, notes, *outputs = sys.argv[1:]
 tmp = path + '.tmp'
@@ -56,7 +56,7 @@ PY
 status_of() { # stage -> ok|failed|blocked|missing
   python3 -I -c 'import json,sys
 try: print(json.load(open(sys.argv[1])).get("status","missing"))
-except Exception: print("missing")' "$ROOT/status/$1.json"
+except Exception: print("missing")' "${ROOT}/status/$1.json"
 }
 
 wait_for() { # stage...; returns 0 when all ok, 1 when one failed or timed out
@@ -64,56 +64,56 @@ wait_for() { # stage...; returns 0 when all ok, 1 when one failed or timed out
   while :; do
     pending=""
     for stage in "$@"; do
-      state="$(status_of "$stage")"
-      case "$state" in
+      state="$(status_of "${stage}")"
+      case "${state}" in
         ok) ;;
-        failed|blocked) echo "lane1: prerequisite $stage reports $state" >&2; return 1;;
-        *) pending+=" $stage";;
+        failed|blocked) echo "lane1: prerequisite ${stage} reports ${state}" >&2; return 1;;
+        *) pending+=" ${stage}";;
       esac
     done
-    [[ -z "$pending" ]] && return 0
-    if ((SECONDS >= deadline)); then echo "lane1: timed out waiting for$pending" >&2; return 1; fi
+    [[ -z "${pending}" ]] && return 0
+    if ((SECONDS >= deadline)); then echo "lane1: timed out waiting for${pending}" >&2; return 1; fi
     sleep 60
   done
 }
 
 set_aside() { # name: move an incomplete earlier output out of the way
   local name="$1" n=1
-  [[ -e "$P/$name" ]] || return 0
-  while [[ -e "$ROOT/failed/$name-$n" ]]; do n=$((n + 1)); done
-  mv "$P/$name" "$ROOT/failed/$name-$n"
-  [[ -f "$ROOT/logs/$name.log" ]] && mv "$ROOT/logs/$name.log" "$ROOT/failed/$name-$n.log"
-  echo "lane1: moved earlier incomplete $name to $ROOT/failed/$name-$n" >&2
+  [[ -e "${P}/${name}" ]] || return 0
+  while [[ -e "${ROOT}/failed/${name}-${n}" ]]; do n=$((n + 1)); done
+  mv "${P}/${name}" "${ROOT}/failed/${name}-${n}"
+  [[ -f "${ROOT}/logs/${name}.log" ]] && mv "${ROOT}/logs/${name}.log" "${ROOT}/failed/${name}-${n}.log"
+  echo "lane1: moved earlier incomplete ${name} to ${ROOT}/failed/${name}-${n}" >&2
 }
 
 already_ok() { # name marker
-  [[ -f "$P/$1/$2" && "$(status_of "$1")" == ok ]]
+  [[ -f "${P}/$1/$2" && "$(status_of "$1")" == ok ]]
 }
 
 # Input-keyed provider cache (../provider_cache.py, ../providers.json). A step
 # first asks the cache for a verified copy of its output and builds only when
 # there is none; a fresh ok output is offered to the cache. Neither can fail a
 # step, and TAKX_PROTO_CACHE=off skips both.
-cache="$here/../provider_cache.py"
+cache="${here}/../provider_cache.py"
 
 cache_restored() { # name marker: 0 when the cache installed a verified P/<name>
   [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 1
-  python3 -I "$cache" restore "$1" >>"$ROOT/logs/provider-cache.log" 2>&1 || return 1
+  python3 -I "${cache}" restore "$1" >>"${ROOT}/logs/provider-cache.log" 2>&1 || return 1
   already_ok "$1" "$2" && return 0
   set_aside "$1"; return 1
 }
 
 cache_push() { # name: best effort
   [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 0
-  python3 -I "$cache" push "$1" >>"$ROOT/logs/provider-cache.log" 2>&1 \
-    || echo "lane1: $1 was not pushed to the provider cache; see $ROOT/logs/provider-cache.log" >&2
+  python3 -I "${cache}" push "$1" >>"${ROOT}/logs/provider-cache.log" 2>&1 \
+    || echo "lane1: $1 was not pushed to the provider cache; see ${ROOT}/logs/provider-cache.log" >&2
   return 0
 }
 
 recipe() { # name -- command...; runs in the toolchain image, log in logs/<name>.log
   local name="$1"; shift 2
-  docker rm -f "takx-$name" >/dev/null 2>&1
-  "$run" --name "takx-$name" --log "$ROOT/logs/$name.log" -e PYTHONDONTWRITEBYTECODE=1 -- "$@" </dev/null
+  docker rm -f "takx-${name}" >/dev/null 2>&1
+  "${run}" --name "takx-${name}" --log "${ROOT}/logs/${name}.log" -e PYTHONDONTWRITEBYTECODE=1 -- "$@" </dev/null
 }
 
 CHECK_PY=$(cat <<'PY'
@@ -175,19 +175,19 @@ PY
 
 check() { # name: receipt checks, inside the same image (tool paths and hashes are image-specific)
   # The wrapper does not attach stdin, so the program is passed as an argument.
-  "$run" -e PYTHONDONTWRITEBYTECODE=1 -- /usr/bin/python3 -I -B -c "$CHECK_PY" "$1" "$P"
+  "${run}" -e PYTHONDONTWRITEBYTECODE=1 -- /usr/bin/python3 -I -B -c "${CHECK_PY}" "$1" "${P}"
 }
 
 finish() { # name rc started notes-when-ok outputs...
   local name="$1" rc="$2" started="$3" notes="$4"; shift 4
   local seconds=$((SECONDS - started)) verdict
-  if ((rc == 0)) && verdict="$(check "$name" 2>&1)"; then
-    echo "lane1: $verdict"
-    status "$name" ok "$seconds" "$notes $verdict" "$@"
+  if ((rc == 0)) && verdict="$(check "${name}" 2>&1)"; then
+    echo "lane1: ${verdict}"
+    status "${name}" ok "${seconds}" "${notes} ${verdict}" "$@"
     return 0
   fi
-  echo "lane1: $name FAILED (recipe exit $rc) ${verdict-}; log $ROOT/logs/$name.log" >&2
-  status "$name" failed "$seconds" "recipe exit $rc; ${verdict-}; see $ROOT/logs/$name.log and $P/$name" "$@"
+  echo "lane1: ${name} FAILED (recipe exit ${rc}) ${verdict-}; log ${ROOT}/logs/${name}.log" >&2
+  status "${name}" failed "${seconds}" "recipe exit ${rc}; ${verdict-}; see ${ROOT}/logs/${name}.log and ${P}/${name}" "$@"
   return 1
 }
 
@@ -195,11 +195,11 @@ do_sqlcipher() {
   already_ok sqlcipher complete.json && { echo "lane1: sqlcipher already ok"; return 0; }
   set_aside sqlcipher
   cache_restored sqlcipher complete.json && { echo "lane1: sqlcipher restored from the provider cache"; return 0; }
-  local t=$SECONDS
-  recipe sqlcipher -- /usr/bin/python3 -B "$repo/takx/native-sqlcipher/build.py" \
-    --cache "$ROOT/cache" --output "$P/sqlcipher" --jobs 1
-  finish sqlcipher $? $t "native-sqlcipher/build.py --jobs 1 (Tcl 8.6.18, OpenSSL 3.5.9, SQLCipher 4.5.7)." \
-    "$P/sqlcipher" && cache_push sqlcipher
+  local t=${SECONDS}
+  recipe sqlcipher -- /usr/bin/python3 -B "${repo}/takx/native-sqlcipher/build.py" \
+    --cache "${ROOT}/cache" --output "${P}/sqlcipher" --jobs 1
+  finish sqlcipher $? "${t}" "native-sqlcipher/build.py --jobs 1 (Tcl 8.6.18, OpenSSL 3.5.9, SQLCipher 4.5.7)." \
+    "${P}/sqlcipher" && cache_push sqlcipher
 }
 
 do_cesium_acq() {
@@ -208,14 +208,14 @@ do_cesium_acq() {
   wait_for draco || { status cesium-acq blocked 0 "prerequisite draco (lane 3) is not ok"; return 1; }
   set_aside cesium-acq
   cache_restored cesium-acq acquired.json && { echo "lane1: cesium-acq restored from the provider cache"; return 0; }
-  local t=$SECONDS
+  local t=${SECONDS}
   # The cache holds the 25 pinned archives placed by fetch.sh; acquire.py checks
   # each against its SHA-512 pin (Cesium against its Git blob tree) and would
   # only download an archive that is absent.
-  recipe cesium-acq -- /usr/bin/python3 -B "$repo/takx/native-cesium/acquire.py" \
-    --output "$P/cesium-acq" --cache "$ROOT/cache-cesium" \
-    --sqlcipher-proof "$P/sqlcipher" --draco-proof "$P/draco"
-  finish cesium-acq $? $t "native-cesium/acquire.py over the pre-verified cache-cesium (offline)." "$P/cesium-acq" \
+  recipe cesium-acq -- /usr/bin/python3 -B "${repo}/takx/native-cesium/acquire.py" \
+    --output "${P}/cesium-acq" --cache "${ROOT}/cache-cesium" \
+    --sqlcipher-proof "${P}/sqlcipher" --draco-proof "${P}/draco"
+  finish cesium-acq $? "${t}" "native-cesium/acquire.py over the pre-verified cache-cesium (offline)." "${P}/cesium-acq" \
     && cache_push cesium-acq
 }
 
@@ -224,11 +224,11 @@ do_cesium() {
   [[ "$(status_of cesium-acq)" == ok ]] || { status cesium blocked 0 "cesium-acq is not ok"; return 1; }
   set_aside cesium
   cache_restored cesium complete.json && { echo "lane1: cesium restored from the provider cache"; return 0; }
-  local t=$SECONDS
-  recipe cesium -- /usr/bin/python3 -B "$repo/takx/native-cesium/build.py" \
-    --sources "$P/cesium-acq" --output "$P/cesium" \
-    --sqlcipher-proof "$P/sqlcipher" --draco-proof "$P/draco"
-  finish cesium $? $t "native-cesium/build.py, fresh single pass, no --resume." "$P/cesium" "$P/cesium-acq" \
+  local t=${SECONDS}
+  recipe cesium -- /usr/bin/python3 -B "${repo}/takx/native-cesium/build.py" \
+    --sources "${P}/cesium-acq" --output "${P}/cesium" \
+    --sqlcipher-proof "${P}/sqlcipher" --draco-proof "${P}/draco"
+  finish cesium $? "${t}" "native-cesium/build.py, fresh single pass, no --resume." "${P}/cesium" "${P}/cesium-acq" \
     && cache_push cesium
 }
 
@@ -238,25 +238,25 @@ do_kml() {
   wait_for las assimp scene || { status kml blocked 0 "prerequisite las/assimp/scene (other lanes) is not ok"; return 1; }
   set_aside kml
   cache_restored kml complete.json && { echo "lane1: kml restored from the provider cache"; return 0; }
-  local t=$SECONDS
-  recipe kml -- /usr/bin/python3 -B "$repo/takx/native-kml/build.py" \
-    --output "$P/kml" \
-    --libkml-archive "$ROOT/src/atak-civ-lfs/takthirdparty/distfiles/libkml.tar.gz" \
-    --expat-archive "$ROOT/inputs/native-kml/expat-2.10.0.tar.xz" \
-    --las-proof "$P/las" --assimp-proof "$P/assimp" \
-    --minizip-root "$P/scene" --minizip-proof "$P/scene" \
-    --cesium-proof "$P/cesium"
-  finish kml $? $t "native-kml/build.py with a fresh Cesium producer (no stopped snapshot)." "$P/kml" \
+  local t=${SECONDS}
+  recipe kml -- /usr/bin/python3 -B "${repo}/takx/native-kml/build.py" \
+    --output "${P}/kml" \
+    --libkml-archive "${ROOT}/src/atak-civ-lfs/takthirdparty/distfiles/libkml.tar.gz" \
+    --expat-archive "${ROOT}/inputs/native-kml/expat-2.10.0.tar.xz" \
+    --las-proof "${P}/las" --assimp-proof "${P}/assimp" \
+    --minizip-root "${P}/scene" --minizip-proof "${P}/scene" \
+    --cesium-proof "${P}/cesium"
+  finish kml $? "${t}" "native-kml/build.py with a fresh Cesium producer (no stopped snapshot)." "${P}/kml" \
     && cache_push kml
 }
 
 (($#)) || set -- all
 # One driver at a time: two concurrent runs would set aside each other's outputs.
-exec 9>"$ROOT/status/.lane1.lock"
-flock -n 9 || { echo "lane1.sh: another lane1.sh run holds $ROOT/status/.lane1.lock" >&2; exit 3; }
+exec 9>"${ROOT}/status/.lane1.lock"
+flock -n 9 || { echo "lane1.sh: another lane1.sh run holds ${ROOT}/status/.lane1.lock" >&2; exit 3; }
 rc=0
 for step in "$@"; do
-  case "$step" in
+  case "${step}" in
     all) do_sqlcipher && do_cesium_acq && do_cesium; do_kml || rc=1;;
     sqlcipher) do_sqlcipher || rc=1;;
     cesium-acq) do_cesium_acq || rc=1;;
@@ -264,9 +264,9 @@ for step in "$@"; do
     kml) do_kml || rc=1;;
     verify-*) # re-run the receipt checks of a finished provider and rewrite its status
       name="${step#verify-}"
-      [[ "$(status_of "$name")" == ok ]] || { echo "lane1.sh: $name has no ok status to re-verify" >&2; exit 2; }
-      finish "$name" 0 $SECONDS "Re-verified." "$P/$name" || rc=1;;
-    *) echo "lane1.sh: unknown step '$step'" >&2; exit 2;;
+      [[ "$(status_of "${name}")" == ok ]] || { echo "lane1.sh: ${name} has no ok status to re-verify" >&2; exit 2; }
+      finish "${name}" 0 "${SECONDS}" "Re-verified." "${P}/${name}" || rc=1;;
+    *) echo "lane1.sh: unknown step '${step}'" >&2; exit 2;;
   esac
 done
-exit $rc
+exit "${rc}"

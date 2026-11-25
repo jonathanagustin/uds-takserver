@@ -21,7 +21,7 @@ lb() { kubectl -n "$1" get svc "$2" -o jsonpath='{.status.loadBalancer.ingress[0
 admin="$(lb istio-admin-gateway admin-ingressgateway)"
 tenant="$(lb istio-tenant-gateway tenant-ingressgateway)"
 passthrough="$(lb istio-passthrough-gateway passthrough-ingressgateway)"
-[ -n "${admin}" ] && [ -n "${tenant}" ] && [ -n "${passthrough}" ]
+[[ -n "${admin}" ]] && [[ -n "${tenant}" ]] && [[ -n "${passthrough}" ]]
 
 begin="# BEGIN takx-desktop-prototype"
 end="# END takx-desktop-prototype"

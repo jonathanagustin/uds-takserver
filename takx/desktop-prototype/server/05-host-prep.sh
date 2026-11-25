@@ -16,7 +16,7 @@
 set -euo pipefail
 HOSTPROC="${HOSTPROC:-/run/takx-hostproc}"
 
-if [ "$(findmnt -n -o PROPAGATION /)" != "shared" ]; then
+if [[ "$(findmnt -n -o PROPAGATION /)" != "shared" ]]; then
   mount --make-rshared /
 fi
 mkdir -p "${HOSTPROC}"
@@ -30,7 +30,7 @@ if ! mountpoint -q "${HOSTPROC}/1"; then
 fi
 want="$(readlink /proc/self/ns/net)"
 have="$(readlink "${HOSTPROC}/1/ns/net")"
-if [ "${want}" != "${have}" ]; then
+if [[ "${want}" != "${have}" ]]; then
   echo "${HOSTPROC}/1 is in ${have}, the node network namespace is ${want}" >&2
   exit 1
 fi
