@@ -152,8 +152,13 @@ do_finish() {
       ffmpeg -nostdin -loglevel error -y -ss "$2" -t "$3" -i "$DIR/master.mkv" -an -vf fps=30,format=yuv420p \
         -c:v libx264 -preset slow -crf 16 -movflags +faststart "$OUT/$1"
     }
+    # The raw take is one uncut stretch of the master that ends where the
+    # first globe interaction ends; when startup and software rendering make
+    # that longer than 59.5 s, its head (empty desktop) is trimmed.
     raw_end="$(at "end of the raw take section")"
-    enc takx57-raw-take-1080p30.mp4 0 "$raw_end"
+    raw_start="$(awk -v e="$raw_end" "BEGIN{s=e-59.5; if (s<0) s=0; printf \"%.2f\", s}")"
+    raw_length="$(awk -v e="$raw_end" -v s="$raw_start" "BEGIN{printf \"%.2f\", e-s}")"
+    enc takx57-raw-take-1080p30.mp4 "$raw_start" "$raw_length"
     enc takx57-clip-1-globe-pan-zoom-rotate.mp4 "$(at "globe pan")" 9.5
     enc takx57-clip-2-maps-imagery-layer.mp4 "$(at "Maps & Favorites: open")" 10
     enc takx57-clip-3-point-dropper-synthetic-marker.mp4 "$(at "Point Dropper: type")" 9.5
@@ -173,7 +178,10 @@ do_finish() {
         ffmpeg -nostdin -loglevel error -y -ss "$t" -i "$f" -frames:v 1 "$OUT/frames/$b-at-${t}s.png"
       done
     done
-    cp "$DIR/events.tsv" "$OUT/takx57-events.tsv"
+    # Events after the end of the master were driven but not recorded.
+    length="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$DIR/master.mkv")"
+    awk -F"\t" -v d="$length" -v s="$raw_start" -v e="$raw_end" "BEGIN{OFS=\"\t\"; print \"# seconds in the master recording\", \"action (raw take = \" s \" s to \" e \" s of the master)\"} \$1<=d{print} \$1>d{print \$1, \$2 \" [after the recording ended; not in the footage]\"}" \
+      "$DIR/events.tsv" >"$OUT/takx57-events.tsv"
   '
   python3 -I - "$media" "$dir" "$attempt" <<'PY'
 import glob, hashlib, json, os, re, sys
