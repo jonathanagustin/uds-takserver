@@ -61,12 +61,12 @@ Pod admission preserves a standalone pod's chosen account, so copying an app
 label does not automatically acquire that workload's identity.
 
 Policy generation is asynchronous. The supported package-stage path uses the
-pinned Zarf 0.89.0 [sequential chart deployment](https://github.com/zarf-dev/zarf/blob/v0.89.0/src/pkg/packager/deploy.go#L690-L739)
-and [per-chart custom-resource health check](https://github.com/zarf-dev/zarf/blob/v0.89.0/src/internal/packager/helm/chart.go#L179-L202).
+pinned Zarf 1.0.1 [sequential chart deployment](https://github.com/zarf-dev/zarf/blob/v1.0.1/src/pkg/packager/deploy.go#L790-L865)
+and [per-chart custom-resource health check](https://github.com/zarf-dev/zarf/blob/v1.0.1/src/internal/packager/helm/chart.go#L169-L189).
 The configuration chart must complete before the Pepr admission chart starts.
 For an existing Package, the checker rejects a stale
-[`status.observedGeneration`](https://github.com/zarf-dev/zarf/blob/v0.89.0/vendor/sigs.k8s.io/cli-utils/pkg/kstatus/status/generic.go#L73-L100)
-and requires a true [Ready condition](https://github.com/zarf-dev/zarf/blob/v0.89.0/vendor/sigs.k8s.io/cli-utils/pkg/kstatus/status/status.go#L154-L181).
+[`status.observedGeneration`](https://github.com/zarf-dev/zarf/blob/v1.0.1/vendor/sigs.k8s.io/cli-utils/pkg/kstatus/status/generic.go#L73-L100)
+and requires a true [Ready condition](https://github.com/zarf-dev/zarf/blob/v1.0.1/vendor/sigs.k8s.io/cli-utils/pkg/kstatus/status/status.go#L154-L181).
 Core 1.16.0 [publishes both after reconciliation](https://github.com/defenseunicorns/uds-core/blob/v1.16.0/src/pepr/operator/reconcilers/package-reconciler.ts#L159-L174).
 This replaces the earlier manual Helm config-first staging procedure for this
 path. A stored Package alone does not establish policy convergence. See the
