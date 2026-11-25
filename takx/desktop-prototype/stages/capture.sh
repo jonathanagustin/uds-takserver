@@ -16,10 +16,11 @@
 # What is driven, all through the UI with the mouse and keyboard only:
 # startup from the empty desktop; pan, wheel zoom and heading rotation of the
 # globe; Maps & Favorites, switching the imagery layer to public USGS Imagery;
-# Point Dropper, placing one neutral marker named SYNTHETIC-DEMO in the open
-# South Atlantic; zooming to it; the View, Range & Bearing and Help tabs. No
-# server is connected, no credential dialog is opened and no real location is
-# entered.
+# Point Dropper, placing one neutral marker named SYNTHETIC-DEMO at the typed
+# location 30 S 15 W in the open South Atlantic; the View, Range & Bearing and
+# Help tabs. No server is connected, no credential dialog is opened and no
+# real-world position of anything is entered. The recording stops when the
+# driving ends (TAKX_CAPTURE_SECONDS, default 170, is only an upper bound).
 #
 # Layout:
 #   $TAKX_PROTO_ROOT/capture/<attempt>/master.mkv   lossless x11grab master
@@ -38,7 +39,7 @@ run="$repo/takx/desktop-prototype/run-in-toolchain.sh"
 boot="$here/boot.sh"
 media="$repo/demo/out/takx"
 name=takx-boot
-seconds="${TAKX_CAPTURE_SECONDS:-118}"
+seconds="${TAKX_CAPTURE_SECONDS:-170}"
 
 mkdir -p "$root"/{capture,logs,status} "$media"
 
@@ -83,58 +84,58 @@ click() { xdotool mousemove --sync "$1" "$2"; sleep 0.35; xdotool click 1; }
 mark "recording starts on the empty Xvfb desktop (openbox, no client yet)"
 for _ in $(seq 600); do xdotool search --onlyvisible --name 'TAKX 5.7' >/dev/null 2>&1 && break; sleep 0.1; done
 mark "TAKX main window is mapped"
-sleep 16
+sleep 13
 mark "globe pan: left-button drag"
-drag 1 1100 560 -14 4 28
-sleep 1.2
+drag 1 820 560 14 4 28
+sleep 1
+mark "heading rotation: right-button drag"
+drag 3 960 600 12 -5 20
+sleep 1
 mark "wheel zoom in"
 xdotool mousemove --sync 960 600; wheel 4 5
 sleep 1.5
-mark "heading rotation: right-button drag"
-drag 3 960 600 12 -5 24
-sleep 1.5
 mark "wheel zoom out"
-xdotool mousemove --sync 960 600; wheel 5 5
-sleep 2
+wheel 5 5
+sleep 1.5
 mark "end of the raw take section"
 
 mark "Maps & Favorites: open"
-click 361 95; sleep 3
+click 361 95; sleep 2.2
 mark "Maps: enable USGS Imagery"
-click 46 413; sleep 2
+click 46 413; sleep 1.6
 mark "Maps: disable USGS Imagery Topo"
-click 46 391; sleep 6
+click 46 391; sleep 4.5
 mark "Maps: close panel"
-click 117 151; sleep 2
+click 117 151; sleep 1.5
 
 mark "Point Dropper: open"
-click 744 95; sleep 3.5
+click 744 95; sleep 3
 mark "Point Dropper: type the prefix SYNTHETIC-DEMO"
-click 1505 302; sleep 0.4; xdotool type --delay 70 "SYNTHETIC-DEMO"; sleep 0.8
+click 1505 302; sleep 0.3; xdotool type --delay 70 "SYNTHETIC-DEMO"; sleep 0.5
 mark "Point Dropper: choose the neutral affiliation"
-click 1558 352; sleep 1.5
-mark "Point Dropper: click the globe in the open South Atlantic"
-click 560 700; sleep 3
-xdotool key Escape; sleep 1
+click 1558 352; sleep 1
+mark "Point Dropper: type the location -30.0, -15.0 (open South Atlantic)"
+click 1660 544; sleep 0.3; xdotool type --delay 70 -- "-30.0, -15.0"; sleep 0.8
+mark "Point Dropper: OK"
+click 1732 602; sleep 3
+xdotool key Escape; sleep 0.8
 mark "Point Dropper: close panel"
-click 1583 149; sleep 2.5
+click 1583 149; sleep 2
 
-mark "wheel zoom in on the synthetic marker"
-xdotool mousemove --sync 790 700; sleep 0.5; wheel 4 6
-sleep 3
-mark "wheel zoom out"
-wheel 5 6
+mark "globe pan with the marker placed"
+drag 1 1000 560 -8 5 24
 sleep 2
 
 mark "ribbon: View tab"
-click 298 47; sleep 3
+click 298 47; sleep 2.5
 mark "ribbon: Range & Bearing tab"
-click 468 47; sleep 3
+click 468 47; sleep 2.5
 mark "ribbon: Help tab"
-click 565 47; sleep 3
+click 565 47; sleep 2.5
 mark "ribbon: Home tab"
 click 64 47; sleep 2
 mark "driving ends"
+kill -INT "$recorder" 2>/dev/null
 wait "$recorder"
 mark "recording ends"
 DRIVE
@@ -152,16 +153,17 @@ do_finish() {
       ffmpeg -nostdin -loglevel error -y -ss "$2" -t "$3" -i "$DIR/master.mkv" -an -vf fps=30,format=yuv420p \
         -c:v libx264 -preset slow -crf 16 -movflags +faststart "$OUT/$1"
     }
-    # The raw take is one uncut stretch of the master that ends where the
-    # first globe interaction ends; when startup and software rendering make
-    # that longer than 59.5 s, its head (empty desktop) is trimmed.
+    # The raw take is one uncut stretch of the master: from 3 s before the
+    # main window is mapped (still the empty desktop) to the end of the first
+    # globe interaction, at most 59.5 s.
     raw_end="$(at "end of the raw take section")"
-    raw_start="$(awk -v e="$raw_end" "BEGIN{s=e-59.5; if (s<0) s=0; printf \"%.2f\", s}")"
+    mapped="$(at "TAKX main window is mapped")"
+    raw_start="$(awk -v e="$raw_end" -v m="$mapped" "BEGIN{s=m-3; if (e-s>59.5) s=e-59.5; if (s<0) s=0; printf \"%.2f\", s}")"
     raw_length="$(awk -v e="$raw_end" -v s="$raw_start" "BEGIN{printf \"%.2f\", e-s}")"
     enc takx57-raw-take-1080p30.mp4 "$raw_start" "$raw_length"
     enc takx57-clip-1-globe-pan-zoom-rotate.mp4 "$(at "globe pan")" 9.5
     enc takx57-clip-2-maps-imagery-layer.mp4 "$(at "Maps & Favorites: open")" 10
-    enc takx57-clip-3-point-dropper-synthetic-marker.mp4 "$(at "Point Dropper: type")" 9.5
+    enc takx57-clip-3-point-dropper-synthetic-marker.mp4 "$(at "Point Dropper: type the prefix")" 9.5
     enc takx57-session-full-1080p30.mp4 0 100000
     mkdir -p "$OUT/frames"
     for f in "$OUT"/takx57-*.mp4; do

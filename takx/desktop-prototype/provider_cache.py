@@ -328,6 +328,13 @@ def check_members(provider, members):
         elif kind == 'symlink':
             if not linkname or linkname.startswith('/') or '\0' in linkname:
                 raise CacheError('symlink %r has an absolute or empty target' % (name,))
+            # ".." is only followed lexically while it leads the target: after a
+            # name (which may itself be a link) it could climb out unnoticed.
+            parts = linkname.split('/')
+            while parts and parts[0] == '..':
+                parts.pop(0)
+            if '..' in parts:
+                raise CacheError('symlink %r has ".." after a name in its target' % (name,))
             target = posixpath.normpath(posixpath.join(posixpath.dirname(name), linkname))
             if target != provider and not target.startswith(inside):
                 raise CacheError('symlink %r leaves the provider directory' % (name,))
@@ -348,6 +355,9 @@ def check_entries(entries):
     """Refuse a file manifest whose links leave the tree or that lists specials."""
     members = [('p', 'dir', '')]
     for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get('path'), str) \
+                or not isinstance(entry.get('target', ''), str):
+            raise CacheError('malformed file manifest entry %r' % (entry,))
         kind = {'file': 'file', 'dir': 'dir', 'link': 'symlink'}.get(entry.get('type'), 'other')
         members.append(('p/' + entry['path'], kind, entry.get('target', '')))
     return check_members('p', members)
@@ -649,14 +659,16 @@ class WorkTree:
         (self.root / 'P').mkdir(exist_ok=True)
         (self.root / 'status').mkdir(exist_ok=True)
         target = self.provider_dir(name)
+        status = self.root / 'status' / (name + '.json')
+        temporary = status.with_name('%s.json.tmp.%d' % (name, os.getpid()))
         rename_noreplace(source, target)
         try:
-            status = self.root / 'status' / (name + '.json')
-            temporary = status.with_name('%s.json.tmp.%d' % (name, os.getpid()))
             temporary.write_text(status_text)
             os.replace(temporary, status)
         except BaseException:
             os.rename(target, source)
+            if temporary.is_file() and not temporary.is_symlink():
+                temporary.unlink()
             raise
 
     def record_push(self, row):
@@ -944,7 +956,7 @@ class ProviderCache:
             except ValueError as error:
                 raise CacheError('%s: bundle metadata is not JSON: %s' % (name, error))
             check_bundle(name, key, str(self.tree.root), meta, status, labels, sha256_file(tar),
-                         (work / 'tar.sha256').read_text().strip(), sha256_bytes(files_bytes), markers)
+                         (work / 'tar.sha256').read_bytes().decode('ascii', 'replace').strip(), sha256_bytes(files_bytes), markers)
             if not isinstance(listing, dict) or listing.get('provider') != name \
                     or not isinstance(listing.get('entries'), list):
                 raise CacheError('%s: malformed file manifest' % name)
