@@ -131,6 +131,21 @@ class BaselineTests(unittest.TestCase):
             with self.assertRaises(urllib.error.URLError):
                 list(baseline.releases("owner/repo"))
 
+    def test_fetch_takes_release_tags_only(self):
+        # A broad --tags fetch fails when any unrelated tag moved after
+        # checkout, which stops the upgrade test before it starts.
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            baseline, "releases", return_value=[],
+        ), patch("sys.argv", ["upgrade-baseline.py", "--output", str(Path(directory) / "baseline.json")]), patch(
+            "sys.stdout", new_callable=io.StringIO,
+        ), patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GITHUB_OUTPUT", None)
+            os.environ.pop("GITHUB_STEP_SUMMARY", None)
+            baseline.main()
+        self.run.assert_called_once_with(
+            ["git", "fetch", "--no-tags", "origin", "main", "refs/tags/v*:refs/tags/v*"], check=True,
+        )
+
     def test_no_baseline_writes_notice_summary_and_false_output(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
