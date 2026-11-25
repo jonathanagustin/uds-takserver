@@ -271,15 +271,16 @@ Each client also sees the other as a contact: TAKX's "Send As Cot" dialog lists 
 
 Evidence: `connect/connect-7/evidence/revoke-timeline.txt`, `revoke-*.json`, `reissue-*.json`, `shots/20-revoked.png` and `22-reissued.png` (I viewed both). This is deletion and re-issue. Renewal of a certificate while its TakClient stays was not tested.
 
-### HTTPS API: two separate causes (experiment, not the deployed path)
+### HTTPS API: the port is the obstacle (experiment, not the deployed path)
 
 To learn whether port 8443 is the only obstacle, the certificate name `takserver` was pointed at the workstation (`TAKX_CONNECT_SERVER_IP=172.17.0.1`), where a transparent TCP relay forwarded 8089 to the gateway and `kubectl port-forward` exposed `takserver-api-service` 8443. TLS was not terminated anywhere. This bypasses the gateway for the API, so it says nothing about the deployed route.
 
 - OpenSSL with the TakClient certificate: the API presents `CN=takserver`, the name verifies, `GET /Marti/api/version` answers 200.
-- TAKX with the package's `truststore.p12` as CA file: the stream connects, but every API call fails with `SSLHandshakeException: (certificate_unknown) PKIX path building failed` (132 logged between 22:13:52 and 22:22). TAKX's Java HTTPS client reads the CA file as a Java key store, and JDK lists 0 entries in that file.
-- After editing the connection's CA File to `truststore-java.p12` (the same CA written by keytool): the stream reconnects at 22:22:11, so CommonCommo accepts that file too, and in the following two minutes the log has no PKIX error, no `ApiException` and no contact-list failure. I have no positive record of the responses, and missions and data packages were not exercised in the interface.
+- Before: "Failed to query Contact List" 51 times, every 30 s, the last at 22:13:04; `ApiException: Connection refused` from the mission list call.
+- After the restart through the relay at 22:13:52, with the same connection and the package's `truststore.p12`: no contact-list failure and no `ApiException` in the next ten minutes; the only warning in the log is a time-server timeout. The forward handled four connections from TAKX.
+- JDK lists 0 entries in the package's `truststore.p12`, which could have broken TAKX's Java HTTPS client. It did not show as a failure. Changing the CA file to `truststore-java.p12` at 22:22 made no visible difference; the stream accepts that file too.
 
-So TAKX's HTTPS API needs two things this deployment does not give it: port 8443 reachable under a name in the server certificate, and a trust store Java can read. The second is a packaging finding: the TakClient data package's `truststore.p12` works for the stream (OpenSSL) and not for TAKX's Java side. Records: `connect/api-experiment/`.
+So the failures stop once 8443 is reachable under a name in the server certificate. That is the absence of errors, not a positive result: I have no record of the responses, and missions and data packages were not exercised in the interface. Records: `connect/api-experiment/` (its first count blamed certificate-path errors on the API; the correction is in the same file: those came from requests made at boot without the sandbox CA).
 
 ### Footage
 
@@ -308,9 +309,9 @@ All are H.264 High, `yuv420p`, 1920x1080, 30 fps and passed the checks in `captu
 | Record versions, OS, plugin set, endpoint configuration, date | Partly. Versions, endpoint, trust and date are in `PROVENANCE.md`. The workstation is a container on a sandbox VM, and the plugin set was not inspected |
 | Streaming mutual TLS with a dedicated TakClient, validation on, unrelated trust and revoked credentials rejected | Has evidence: mutual TLS with `takx-desktop`; foreign CA, foreign client certificate and wrong server name rejected (first session); revoked certificate rejected (this session) |
 | Synthetic marker with CloudTAK in both directions, negative check for an unrelated group | Has evidence: `SYNTHETIC-PEER-7` and `SYNTHETIC-TAKX-7`, with a third same-group client and the unrelated-group listener |
-| Mission synchronization and data-package transfer | No. The limits are recorded: port 8443 is not exposed, and the package trust store is not readable by TAKX's Java side. With both worked around the API calls stop failing; missions and data packages were not driven |
+| Mission synchronization and data-package transfer | No. The limit is recorded: port 8443 is not exposed under the certificate name. With that worked around on the workstation the API calls stop failing; missions and data packages were not driven |
 | Credential renewal, re-import, deletion, revocation, reconnect | Partly. Deletion, revocation, reconnect refusal, re-issue and re-import have evidence. Renewal of a live TakClient was not tested |
-| Streaming and HTTPS endpoints checked separately | Yes as a finding: streaming works through the gateway; HTTPS on 8443 is refused there and fails trust with the package file when reached another way |
+| Streaming and HTTPS endpoints checked separately | Yes as a finding: streaming works through the gateway; HTTPS on 8443 is refused there and stops failing when the port is reached another way |
 | Repeatable checklist and bounded evidence without secrets | Partly. The scripts and evidence files exist; the client guide was not touched |
 | Short TAKX-to-CloudTAK demo linked from the client guide | Partly. The footage now shows TAKX and CloudTAK, each on its own screen; it is unpublished and not linked |
 
@@ -328,6 +329,6 @@ Nothing secret is in the repository or in `demo/out`. `secrets/cloudtak-user/` h
 
 ### Next experiments
 
-1. Decide the deployment change for TAKX's HTTPS API: 8443 by port on the passthrough gateway, or the gateway names in the server certificate; and ship a Java-readable trust store in the TakClient package. Then drive missions and data packages.
+1. Decide the deployment change for TAKX's HTTPS API: 8443 by port on the passthrough gateway, or the gateway names in the server certificate. Then drive missions and data packages and look for a positive result.
 2. Rotate a live TakClient certificate and re-import it without deleting the TakClient.
 3. Record both screens side by side on a machine with a GPU, with a basemap in CloudTAK.
