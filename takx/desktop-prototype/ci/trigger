@@ -1,0 +1,10 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# A change to this file on claude/awesome-rubin-2godw2 starts the opt-in
+# workflow .github/workflows/takx-desktop-prototype.yaml (ci/pipeline.py plan
+# reads it). Lines starting with '#' are comments; the only setting is
+# 'arches=<comma separated list of amd64, arm64>' (default: both).
+#
+# run 1: first build on hosted arm64 runners, with the amd64 control.
+arches=arm64,amd64
