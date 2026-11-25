@@ -23,7 +23,7 @@ PORT_CLASSPATH_LOCK = REPO_ROOT / "takx" / "compat" / "port-classpath.lock.json"
 SLF4J_JAR_NAME = "slf4j-api-1.7.30.jar"
 SCHEMA = "uds-takx-render-context-hosted-v1"
 EXPECTED_REVISION = "9f6893dd657feacc35ec5de03dad721c2e44170e"
-EXPECTED_BINDING_ASSERTIONS = 88
+EXPECTED_BINDING_ASSERTIONS = 106
 
 
 def sha256_file(path: Path) -> str:
@@ -210,7 +210,7 @@ def qualify(official_source: Path, output: Path, cxx: str) -> dict:
         timeout=180,
     )
 
-    # Compile and execute BindingStateTest.java (88 JVM state assertions) against
+    # Compile and execute BindingStateTest.java (106 JVM state assertions) against
     # patched RenderContextBinding.java and official public Kernel interfaces.
     classes_dir = out / "binding-classes"
     classes_dir.mkdir(mode=0o700)

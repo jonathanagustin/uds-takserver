@@ -1,7 +1,7 @@
 {
   "status": "source-work-in-progress-not-runtime-qualified",
   "upstream_commit": "9f6893dd657feacc35ec5de03dad721c2e44170e",
-  "patch_sha256": "0371e8d01a89f5125466865f346043d4623e85c6f0696999da7f5596f4f1703c",
+  "patch_sha256": "5e9d9fba183e1369974be16f56f2b834ca1909bb5665ece28696000f632cf29e",
   "files": [
     {
       "path": "takkernel/engine/src/jre/java/gov/tak/platform/engine/JOGLRenderContext.java",
@@ -141,7 +141,7 @@
     {
       "path": "takkernel/engine/src/main/java/com/atakmap/map/opengl/GLMapView.java",
       "preimage_sha256": "50e6f513e36a151f0b46229f7e6e58f735b788c44699d0bac09667d44d5e367c",
-      "postimage_sha256": "67847bff67b1ac167289b817e2ea17c1960c2b207e0e3d2728a8e78d8e5fcee1"
+      "postimage_sha256": "1086ca73a15b5cdd15cae441272acb52b17e959e4f65f92e14a225f4749bcb54"
     },
     {
       "path": "takkernel/engine/src/main/java/com/atakmap/map/opengl/GLRenderGlobals.java",
@@ -151,7 +151,7 @@
     {
       "path": "takkernel/engine/src/main/java/com/atakmap/map/opengl/RenderContextBinding.java",
       "preimage_sha256": null,
-      "postimage_sha256": "dff5bcfdf4843c89513d5ddfad17c35f8272245933620052f6af6eebda1e3783"
+      "postimage_sha256": "77ad3d5587ade37ca8039afecf375ddaa26b1a4a6795f381753bfe79a06207ba"
     },
     {
       "path": "takkernel/engine/src/main/java/com/atakmap/opengl/GLES20FixedPipeline.java",

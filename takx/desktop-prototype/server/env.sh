@@ -42,3 +42,10 @@ json.dump({"stage": stage, "status": status, "notes": notes,
           open(path, "w"), indent=1)
 PY
 }
+
+# Requests to the gateways must not go to the session's egress proxy, which
+# has no route to them. This extends the bypass list; the proxy stays set.
+case ",${NO_PROXY:-}," in
+  *",.${DOMAIN},"*) ;;
+  *) export NO_PROXY=".${DOMAIN},${NO_PROXY:-}" no_proxy=".${DOMAIN},${no_proxy:-}" ;;
+esac

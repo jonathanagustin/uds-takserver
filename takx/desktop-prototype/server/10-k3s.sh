@@ -23,6 +23,8 @@ if [ "${avail_kb}" -lt $((12 * 1024 * 1024)) ]; then
   exit 1
 fi
 
+"${here}/05-host-prep.sh"
+
 mkdir -p /etc/rancher/k3s
 if ! grep -qs 'servicelb' /etc/rancher/k3s/config.yaml; then
   if pgrep -f 'k3s[ ]server' >/dev/null; then

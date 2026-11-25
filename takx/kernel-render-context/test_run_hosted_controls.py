@@ -48,7 +48,7 @@ class HostedRenderContextControlTests(unittest.TestCase):
         self.assertIn("worker_retirement_control.py", out["files"])
 
     def test_parse_binding_assertions(self):
-        self.assertEqual(R.parse_binding_assertions("binding state assertions=88\n"), 88)
+        self.assertEqual(R.parse_binding_assertions("binding state assertions=106\n"), 106)
         with self.assertRaises(ValueError):
             R.parse_binding_assertions("no marker here")
 
@@ -68,8 +68,8 @@ class HostedRenderContextControlTests(unittest.TestCase):
                 R.validate_receipt(over)
 
         bad_count = copy.deepcopy(base)
-        bad_count["controls"]["binding_state_assertions"] = 87
-        with self.assertRaisesRegex(ValueError, "88"):
+        bad_count["controls"]["binding_state_assertions"] = 105
+        with self.assertRaisesRegex(ValueError, "106"):
             R.validate_receipt(bad_count)
 
         bad_worker = copy.deepcopy(base)

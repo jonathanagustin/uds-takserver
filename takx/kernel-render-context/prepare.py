@@ -105,7 +105,7 @@ def load_contract():
     if scope['patch_sha256'] != lock['context_patch_sha256']:
         raise ValueError('source scope patch differs')
     if lock['binding_state_control'] != {
-            'path': 'tests/BindingStateTest.java', 'assertions': 88,
+            'path': 'tests/BindingStateTest.java', 'assertions': 106,
             'sha256': digest(regular(HERE/'tests/BindingStateTest.java'))}:
         raise ValueError('owned binding state control differs')
     required_client = {

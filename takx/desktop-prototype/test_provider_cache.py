@@ -3020,6 +3020,162 @@ exit 0
         with tarfile.open(self.dir / 'layer.tar') as layer:
             self.assertEqual(layer.getnames(), ['sub'])
 
+    def test_command_ended_by_a_signal_has_failed_whatever_it_printed(self):
+        self.script('pull', 'kill -KILL $$')
+        with self.assertRaisesRegex(PC.CacheError, '^docker pull failed: $'):
+            self.registry.fetch('reg/p:tag', self.dir, [])
+        self.script('image', 'echo sha256:abc; kill -KILL $$')
+        self.assertIsNone(self.registry.image_id('some:image'))
+        self.script('manifest', 'echo "{}"; kill -KILL $$')
+        self.assertEqual(self.registry.probe('reg/p:tag'), 'error')
+        self.script('import', 'cat > /dev/null; kill -KILL $$')
+        with self.assertRaisesRegex(PC.CacheError, r'^docker import failed \(-9\): $'):
+            self.registry.publish('reg/p:tag', self.context, ['p.tar'], {})
+        self.assertNotIn('push', [call.split()[0] for call in self.calls()])
+
+
+class MoreDetails(ServiceCase):
+    def test_tree_with_many_entries_round_trips(self):
+        top = self.make('base')
+        for number in range(300):
+            (top / ('file-%03d' % number)).write_text(str(number))
+        good = snapshot(top)
+        self.assertEqual(len(good), 309)
+        self.service.push('base')
+        self.set_aside('base')
+        self.service.restore('base')
+        self.assertEqual(snapshot(top), good)
+        many = [{'path': 'f%d' % number, 'type': 'dir', 'mode': '0755'} for number in range(300)]
+        self.assertEqual(PC.compare_entries(many, copy.deepcopy(many)), [])
+        self.assertEqual(PC.compare_entries(many + many[:1], copy.deepcopy(many)), ['a file manifest lists a path twice'])
+        self.assertEqual(PC.compare_entries(many, copy.deepcopy(many) + many[-1:]), ['a file manifest lists a path twice'])
+
+    def test_decisions_fail_closed_on_unknown_registry_answers(self):
+        for remote in ('error', 'ERROR', '', 'Zzz', 'zzz', 'absent ', 'Absent', 'presently', None, 0):
+            with self.subTest(remote=remote):
+                self.assertEqual(PC.decide_restore(True, False, True, remote),
+                                 ('refuse', 'the registry could not be queried'))
+                self.assertEqual(PC.decide_push(True, 'ok', True, remote),
+                                 ('refuse', 'the registry could not be queried'))
+        self.assertEqual(PC.decide_restore(True, False, True, 'absent'), ('skip', 'nothing cached under this key'))
+        self.assertEqual(PC.decide_restore(True, False, True, 'present'), ('restore', 'cached under this key'))
+        self.assertEqual(PC.decide_restore(True, False, True, 'unauthorized'),
+                         ('skip', 'docker is not logged in to the cache registry'))
+        self.assertEqual(PC.decide_restore(False, True, False, 'error'), ('skip', 'cache is off'))
+        self.assertEqual(PC.decide_restore(True, True, False, 'present'),
+                         ('refuse', 'the provider directory already exists and is never overwritten'))
+        self.assertEqual(PC.decide_restore(True, False, False, 'error'),
+                         ('skip', 'a prerequisite provider is not ok here'))
+        self.assertEqual(PC.decide_push(False, 'failed', False, 'error'), ('skip', 'cache is off'))
+        self.assertEqual(PC.decide_push(True, 'failed', False, 'error'), ('skip', 'status is failed, not ok'))
+        self.assertEqual(PC.decide_push(True, 'ok', False, 'present'),
+                         ('refuse', 'status is ok but the completion marker is missing'))
+        self.assertEqual(PC.decide_push(True, 'ok', True, 'present'), ('present', 'already cached under this key'))
+        self.assertEqual(PC.decide_push(True, 'ok', True, 'unauthorized'),
+                         ('skip', 'docker is not logged in to the cache registry'))
+        self.assertEqual(PC.decide_push(True, 'ok', True, 'absent'), ('push', 'not cached yet'))
+        for status in ('OK', 'ok ', 'o', 'okay', 'a', 'zz', '', None, True):
+            self.assertEqual(PC.decide_push(True, status, True, 'absent')[0], 'skip', status)
+
+    def test_bundle_identity_is_exact_in_both_directions(self):
+        key, tar, files = 'b' * 64, 'c' * 64, 'd' * 64
+        good = dict(name='mm', key=key, root='/r',
+                    meta={'schema': 1, 'provider': 'mm', 'key': key, 'root': '/r', 'tar_sha256': tar,
+                          'files_sha256': files, 'prerequisite_markers': {}},
+                    status={'stage': 'mm', 'status': 'ok'},
+                    labels={'dev.uds.takx.provider': 'mm', 'dev.uds.takx.key': key, 'dev.uds.takx.tar-sha256': tar},
+                    tar_sha256=tar, recorded_tar_sha256=tar, files_sha256=files, local_markers={})
+        PC.check_bundle(**good)
+
+        def with_meta(**fields):
+            return dict(meta=dict(good['meta'], **fields))
+
+        def with_label(label, value):
+            return dict(labels=dict(good['labels'], **{'dev.uds.takx.' + label: value}))
+        lower, higher = 'a' * 64, 'e' * 64
+        cases = []
+        for low, high in ((lower, higher),):
+            for other in (low, high):
+                cases += [
+                    (dict(tar_sha256=other), 'mm: archive digest differs from the recorded one'),
+                    (dict(recorded_tar_sha256=other), 'mm: archive digest differs from the recorded one'),
+                    (with_label('tar-sha256', other), 'mm: archive digest differs from the image label'),
+                    (with_label('key', other), 'mm: image is labelled with another key'),
+                    (with_meta(key=other), 'mm: bundle is for another provider or key'),
+                    (with_meta(tar_sha256=other), 'mm: bundle metadata names another archive'),
+                    (with_meta(files_sha256=other), 'mm: file manifest differs from the recorded one'),
+                    (dict(files_sha256=other), 'mm: file manifest differs from the recorded one'),
+                    (dict(local_markers={'dep': other}), 'mm: it was built against other prerequisite outputs than '
+                                                         'the ones present here'),
+                ]
+        for other in ('aa', 'zz', 'm', 'mmm', ''):
+            cases += [
+                (with_label('provider', other), 'mm: image is labelled for another provider'),
+                (with_meta(provider=other), 'mm: bundle is for another provider or key'),
+                (dict(status={'stage': other, 'status': 'ok'}), 'mm: bundled status is not an ok status of this provider'),
+            ]
+        for other in ('a', 'zz', 'o', 'okay', 'OK', ''):
+            cases.append((dict(status={'stage': 'mm', 'status': other}),
+                          'mm: bundled status is not an ok status of this provider'))
+        for other in ('/', '/q', '/s', '/r/', '/r2', ''):
+            cases.append((with_meta(root=other), 'mm: bundle was built under another work root'))
+        for other in (0, 2, '1', None, 1.5):
+            cases.append((with_meta(schema=other), 'mm: unsupported bundle schema'))
+        for other in ('', None, 'x' * 64, tar.upper(), tar + '\n', tar[:-1]):
+            cases.append((dict(recorded_tar_sha256=other, tar_sha256=other, labels=dict(
+                good['labels'], **{'dev.uds.takx.tar-sha256': other}), meta=dict(good['meta'], tar_sha256=other)),
+                'mm: the image records no archive digest'))
+        cases += [(dict(meta=None), 'mm: unsupported bundle schema'), (dict(meta='{}'), 'mm: unsupported bundle schema'),
+                  (dict(status=None), 'mm: bundled status is not an ok status of this provider'),
+                  (dict(status='ok'), 'mm: bundled status is not an ok status of this provider'),
+                  (dict(labels={}), 'mm: archive digest differs from the image label')]
+        for change, message in cases:
+            with self.subTest(change=change), self.assertRaises(PC.CacheError) as caught:
+                PC.check_bundle(**dict(good, **change))
+            self.assertEqual(str(caught.exception), message)
+
+    def test_status_that_cannot_be_written_takes_the_directory_back_out(self):
+        self.make('base')
+        self.service.push('base')
+        self.set_aside('base')
+        before = snapshot(self.tmp.name)
+        with mock.patch.object(PC.Path, 'write_text', side_effect=OSError(28, 'No space left on device')), \
+                self.assertRaises(OSError) as caught:
+            self.service.restore('base')
+        self.assertEqual(caught.exception.errno, 28)
+        self.assertEqual(snapshot(self.tmp.name), before)
+
+    def test_scratch_that_cannot_be_removed_does_not_undo_the_result(self):
+        self.make('base')
+        self.service.push('base')
+        self.set_aside('base')
+        rmtree = shutil.rmtree
+
+        def strict(path, ignore_errors=False, **options):
+            if not ignore_errors:
+                raise OSError(16, 'Device or resource busy')
+            rmtree(path, ignore_errors=True)
+        with mock.patch.object(PC.shutil, 'rmtree', strict):
+            self.service.restore('base')
+            self.set_aside('base')
+            self.registry.images.clear()
+            self.make('side')
+            self.service.push('side')
+        self.assertEqual(self.leftovers(), [])
+
+    def test_appearing_directory_is_reported_by_name(self):
+        self.make('base')
+        self.service.push('base')
+        self.set_aside('base')
+        rename = PC.rename_noreplace
+
+        def racing(source, target):
+            Path(target).mkdir()
+            rename(source, target)
+        with mock.patch.object(PC, 'rename_noreplace', racing), self.assertRaises(PC.CacheError) as caught:
+            self.service.restore('base')
+        self.assertEqual(str(caught.exception), 'base: the provider directory appeared meanwhile; not overwritten')
+
 
 RUN_STUB = r"""#!/bin/bash
 # Stands in for run-in-toolchain.sh: records the call, "builds" by creating the outputs.

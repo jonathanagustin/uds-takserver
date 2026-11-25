@@ -169,6 +169,69 @@ public final class BindingStateTest {
         release(binding);
         check(calls[0]==2);
     }
+    /** A client-owned surface: it implements the legacy surface type, as the
+     * AWT components of a desktop client do, and records its listeners. */
+    static final class ClientSurface implements com.atakmap.map.RenderSurface {
+        final List<OnSizeChangedListener> listeners = new ArrayList<>();
+        public double getDpi() { return 96; }
+        public int getWidth() { return 32; }
+        public int getHeight() { return 24; }
+        public void addOnSizeChangedListener(OnSizeChangedListener listener) { listeners.add(listener); }
+        public void removeOnSizeChangedListener(OnSizeChangedListener listener) { listeners.remove(listener); }
+    }
+    static final class ClientContext extends Context {
+        final RenderSurface client;
+        ClientContext(RenderSurface client) { this.client=client; }
+        @Override public RenderSurface getRenderSurface() { return client; }
+    }
+    private static void clientSurfaceIdentity() {
+        ClientSurface component=new ClientSurface();
+        RenderContextBinding binding=new RenderContextBinding(new ClientContext(component), () -> {});
+        // Clients get their own surface object back, not a wrapper.
+        check(binding.getRenderSurface() == component);
+        // Only the native peer creation, on its own thread, captures the
+        // forwarding surface; every other reader still sees the client's.
+        Object[] concurrent={null};
+        RenderSurface captured=binding.captureForNativePeer(() -> {
+            Thread reader=new Thread(() -> concurrent[0]=binding.getRenderSurface());
+            reader.start();
+            try { reader.join(5000); } catch (InterruptedException error) { throw new AssertionError(error); }
+            rejects(() -> binding.captureForNativePeer(() -> null));
+            return binding.getRenderSurface();
+        });
+        check(captured != component && concurrent[0] == component);
+        check(binding.getRenderSurface() == component);
+        check(captured.getWidth() == 32 && captured.getHeight() == 24 && captured.getDpi() == 96);
+        // Native size listeners stay counted and generation-guarded.
+        int[] sizes={0};
+        RenderSurface.OnSizeChangedListener listener=(surface, width, height) -> sizes[0]++;
+        captured.addOnSizeChangedListener(listener);
+        check(component.listeners.size() == 1);
+        component.listeners.get(0).onSizeChanged(component, 16, 12);
+        check(sizes[0] == 1);
+        release(binding);
+        component.listeners.get(0).onSizeChanged(component, 8, 6); // retired generation
+        check(sizes[0] == 1);
+        ClientContext replacement=new ClientContext(component);
+        rejects(() -> binding.rebind(replacement)); // listener still registered
+        captured.removeOnSizeChangedListener(listener);
+        check(component.listeners.isEmpty());
+        // The surface object is fixed at bind time. Another object is refused
+        // before any state changes, even on the current GL thread.
+        try { binding.rebind(new ClientContext(new ClientSurface())); throw new AssertionError("accepted another surface"); }
+        catch (IllegalArgumentException expected) { assertions++; }
+        check(binding.released() && !binding.isAttached());
+        replacement.current=false;
+        rejects(() -> binding.rebind(replacement)); // same surface, context not current
+        replacement.current=true;
+        binding.rebind(replacement);
+        check(binding.getRenderSurface() == component && binding.isAttached() && binding.isRenderThread());
+        release(binding);
+        binding.terminate();
+        // The terminal tombstone neither exposes nor retains the client's surface.
+        check(binding.getRenderSurface() != component);
+        rejects(() -> binding.captureForNativePeer(() -> null));
+    }
     public static void main(String[] args) {
         Context old = new Context(), replacement = new Context(), other = new Context();
         RenderContextBinding binding = new RenderContextBinding(old, () -> {});
@@ -216,6 +279,7 @@ public final class BindingStateTest {
         }
         submissionFailures();
         overlappingSubmissionAndRelease();
+        clientSurfaceIdentity();
         System.out.println("binding state assertions=" + assertions);
     }
 }

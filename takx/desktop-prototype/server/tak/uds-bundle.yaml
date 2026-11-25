@@ -1,0 +1,41 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# yaml-language-server: $schema=https://raw.githubusercontent.com/defenseunicorns/uds-cli/refs/heads/main/uds.schema.json
+# The published TAK Server package for the current release, with CloudTAK,
+# for the TAKX desktop prototype sandbox. Deploy it after ../core.
+#
+# Differences from bundle/uds-bundle.yaml:
+#   - the package is pulled from GHCR by release tag and its keyless signature
+#     is checked with the identity README.md documents; nothing is built;
+#   - quic.enabled stays at the chart default (false), since Envoy Gateway is
+#     not deployed;
+#   - the CloudTAK basemap is off. nginx in the CloudTAK pod verifies the tile
+#     host certificate, and a pod here sees the sandbox proxy's certificate,
+#     which it does not trust. Verification stays on, so there are no tiles.
+kind: UDSBundle
+metadata:
+  name: takx-proto-tak
+  description: Published TAK Server and CloudTAK package for the TAKX desktop prototype sandbox
+  version: 1.4.0
+
+packages:
+  - name: takserver
+    repository: ghcr.io/jonathanagustin/uds-takserver/takserver
+    ref: 1.4.0-upstream
+    optionalComponents:
+      - cloudtak
+    keylessVerification:
+      certificateIdentityRegexp: "^https://github\\.com/jonathanagustin/(uds-k3d-takserver|uds-takserver)/\\.github/workflows/release\\.yaml@refs/(tags/v[0-9]+\\.[0-9]+\\.[0-9]+|heads/main)$"
+      certificateOIDCIssuer: https://token.actions.githubusercontent.com
+    overrides:
+      takserver:
+        takserver:
+          valuesFiles:
+            # Same sizing as the repository's test bundle (4 CPU, 16 GB).
+            - ../../../../bundle/test-values.yaml
+      cloudtak:
+        uds-cloudtak:
+          values:
+            - path: basemap.enabled
+              value: false

@@ -1708,7 +1708,7 @@ index b6c1923..49c4a51 100644
      Shader shader;
      final RenderState renderState = new RenderState();
 diff --git a/takkernel/engine/src/main/java/com/atakmap/map/opengl/GLMapView.java b/takkernel/engine/src/main/java/com/atakmap/map/opengl/GLMapView.java
-index 1c6b572..563207e 100644
+index 1c6b572..b17129c 100644
 --- a/takkernel/engine/src/main/java/com/atakmap/map/opengl/GLMapView.java
 +++ b/takkernel/engine/src/main/java/com/atakmap/map/opengl/GLMapView.java
 @@ -125,8 +125,13 @@ public class GLMapView implements
@@ -1773,7 +1773,19 @@ index 1c6b572..563207e 100644
          _surface = _context.getRenderSurface();
          impl = legacy ? IMPL_V1 : IMPL_V2;
  
-@@ -448,6 +476,26 @@ public class GLMapView implements
+@@ -411,7 +439,10 @@ public class GLMapView implements
+         if (ctxptr == 0L)
+         {
+             // wrap the context with a native peer
+-            final Pointer ctxwrapPtr = RenderContext_interop.wrap(_context);
++            // The native peer captures the context's surface during this call.
++            final Pointer ctxwrapPtr = contextBinding != null ?
++                    contextBinding.captureForNativePeer(() -> RenderContext_interop.wrap(_context)) :
++                    RenderContext_interop.wrap(_context);
+             // bind the wrapper native peer to the lifetime of the `RenderContext` instance
+             NativePeerManager.register(_context, ctxwrapPtr, null, null, new InteropCleaner(gov.tak.api.engine.map.RenderContext.class));
+             ctxptr = ctxwrapPtr.raw;
+@@ -448,6 +479,26 @@ public class GLMapView implements
          this.controlsListeners = Collections.newSetFromMap(new IdentityHashMap<>());
  
          this.rendererControls = Collections2.newIdentityHashSet();
@@ -1800,7 +1812,7 @@ index 1c6b572..563207e 100644
  
          if (impl == IMPL_V2)
          {
-@@ -479,14 +527,19 @@ public class GLMapView implements
+@@ -479,14 +530,19 @@ public class GLMapView implements
          // default collide radius of 10m
          setCollideRadius(pointer.raw, 10d);
  
@@ -1824,7 +1836,7 @@ index 1c6b572..563207e 100644
                  0d,
                  0d,
                  OSMUtils.mapnikTileResolution(0),
-@@ -598,18 +651,70 @@ public class GLMapView implements
+@@ -598,18 +654,70 @@ public class GLMapView implements
       */
      public void dispose()
      {
@@ -1897,7 +1909,7 @@ index 1c6b572..563207e 100644
          } finally
          {
              this.rwlock.releaseRead();
-@@ -1347,6 +1452,23 @@ public class GLMapView implements
+@@ -1347,6 +1455,23 @@ public class GLMapView implements
       */
      public void render()
      {
@@ -1921,7 +1933,7 @@ index 1c6b572..563207e 100644
  
          gov.tak.api.engine.map.RenderContext.setCurrent(this.getRenderContext());
  
-@@ -1384,16 +1506,30 @@ public class GLMapView implements
+@@ -1384,16 +1509,30 @@ public class GLMapView implements
  
      public void start()
      {
@@ -1952,7 +1964,7 @@ index 1c6b572..563207e 100644
      }
  
      protected void drawRenderables()
-@@ -3546,6 +3682,9 @@ public class GLMapView implements
+@@ -3546,6 +3685,9 @@ public class GLMapView implements
      static native Pointer create(long ctxPtr, long mapviewPtr, int left, int bottom, int right, int top, boolean orthoOnly);
  
      static native void render(long ptr);
@@ -2023,12 +2035,12 @@ index c9e8a25..80726a0 100644
                  if (o != null)
                      continue;
              }
-diff --git a/b/takkernel/engine/src/main/java/com/atakmap/map/opengl/RenderContextBinding.java b/takkernel/engine/src/main/java/com/atakmap/map/opengl/RenderContextBinding.java
+diff --git a/takkernel/engine/src/main/java/com/atakmap/map/opengl/RenderContextBinding.java b/takkernel/engine/src/main/java/com/atakmap/map/opengl/RenderContextBinding.java
 new file mode 100644
-index 0000000..9fa9c4a
+index 0000000..650d564
 --- /dev/null
 +++ b/takkernel/engine/src/main/java/com/atakmap/map/opengl/RenderContextBinding.java
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,314 @@
 +// Copyright 2026 uds-takserver authors
 +// SPDX-License-Identifier: GPL-3.0-only
 +package com.atakmap.map.opengl;
@@ -2050,7 +2062,18 @@ index 0000000..9fa9c4a
 +    private static final java.util.Set<RenderContextBinding> identities =
 +            java.util.Collections.newSetFromMap(new IdentityHashMap<RenderContextBinding, Boolean>());
 +    private gov.tak.api.engine.map.RenderContext delegate;
++    // Clients own their surface object: TAKX downcasts the surface of a
++    // renderer's context to its own java.awt.Component types and compares it
++    // by identity, as the unpatched Kernel permits. A surface that implements
++    // the legacy type this interface returns is therefore recorded at bind
++    // time and returned unchanged. It cannot change afterwards: the view and
++    // the native peer hold it for the renderer's lifetime, so a replacement
++    // context must supply the same object.
++    private RenderSurface clientSurface;
++    // The forwarding surface stays the native peer's surface, and the visible
++    // surface of clients whose surface lacks the legacy type.
 +    private final Surface surface = new Surface();
++    private Thread nativeCapture;
 +    private final ArrayDeque<Task> pending = new ArrayDeque<>();
 +    private long generation;
 +    private boolean released;
@@ -2075,6 +2098,8 @@ index 0000000..9fa9c4a
 +        delegate = Objects.requireNonNull(context, "render context");
 +        if (!context.isMainContext() || context.supportsChildContext())
 +            throw new IllegalArgumentException("unshared main context required");
++        gov.tak.api.engine.map.RenderSurface bound = context.getRenderSurface();
++        clientSurface = bound instanceof RenderSurface ? (RenderSurface)bound : null;
 +        synchronized (identities) { identities.add(this); }
 +    }
 +    synchronized boolean claimed() { return claimed; }
@@ -2091,12 +2116,85 @@ index 0000000..9fa9c4a
 +            throw new IllegalStateException("Context must be quiescent before terminal disposal");
 +        terminated = true;
 +        delegate = null;
++        clientSurface = null;
++    }
++    /** Runs the creation of this binding's native peer. The peer reads
++     * getRenderSurface() once, during that creation, and keeps the result. Only
++     * that read sees the forwarding surface, so native size listeners remain
++     * counted and generation-guarded for a client-owned surface as well. */
++    <T> T captureForNativePeer(java.util.function.Supplier<T> creation) {
++        synchronized (this) {
++            if (terminated) throw new IllegalStateException("Renderer context is terminally disposed");
++            if (nativeCapture != null) throw new IllegalStateException("Native peer creation already in progress");
++            nativeCapture = Thread.currentThread();
++        }
++        try { return creation.get(); }
++        finally { synchronized (this) { nativeCapture = null; } }
++    }
++    /** Whether the calling thread has the context's GL context current. A
++     * surface that is a JOGL drawable answers with the actual current GL
++     * context: a client context may track its GL thread with a flag that only
++     * its own later drawable callbacks set, which says nothing while the
++     * client rebinds inside its init callback. Other contexts are asked. */
++    private static boolean current(gov.tak.api.engine.map.RenderContext context) {
++        Boolean actual = Drawable.contextCurrent(context.getRenderSurface());
++        return actual != null ? actual : context.isRenderThread() && context.isAttached();
++    }
++    // The native lifecycle guards ask this binding. They get the same answer
++    // as the guards above; a context's own render-thread claim is kept too.
++    private static boolean renderThread(gov.tak.api.engine.map.RenderContext context) {
++        if (context.isRenderThread()) return true;
++        Boolean actual = Drawable.contextCurrent(context.getRenderSurface());
++        return actual != null && actual;
++    }
++    private static boolean attached(gov.tak.api.engine.map.RenderContext context) {
++        Boolean actual = Drawable.contextCurrent(context.getRenderSurface());
++        return actual != null ? actual : context.isAttached();
++    }
++    /** com.jogamp.opengl.GLAutoDrawable.getContext() == GLContext.getCurrent().
++     * This source set is also compiled without JOGL, so the two public methods
++     * are resolved from the drawable interface the surface itself implements. */
++    private static final class Drawable {
++        private static final java.lang.reflect.Method[] NONE = {};
++        private static final Map<Class<?>, java.lang.reflect.Method[]> methods =
++                java.util.Collections.synchronizedMap(new java.util.WeakHashMap<Class<?>, java.lang.reflect.Method[]>());
++        private static Class<?> drawableInterface(Class<?> type) {
++            for (; type != null; type = type.getSuperclass()) {
++                for (Class<?> candidate : type.getInterfaces()) {
++                    if (candidate.getName().equals("com.jogamp.opengl.GLAutoDrawable")) return candidate;
++                    Class<?> inherited = drawableInterface(candidate);
++                    if (inherited != null) return inherited;
++                }
++            }
++            return null;
++        }
++        /** null when the surface is not a JOGL drawable. */
++        static Boolean contextCurrent(Object surface) {
++            if (surface == null) return null;
++            java.lang.reflect.Method[] resolved = methods.get(surface.getClass());
++            try {
++                if (resolved == null) {
++                    Class<?> drawable = drawableInterface(surface.getClass());
++                    if (drawable == null) resolved = NONE;
++                    else {
++                        java.lang.reflect.Method getContext = drawable.getMethod("getContext");
++                        resolved = new java.lang.reflect.Method[]{getContext, getContext.getReturnType().getMethod("getCurrent")};
++                    }
++                    methods.put(surface.getClass(), resolved);
++                }
++                if (resolved.length == 0) return null;
++                Object context = resolved[0].invoke(surface);
++                return context != null && context == resolved[1].invoke(null);
++            } catch (ReflectiveOperationException failure) {
++                // Never fall back to a weaker answer for a drawable surface.
++                throw new IllegalStateException("current GL context of the drawable surface cannot be determined", failure);
++            }
++        }
 +    }
 +    synchronized long generation() { return generation; }
 +    synchronized boolean released() { return released; }
 +    void requireCurrent() {
-+        gov.tak.api.engine.map.RenderContext current = delegate();
-+        if (!current.isRenderThread() || !current.isAttached())
++        if (!current(delegate()))
 +            throw new IllegalStateException("current owning GL thread required");
 +    }
 +    /** Privileged terminal cleanup of an already GPU-released binding. This
@@ -2156,21 +2254,23 @@ index 0000000..9fa9c4a
 +        if (!released || !pending.isEmpty() || callbacks != 0) throw new IllegalStateException("stop/release before rebinding");
 +        if (!replacement.isMainContext() || replacement.supportsChildContext())
 +            throw new IllegalArgumentException("unshared main context required");
-+        if (!replacement.isRenderThread() || !replacement.isAttached())
++        if (clientSurface != null && replacement.getRenderSurface() != clientSurface)
++            throw new IllegalArgumentException("replacement context must keep the renderer's render surface object");
++        if (!current(replacement))
 +            throw new IllegalStateException("replacement current GL thread required");
 +        if (!surface.listeners.isEmpty()) throw new IllegalStateException("old surface listeners still registered");
 +        delegate = replacement;
 +        released = false;
 +        quiescing = false;
 +    }
-+    @Override public synchronized boolean isRenderThread() { return !released && delegate.isRenderThread(); }
++    @Override public synchronized boolean isRenderThread() { return !released && renderThread(delegate); }
 +    @Override public void queueEvent(Runnable runnable) {
 +        Objects.requireNonNull(runnable, "render work");
 +        final Task task;
 +        final gov.tak.api.engine.map.RenderContext target;
 +        synchronized (this) {
 +            if (released) throw new IllegalStateException("render context has been released");
-+            if (quiescing && (!delegate.isRenderThread() || !delegate.isAttached()))
++            if (quiescing && !current(delegate))
 +                throw new IllegalStateException("render context is quiescing; no new external work");
 +            task = new Task(runnable, generation); pending.addLast(task); target = delegate;
 +        }
@@ -2219,11 +2319,14 @@ index 0000000..9fa9c4a
 +    @Override public void destroyChildContext(gov.tak.api.engine.map.RenderContext child) {
 +        throw new IllegalArgumentException("not a child of this view binding");
 +    }
-+    @Override public synchronized boolean isAttached() { return !released && delegate.isAttached(); }
++    @Override public synchronized boolean isAttached() { return !released && attached(delegate); }
 +    @Override public boolean attach() { return delegate().attach(); }
 +    @Override public boolean detach() { return delegate().detach(); }
 +    @Override public boolean isMainContext() { return true; }
-+    @Override public RenderSurface getRenderSurface() { return surface; }
++    @Override public synchronized RenderSurface getRenderSurface() {
++        if (clientSurface == null || nativeCapture == Thread.currentThread()) return surface;
++        return clientSurface;
++    }
 +
 +    private final class Surface implements RenderSurface, RenderSurface2 {
 +        private final Map<OnSizeChangedListener, OnSizeChangedListener> listeners = new IdentityHashMap<>();

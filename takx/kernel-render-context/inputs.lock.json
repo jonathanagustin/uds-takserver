@@ -17,9 +17,9 @@
     }
   },
   "binding_state_control": {
-    "assertions": 88,
     "path": "tests/BindingStateTest.java",
-    "sha256": "39f74e09ef13c49a3e3bb94dc719111c9a84aba85a0a6564e64ae532ea59a496"
+    "assertions": 106,
+    "sha256": "ac6fd31c02a2045767c8355b5a6679eb679722b835c0e69b755ef17664111f19"
   },
   "client_jni": {
     "files": {
@@ -38,8 +38,8 @@
     },
     "selected_patch_sha256": "6917693ff5aa58cd467deb7cf841298b83dd0b4aab2ab1c71abea00c61505073"
   },
-  "context_patch_sha256": "0371e8d01a89f5125466865f346043d4623e85c6f0696999da7f5596f4f1703c",
-  "context_scope_sha256": "8a7c2ef0dd0037625016c35c881f3aaaebf0269540f30b45bd3eb9b66a2c6e5a",
+  "context_patch_sha256": "5e9d9fba183e1369974be16f56f2b834ca1909bb5665ece28696000f632cf29e",
+  "context_scope_sha256": "620dda4b467493776099ada5e154e1635f6c9646858e48dc3f7ac682ce536cec",
   "full_sdk_accepted": false,
   "gpu_qualified": false,
   "native_builder_integration": false,
@@ -158,9 +158,9 @@
       "takkernel/engine/src/main/java/com/atakmap/map/layer/raster/tilereader/opengl/GLQuadTileNode4.java": "bb17d73f8654cc84ddc47d06d34c543b752b53a33287f813ce597be02dabcf6d",
       "takkernel/engine/src/main/java/com/atakmap/map/layer/raster/tilereader/opengl/NodeContextResources.java": "fbea28b56e6ebed75506dac0f4885ab925bf996252282e1686c5f2d282041e54",
       "takkernel/engine/src/main/java/com/atakmap/map/layer/raster/tilereader/opengl/NodeCore.java": "ede1d67e5a3781d6782891e19f4ef323384972cdf98da3ea67e3c379748160cd",
-      "takkernel/engine/src/main/java/com/atakmap/map/opengl/GLMapView.java": "67847bff67b1ac167289b817e2ea17c1960c2b207e0e3d2728a8e78d8e5fcee1",
+      "takkernel/engine/src/main/java/com/atakmap/map/opengl/GLMapView.java": "1086ca73a15b5cdd15cae441272acb52b17e959e4f65f92e14a225f4749bcb54",
       "takkernel/engine/src/main/java/com/atakmap/map/opengl/GLRenderGlobals.java": "63ab99f33955d5b0594221aac21549e9ed8315ad6c041d6f9c12908411740d22",
-      "takkernel/engine/src/main/java/com/atakmap/map/opengl/RenderContextBinding.java": "dff5bcfdf4843c89513d5ddfad17c35f8272245933620052f6af6eebda1e3783",
+      "takkernel/engine/src/main/java/com/atakmap/map/opengl/RenderContextBinding.java": "77ad3d5587ade37ca8039afecf375ddaa26b1a4a6795f381753bfe79a06207ba",
       "takkernel/engine/src/main/java/com/atakmap/opengl/GLES20FixedPipeline.java": "1e95fc22fed50ab2a1ed4b06144bf9fea919672f3d1d8bde6be8e9463ab2729e",
       "takkernel/engine/src/main/java/com/atakmap/opengl/GLNinePatch.java": "e0f4221f391e70d38105e153a956b311125be86b0c5e0a3fee5c4d6c0b778158",
       "takkernel/engine/src/main/java/com/atakmap/opengl/GLText.java": "8d6507b7c5eac4a8a7a6eeb338873187768c4a82658de72570b5cec169b35f6b",
@@ -221,9 +221,9 @@
       "takkernel/engine/src/main/java/com/atakmap/map/layer/raster/tilereader/opengl/GLQuadTileNode4.java": "bb17d73f8654cc84ddc47d06d34c543b752b53a33287f813ce597be02dabcf6d",
       "takkernel/engine/src/main/java/com/atakmap/map/layer/raster/tilereader/opengl/NodeContextResources.java": "fbea28b56e6ebed75506dac0f4885ab925bf996252282e1686c5f2d282041e54",
       "takkernel/engine/src/main/java/com/atakmap/map/layer/raster/tilereader/opengl/NodeCore.java": "ede1d67e5a3781d6782891e19f4ef323384972cdf98da3ea67e3c379748160cd",
-      "takkernel/engine/src/main/java/com/atakmap/map/opengl/GLMapView.java": "67847bff67b1ac167289b817e2ea17c1960c2b207e0e3d2728a8e78d8e5fcee1",
+      "takkernel/engine/src/main/java/com/atakmap/map/opengl/GLMapView.java": "1086ca73a15b5cdd15cae441272acb52b17e959e4f65f92e14a225f4749bcb54",
       "takkernel/engine/src/main/java/com/atakmap/map/opengl/GLRenderGlobals.java": "63ab99f33955d5b0594221aac21549e9ed8315ad6c041d6f9c12908411740d22",
-      "takkernel/engine/src/main/java/com/atakmap/map/opengl/RenderContextBinding.java": "dff5bcfdf4843c89513d5ddfad17c35f8272245933620052f6af6eebda1e3783",
+      "takkernel/engine/src/main/java/com/atakmap/map/opengl/RenderContextBinding.java": "77ad3d5587ade37ca8039afecf375ddaa26b1a4a6795f381753bfe79a06207ba",
       "takkernel/engine/src/main/java/com/atakmap/opengl/GLES20FixedPipeline.java": "1e95fc22fed50ab2a1ed4b06144bf9fea919672f3d1d8bde6be8e9463ab2729e",
       "takkernel/engine/src/main/java/com/atakmap/opengl/GLNinePatch.java": "e0f4221f391e70d38105e153a956b311125be86b0c5e0a3fee5c4d6c0b778158",
       "takkernel/engine/src/main/java/com/atakmap/opengl/GLText.java": "8d6507b7c5eac4a8a7a6eeb338873187768c4a82658de72570b5cec169b35f6b",
