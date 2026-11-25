@@ -9,7 +9,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = ('defenseunicorns/uds-common/.github/workflows/callable-scorecard.yaml@'
-            '9cb4ebfd9f9a5efd1dbc454bf3aae843d0b57b9f')
+            '807de6f4efca9f51ee5e8d3e466d5f089c9eaab8')
 # Extracted policy fixture for that exact reusable workflow: top read-all,
 # run job security-events:write for SARIF and id-token:write for badge publication.
 # These are the explicit read scopes its current local caller already grants.

@@ -230,7 +230,7 @@ publish_package() {
   fi
   files=("${dir}"/zarf-package-atak-device-amd64-*.tar.zst)
   [[ -f "${files[0]}" ]] || { echo "No package in ${dir}" >&2; return 1; }
-  uds zarf package publish "${files[0]}" "oci://${PKG_REPO}" --tag "${ATAK_VERSION}-${PKG_KEY}" --confirm
+  uds zarf package publish "${files[0]}" "oci://${PKG_REPO}" --tag "${ATAK_VERSION}-${PKG_KEY}"
 }
 
 case "${1:-keys}" in

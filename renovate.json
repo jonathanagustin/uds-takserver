@@ -334,6 +334,45 @@
       ],
       "matchCurrentValue": "/^22\\./",
       "allowedVersions": "<23"
+    },
+    {
+      "description": "Held back until qualified on their own. A weekly batch that moved these together broke CI: UDS Core 1.17.2 (the bundles and ADR 0021 expect the Velero that Core runs), Velero v1.19.0 (zarf.yaml bundles v1.18.4 for node-agent), Python 3.15 (tests need 3.12; pylsqpack 0.3 does not build), the gcc builder digest used by the native caches, the mise Java metadata (temurin-17.0.21+100000002 has no installable build), and Playwright (tests run in a pinned mcr.microsoft.com/playwright image that must match @playwright/test). Each waits for approval on the dependency dashboard, then gets its own pull request.",
+      "matchPackageNames": [
+        "defenseunicorns/uds-core",
+        "/^ghcr\\.io/defenseunicorns/packages/uds/core-/",
+        "velero/velero",
+        "docker.io/velero/velero",
+        "gcc",
+        "docker.io/library/gcc",
+        "python",
+        "docker.io/library/python",
+        "@playwright/test",
+        "playwright",
+        "mcr.microsoft.com/playwright"
+      ],
+      "dependencyDashboardApproval": true,
+      "addLabels": [
+        "held",
+        "needs-qualification"
+      ]
+    },
+    {
+      "description": "The Java that mise installs must resolve to a real Temurin build. Updates wait for approval on the dependency dashboard.",
+      "matchDepNames": [
+        "java"
+      ],
+      "dependencyDashboardApproval": true,
+      "addLabels": [
+        "held",
+        "needs-qualification"
+      ]
+    },
+    {
+      "description": "dhi.io images need a registry login Renovate does not have, so the lookup fails and the dashboard reports an error. The TAK Server base is a digest-pinned dhi.io Temurin 17 qualified by hand (ADR 0025, #871); move it deliberately, not through a Renovate update.",
+      "matchPackageNames": [
+        "dhi.io/**"
+      ],
+      "enabled": false
     }
   ],
   "git-submodules": {

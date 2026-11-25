@@ -1,0 +1,43 @@
+{
+  "$schema": "https://unpkg.com/syncpack@15.3.4/schema.json",
+  "source": [
+    "package.json",
+    ".github/lula/package.json",
+    "atak/ci/package.json",
+    "docs-site/package.json",
+    "pepr/package.json",
+    "pepr/mutation/package.json",
+    "tests/package.json"
+  ],
+  "versionGroups": [
+    {
+      "label": "Workspace package names carry no version",
+      "dependencyTypes": [
+        "local"
+      ],
+      "isIgnored": true
+    },
+    {
+      "label": "Playwright for the pinned test image: tests and the ATAK CI driver run in mcr.microsoft.com/playwright, so both must match that image tag",
+      "packages": [
+        "**"
+      ],
+      "dependencies": [
+        "playwright",
+        "@playwright/test"
+      ],
+      "specifierTypes": [
+        "exact"
+      ]
+    }
+  ],
+  "semverGroups": [
+    {
+      "label": "Exact pins everywhere except Docs, which has its own caret ranges",
+      "packages": [
+        "!docs-site"
+      ],
+      "range": ""
+    }
+  ]
+}

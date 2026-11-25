@@ -1,5 +1,41 @@
 # Changelog
 
+## [1.4.0](https://github.com/jonathanagustin/uds-takserver/compare/v1.3.0...v1.4.0) (2026-11-24)
+
+
+### Features
+
+* **ci:** expand install-reuse-shadow policy closure to acquisition and airgap helpers ([#887](https://github.com/jonathanagustin/uds-takserver/issues/887)) ([4afaa15](https://github.com/jonathanagustin/uds-takserver/commit/4afaa157200efe480d57388a3961c88520f26a42))
+* **ci:** expand install-reuse-shadow policy closure to task and bundle definitions ([#900](https://github.com/jonathanagustin/uds-takserver/issues/900)) ([73d78b5](https://github.com/jonathanagustin/uds-takserver/commit/73d78b543a4f2ba7479b2170b109e9dbf1b64d29)), closes [#419](https://github.com/jonathanagustin/uds-takserver/issues/419)
+* **pepr:** add Zero Trust and security validating policies ([#904](https://github.com/jonathanagustin/uds-takserver/issues/904)) ([a1d9a8d](https://github.com/jonathanagustin/uds-takserver/commit/a1d9a8d447dc5b88c4b0927128a7df062f38d465)), closes [#903](https://github.com/jonathanagustin/uds-takserver/issues/903)
+* **takx:** add prebuilt cesium 0.40.1 Layer-2 OCI cache ([#881](https://github.com/jonathanagustin/uds-takserver/issues/881)) ([807c8d1](https://github.com/jonathanagustin/uds-takserver/commit/807c8d1363dc8c35895062454df4ebe024c1d467))
+* **takx:** build vehicle-metadata.jar and run 34 CoT controls live on Linux JDK 17 ([#888](https://github.com/jonathanagustin/uds-takserver/issues/888)) ([702ef6f](https://github.com/jonathanagustin/uds-takserver/commit/702ef6f76794c65f92ba1d1ab9c03481458af84e))
+* **takx:** qualify font-jni-control preparation and FontJniProbe live in CI ([#899](https://github.com/jonathanagustin/uds-takserver/issues/899)) ([8d26509](https://github.com/jonathanagustin/uds-takserver/commit/8d265094c2b6940ced5478d5c83be9ecabd64ed9))
+* **takx:** qualify Kernel 8.30.5 client-interop overlay and HeadlessControls live in CI ([#891](https://github.com/jonathanagustin/uds-takserver/issues/891)) ([745388f](https://github.com/jonathanagustin/uds-takserver/commit/745388f25b9818c09aef0eae5ce9ae5624476456))
+* **takx:** qualify Kernel 8.30.5 elevation contours live in CI ([#894](https://github.com/jonathanagustin/uds-takserver/issues/894)) ([4fd1873](https://github.com/jonathanagustin/uds-takserver/commit/4fd1873640fd5f183b4708dc6d87305c2e142460))
+* **takx:** qualify Kernel 8.30.5 elevation JNI boundary controls live in CI ([#893](https://github.com/jonathanagustin/uds-takserver/issues/893)) ([a12276d](https://github.com/jonathanagustin/uds-takserver/commit/a12276de5f7e08b17a0edf5687c747b415508d4b))
+* **takx:** qualify Kernel 8.30.5 feature JNI callback controls live in CI ([#896](https://github.com/jonathanagustin/uds-takserver/issues/896)) ([42e2bed](https://github.com/jonathanagustin/uds-takserver/commit/42e2bedbc2f5c50827b732aae4aa48d7b7ad3f28))
+* **takx:** qualify Kernel 8.30.5 format regressions live in CI ([#886](https://github.com/jonathanagustin/uds-takserver/issues/886)) ([8b9ffe0](https://github.com/jonathanagustin/uds-takserver/commit/8b9ffe04e8cd263a83f5da688ab2d8a0064db564))
+* **takx:** qualify Kernel 8.30.5 render-context and scene JNI controls live in CI ([#898](https://github.com/jonathanagustin/uds-takserver/issues/898)) ([acb0458](https://github.com/jonathanagustin/uds-takserver/commit/acb0458244af211906641f1e16b595e5211f060a))
+* **takx:** qualify Kernel 8.30.5 SDK and CommonCommo 1.17.2 coexistence live in CI ([#889](https://github.com/jonathanagustin/uds-takserver/issues/889)) ([68e68df](https://github.com/jonathanagustin/uds-takserver/commit/68e68df7b53f54b3030d39faa441f606e141088c))
+* **takx:** qualify Kernel 8.30.5 SDK package and stock loader live in CI ([#885](https://github.com/jonathanagustin/uds-takserver/issues/885)) ([523e7c9](https://github.com/jonathanagustin/uds-takserver/commit/523e7c9801f19e392defe1d62f45eee30dca5002))
+* **takx:** qualify TAKX 5.7 and 5.8 WorldWind consumer staging live on Linux ([#882](https://github.com/jonathanagustin/uds-takserver/issues/882)) ([93976a3](https://github.com/jonathanagustin/uds-takserver/commit/93976a3c013038a463da25615ec85d4b45c066f2))
+* **takx:** qualify TAKX 5.8 elevation-download-compat controls live in CI ([#895](https://github.com/jonathanagustin/uds-takserver/issues/895)) ([d95b5b6](https://github.com/jonathanagustin/uds-takserver/commit/d95b5b6a2a7bbafc253e84c04b6d6c9f0c014093))
+* **takx:** run Kernel 8.30.5 native build and -Xcheck:jni controls live in CI ([#884](https://github.com/jonathanagustin/uds-takserver/issues/884)) ([0b08cfe](https://github.com/jonathanagustin/uds-takserver/commit/0b08cfe7cf3ed2b01629b04d662414ef6a1b45b4))
+* **zarf:** protect upstream chart images and ingress via excludePaths ([#897](https://github.com/jonathanagustin/uds-takserver/issues/897)) ([070a743](https://github.com/jonathanagustin/uds-takserver/commit/070a7433af11040707cef7e09da8578d402b63ef))
+
+
+### Bug Fixes
+
+* **atak:** publish the device package without the removed --confirm flag ([#908](https://github.com/jonathanagustin/uds-takserver/issues/908)) ([4f37efe](https://github.com/jonathanagustin/uds-takserver/commit/4f37efefcf01e265d8a756c2ebda8f0cb7d2b5d4))
+* **deps:** update weekly dependency updates ([#902](https://github.com/jonathanagustin/uds-takserver/issues/902)) ([48fe3bc](https://github.com/jonathanagustin/uds-takserver/commit/48fe3bc7f84d8643290fab3f0e56595a8091f173))
+* **pepr:** seed onMessaging test cert relative to live wall clock ([#890](https://github.com/jonathanagustin/uds-takserver/issues/890)) ([34fb8b2](https://github.com/jonathanagustin/uds-takserver/commit/34fb8b243636d5b2a30e81d0c5eaa6772d811746))
+
+
+### Miscellaneous
+
+* **deps:** replace dependency actions/attest-build-provenance with actions/attest ([#901](https://github.com/jonathanagustin/uds-takserver/issues/901)) ([4085b2b](https://github.com/jonathanagustin/uds-takserver/commit/4085b2b2b69fc8bc8049ae142a874b3eb2859561))
+
 ## [1.3.0](https://github.com/jonathanagustin/uds-takserver/compare/v1.2.3...v1.3.0) (2026-11-23)
 
 

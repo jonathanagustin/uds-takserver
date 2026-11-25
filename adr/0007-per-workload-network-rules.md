@@ -40,7 +40,7 @@ Remaining gaps:
 
 Every Ingress rule from other pods now also sets `remoteServiceAccount`. The UDS Operator then writes the AuthorizationPolicy source as the client's mTLS principal (`cluster.local/ns/<namespace>/sa/<account>`) instead of the whole namespace. The NetworkPolicy still matches the pod labels.
 
-- `workloadServiceAccounts` in `charts/takserver/values.yaml` maps each TAK client's app label to its ServiceAccount. The render fails for a client with no entry. The upstream chart gives api, messaging, config, plugins and Ignite one account, `takserver-ignite`, and leaves the db-setup Job on `default`. So the identity separates the TAK processes from any other pod in the namespace, but not from each other. Per-process accounts need an upstream chart change.
+- `workloadServiceAccounts` in `charts/takserver/values.yaml` maps each TAK client's app label to its ServiceAccount. The render fails for a client with no entry. The upstream chart gives api, messaging, config, plugins and Ignite one account, `takserver-ignite`, and leaves the db-setup Job on `default`. So the identity separates the TAK processes from any other pod in the namespace, but not from each other. The opt-in admission path described below assigns per-process accounts without an upstream chart fork; the default remains shared.
 - The Ingress rules from CloudTAK, in the takserver Package and on CloudTAK's PostGIS, match the `cloudtak` ServiceAccount. The basemap `remoteHost` rule already sets `serviceAccount: cloudtak`.
 - In Core 1.16.0, `serviceAccount` scopes ambient waypoint egress for both `remoteHost` and `remoteGenerated: Anywhere` ([rule translation](https://github.com/defenseunicorns/uds-core/blob/v1.16.0/src/pepr/operator/controllers/istio/egress.ts#L148-L176), [ServiceAccount principals](https://github.com/defenseunicorns/uds-core/blob/v1.16.0/src/pepr/operator/controllers/istio/egress-ambient.ts#L85-L159)). Ordinary in-cluster egress still uses [label selectors](https://github.com/defenseunicorns/uds-core/blob/v1.16.0/src/pepr/operator/controllers/network/generators/egress.ts), so the Keycloak tenant gateway and Kubernetes API rules stay label-based.
 - `tests/flows.py --check` fails when an Ingress rule from other pods has no `remoteServiceAccount`. It also fails when a generated ALLOW AuthorizationPolicy admits the namespace or a peer namespace with no principal.
@@ -60,10 +60,26 @@ the Ignite log permission to config. No new cluster-wide permission is granted.
 Pod admission preserves a standalone pod's chosen account, so copying an app
 label does not automatically acquire that workload's identity.
 
-Policy generation is asynchronous. Migration therefore requires a config-first
-stage and observed dual-principal convergence before admission changes, followed
-by inspection of every live Pod identity before strict enforcement. Rollback
-uses the same dual-policy stage before restoring legacy identities. The exact
-procedure is in [networking.md](../docs/networking.md#opt-in-tak-workload-identity-migration).
-Defaults remain shared until live migration and negative traffic checks pass on
-both architectures. Rendered manifests alone do not satisfy issue #32.
+Policy generation is asynchronous. The supported package-stage path uses the
+pinned Zarf 1.0.1 [sequential chart deployment](https://github.com/zarf-dev/zarf/blob/v1.0.1/src/pkg/packager/deploy.go#L790-L865)
+and [per-chart custom-resource health check](https://github.com/zarf-dev/zarf/blob/v1.0.1/src/internal/packager/helm/chart.go#L169-L189).
+The configuration chart must complete before the Pepr admission chart starts.
+For an existing Package, the checker rejects a stale
+[`status.observedGeneration`](https://github.com/zarf-dev/zarf/blob/v1.0.1/vendor/sigs.k8s.io/cli-utils/pkg/kstatus/status/generic.go#L73-L100)
+and requires a true [Ready condition](https://github.com/zarf-dev/zarf/blob/v1.0.1/vendor/sigs.k8s.io/cli-utils/pkg/kstatus/status/status.go#L154-L181).
+Core 1.16.0 [publishes both after reconciliation](https://github.com/defenseunicorns/uds-core/blob/v1.16.0/src/pepr/operator/reconcilers/package-reconciler.ts#L159-L174).
+This replaces the earlier manual Helm config-first staging procedure for this
+path. A stored Package alone does not establish policy convergence. See the
+[operator procedure](../docs/networking.md#opt-in-tak-workload-identity-migration).
+
+Existing installations follow `shared` → `transition` → `strict`, verifying all
+live Pod identities and positive/negative traffic before removing legacy
+principals. Reversal follows `strict` → `rollback` → `shared`, retaining both
+principal sets until legacy identities return. A clean strict installation is a
+separate qualification case, not a direct shared-to-strict migration.
+
+The guarded package trial also checks retained application data through migration
+and reversal, then tests a clean strict reinstall in its disposable cluster.
+**Both-architecture live qualification is pending.** No successful run is claimed;
+source tests and rendered manifests alone do not satisfy issue #32. The default
+remains shared.

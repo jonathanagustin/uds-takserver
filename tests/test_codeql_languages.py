@@ -127,8 +127,8 @@ class CodeQLLanguageTests(unittest.TestCase):
         self.assertIn(checkout, text)
         for pin in (
             checkout,
-            'github/codeql-action/init@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2',
-            'github/codeql-action/analyze@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2',
+            'github/codeql-action/init@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4',
+            'github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4',
         ):
             self.assertIn(pin, called_text)
             self.assertIn(pin, codeql)

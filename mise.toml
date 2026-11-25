@@ -6,9 +6,9 @@
 
 [tools]
 # renovate: datasource=node depName=node versioning=node
-node = "26.13.0"
+node = "26.13.1"
 # renovate: datasource=github-releases depName=jdx/hk versioning=semver
-hk = "2.11.1"
+hk = "2.14.0"
 # renovate: datasource=github-releases depName=k3d-io/k3d versioning=semver-coerced
 k3d = "5.9.0"
 # renovate: datasource=github-releases depName=helm/helm versioning=semver
@@ -22,17 +22,17 @@ shellcheck = "0.11.0"
 # renovate: datasource=github-releases depName=rhysd/actionlint versioning=semver
 actionlint = "1.7.12"
 # renovate: datasource=github-releases depName=astral-sh/uv versioning=semver
-uv = "0.13.7"
+uv = "0.13.9"
 # Renovate's built-in mise manager updates java, so it has no # renovate: line.
 java = "temurin-17.0.21+9"
 # renovate: datasource=github-releases depName=anchore/syft versioning=semver
-syft = "1.57.0"
+syft = "1.57.2"
 # renovate: datasource=github-releases depName=anchore/grype versioning=semver
-grype = "0.121.2"
+grype = "0.122.1"
 # renovate: datasource=github-releases depName=opentofu/opentofu versioning=semver
-opentofu = "1.13.9"
+opentofu = "1.13.10"
 # renovate: datasource=npm depName=pnpm
-pnpm = "12.18.0"
+pnpm = "12.23.0"
 # renovate: datasource=pypi depName=codespell versioning=pep440
 "pypi:codespell" = { version = "2.4.3", depends = "uv" }
 # renovate: datasource=github-releases depName=google/go-containerregistry versioning=semver
@@ -44,7 +44,7 @@ crane = "0.22.1"
 # renovate: datasource=github-releases depName=gitleaks/gitleaks versioning=semver
 "aqua:gitleaks/gitleaks" = "8.30.1"
 # renovate: datasource=github-releases depName=google/osv-scanner versioning=semver
-"aqua:google/osv-scanner" = "2.7.0"
+"aqua:google/osv-scanner" = "2.7.1"
 
 [tasks.build-image]
 description = "Build the six TAK Server images from the public 5.7-RELEASE-14 source"
