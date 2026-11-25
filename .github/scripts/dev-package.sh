@@ -27,7 +27,11 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 cd "${root}"
 
-repo="${DEV_PACKAGE_REPO:-ghcr.io/jonathanagustin/uds-takserver/ci-packages}"
+package_repository="jonathanagustin/uds-takserver"
+if [[ -z "${DEV_PACKAGE_REPO:-}" && "${GITHUB_ACTIONS:-}" == "true" && -n "${GITHUB_REPOSITORY:-}" ]]; then
+  package_repository="$(printf '%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+fi
+repo="${DEV_PACKAGE_REPO:-ghcr.io/${package_repository}/ci-packages}"
 case "$(uname -m)" in
   x86_64 | amd64) arch=amd64 ;;
   aarch64 | arm64) arch=arm64 ;;

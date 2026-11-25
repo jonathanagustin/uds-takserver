@@ -603,6 +603,7 @@ jobs:
         if: env.TEST_TYPE == 'upgrade'
         env:
           GH_TOKEN: ${{ github.token }}
+          UPGRADE_BASELINE_REPOSITORY: ${{ github.event.repository.fork && 'jonathanagustin/uds-takserver' || '' }}
         run: python3 -B tests/upgrade-baseline.py --output "${RUNNER_TEMP}/tak-upgrade-baseline.json"
 
       - name: Require the PR images

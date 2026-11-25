@@ -105,10 +105,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    repository = os.environ.get("GITHUB_REPOSITORY", "jonathanagustin/uds-takserver")
+    repository = os.environ.get("UPGRADE_BASELINE_REPOSITORY") or os.environ.get(
+        "GITHUB_REPOSITORY", "jonathanagustin/uds-takserver"
+    )
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise RuntimeError("Invalid repository name")
-    subprocess.run(["git", "fetch", "origin", "main", "--tags"], check=True)
+    remote = f"https://github.com/{repository}.git" if os.environ.get("UPGRADE_BASELINE_REPOSITORY") else "origin"
+    subprocess.run(["git", "fetch", remote, "main", "--tags"], check=True)
     head = os.environ.get("GITHUB_SHA") or git("rev-parse", "HEAD")
     pin = os.environ.get("UPGRADE_BASELINE_TAG") or None
     if pin and not VERSION.fullmatch(pin):

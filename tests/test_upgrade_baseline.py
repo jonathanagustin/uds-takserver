@@ -131,6 +131,24 @@ class BaselineTests(unittest.TestCase):
             with self.assertRaises(urllib.error.URLError):
                 list(baseline.releases("owner/repo"))
 
+    def test_fork_can_fetch_tags_and_releases_from_upstream(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+            "GITHUB_REPOSITORY": "fork-owner/uds-takserver",
+            "UPGRADE_BASELINE_REPOSITORY": "upstream-owner/uds-takserver",
+            "GITHUB_SHA": "candidate",
+        }, clear=True), patch("sys.argv", [
+            "upgrade-baseline.py", "--output", str(Path(directory) / "baseline.json"),
+        ]), patch.object(baseline.subprocess, "run") as fetch, patch.object(
+            baseline, "releases", return_value=[],
+        ) as releases, patch.object(baseline, "select_release", return_value=None), patch(
+            "sys.stdout", new_callable=io.StringIO,
+        ):
+            baseline.main()
+        fetch.assert_called_once_with([
+            "git", "fetch", "https://github.com/upstream-owner/uds-takserver.git", "main", "--tags",
+        ], check=True)
+        releases.assert_called_once_with("upstream-owner/uds-takserver")
+
     def test_no_baseline_writes_notice_summary_and_false_output(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

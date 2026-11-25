@@ -85,6 +85,16 @@ else: sys.exit(99)
                     self.assertIn(b'fixture publisher stdout', result.stdout)
                     self.assertIn(b'fixture publisher stderr', result.stderr)
 
+    def test_ci_publication_defaults_to_the_current_repository(self):
+        root, env, _ = self.fixture()
+        del env['DEV_PACKAGE_REPO']
+        env.update(GITHUB_ACTIONS='true', GITHUB_REPOSITORY='Example/Fork')
+        subprocess.run([BASH, str(SCRIPT), 'publish'], cwd=root, env=env,
+                       check=True, capture_output=True, timeout=10)
+        calls = [json.loads(line) for line in (root / 'calls.jsonl').read_text().splitlines()]
+        publications = [call for call in calls if call[:3] == ['zarf', 'package', 'publish']]
+        self.assertEqual([call[4] for call in publications], ['oci://ghcr.io/example/fork/ci-packages'])
+
     def test_final_publication_failure_propagates_without_rebuild_or_outer_retry(self):
         root, env, archive = self.fixture()
         env['PUBLISH_EXIT'] = '17'
