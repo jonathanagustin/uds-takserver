@@ -188,6 +188,24 @@ class PackageValuesTests(unittest.TestCase):
         self.assertTrue(env["RENDER_IMAGE"].endswith(":9.9-RELEASE-9"))
         self.assertEqual(tak_tags(docs), {"9.9-RELEASE-9"})
 
+    def test_tak_image_tag_package_value_overrides_all_rendered_tak_workloads(self):
+        _out, docs = render(
+            variables=["TAK_IMAGE_TAG=7.7-RELEASE-7"],
+            values=[
+                "tak.imageTag=8.8-RELEASE-8",
+                "chartOverrides.cloudtak.uds-cloudtak.backup.dump.enabled=true",
+            ],
+        )
+        self.assertEqual(tak_tags(docs), {"8.8-RELEASE-8"})
+        self.assertTrue(watcher_env(docs)["RENDER_IMAGE"].endswith(":8.8-RELEASE-8"))
+        self.assertTrue(admission_env(docs)["RENDER_IMAGE"].endswith(":8.8-RELEASE-8"))
+        cert_init = find(docs, "Job", "takserver-cert-init")["spec"]["template"]["spec"]["containers"][0]
+        self.assertTrue(cert_init["image"].endswith(":8.8-RELEASE-8"))
+        health = find(docs, "Deployment", "tak-health")["spec"]["template"]["spec"]["containers"][0]
+        self.assertTrue(health["image"].endswith(":8.8-RELEASE-8"))
+        dump = find(docs, "CronJob", "cloudtak-db-dump")["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
+        self.assertTrue(dump["image"].endswith(":8.8-RELEASE-8"))
+
     def test_plugins_memory_reaches_admission_and_the_watcher(self):
         _out, docs = render()
         admission = admission_env(docs)
@@ -230,6 +248,34 @@ class PackageValuesTests(unittest.TestCase):
         cloud = find(docs, "StatefulSet", "cloudtak-postgis")["spec"]["volumeClaimTemplates"][0]
         self.assertEqual(tak["spec"]["storageClassName"], "tak-class")
         self.assertEqual(cloud["spec"]["storageClassName"], "cloudtak-class")
+
+    def test_storage_class_package_values_override_variables(self):
+        _out, docs = render(
+            variables=[
+                "POSTGRES_STORAGE_CLASS=legacy-tak",
+                "CLOUDTAK_STORAGE_CLASS=legacy-cloud",
+            ],
+            values=[
+                "storage.postgresClass=beta-tak",
+                "storage.cloudtakClass=beta-cloud",
+            ],
+        )
+        tak = find(docs, "StatefulSet", "takserver-postgresql")["spec"]["volumeClaimTemplates"][0]
+        cloud = find(docs, "StatefulSet", "cloudtak-postgis")["spec"]["volumeClaimTemplates"][0]
+        self.assertEqual(tak["spec"]["storageClassName"], "beta-tak")
+        self.assertEqual(cloud["spec"]["storageClassName"], "beta-cloud")
+
+    def test_filesystem_backup_package_values_enable_and_select_owner(self):
+        _out, docs = render(
+            variables=["FILESYSTEM_BACKUP=false", "FILESYSTEM_BACKUP_OWNER=local"],
+            values=["backup.filesystem.enabled=true", "backup.filesystem.owner=core"],
+        )
+        tak_ann = find(docs, "StatefulSet", "takserver-postgresql")["spec"]["template"]["metadata"]["annotations"]
+        cloud_ann = find(docs, "StatefulSet", "cloudtak-postgis")["spec"]["template"]["metadata"]["annotations"]
+        self.assertEqual(tak_ann.get("backup.velero.io/backup-volumes"), "data")
+        self.assertEqual(cloud_ann.get("backup.velero.io/backup-volumes"), "data")
+        daemonsets = [d for d in docs if d.get("kind") == "DaemonSet" and d.get("metadata", {}).get("name") == "node-agent"]
+        self.assertEqual(daemonsets, [])
 
     def test_a_package_value_overrides_the_variable(self):
         out, docs = render(variables=["DOMAIN=example.com"], values=["global.domain=values.example"])
@@ -275,6 +321,36 @@ class PackageValuesTests(unittest.TestCase):
         self.assertNotIn(("Deployment", "tak-health"), names)
         self.assertNotIn(("Service", "tak-health"), names)
         self.assertNotIn("Issued client certificate", str(find(docs, "Job", "takserver-cert-init")))
+
+    def test_takserver_chart_override_exclude_paths_protect_images_and_ingress(self):
+        _out, docs = render(
+            values=[
+                "chartOverrides.takserver.takserver.takserver.ingress.enabled=true",
+                "chartOverrides.takserver.takserver.takserver.api.image.repository=evil.example/takserver-api",
+                "chartOverrides.takserver.takserver.ignite.image.repository=evil.example/ignite",
+                "chartOverrides.takserver.takserver.postgresql.image.repository=evil.example/postgis",
+                "chartOverrides.takserver.takserver.postgresql.primary.resources.limits.memory=640Mi",
+            ]
+        )
+        ingresses = [doc for doc in docs if doc.get("kind") == "Ingress"]
+        self.assertEqual(ingresses, [])
+        for kind, name in (
+            ("Deployment", "takserver-api"),
+            ("StatefulSet", "takserver-ignite"),
+            ("StatefulSet", "takserver-postgresql"),
+        ):
+            containers = find(docs, kind, name)["spec"]["template"]["spec"]["containers"]
+            images = [container["image"] for container in containers]
+            self.assertTrue(images, f"no containers for {kind}/{name}")
+            for image in images:
+                self.assertNotIn("evil.example/", image)
+                self.assertTrue(
+                    image.startswith("ghcr.io/jonathanagustin/uds-takserver/"),
+                    f"unexpected {kind}/{name} image: {image}",
+                )
+        pg_containers = find(docs, "StatefulSet", "takserver-postgresql")["spec"]["template"]["spec"]["containers"]
+        pg_main = next(container for container in pg_containers if "/uds-takserver/postgis:" in container["image"])
+        self.assertEqual(pg_main["resources"]["limits"]["memory"], "640Mi")
 
 
 _NATS_CHART = "https://github.com/nats-io/k8s/releases/download/nats-1.0.1/nats-1.0.1.tgz"

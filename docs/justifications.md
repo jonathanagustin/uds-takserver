@@ -11,7 +11,7 @@ Unified Defense Stack (UDS) Core's policy engine validates and mutates every pod
 
 It prints the exempted-resource list and the security context of each Team Awareness Kit (TAK) server pod.
 
-[![Demo clip: what UDS admission changed on a TAK pod, and the one exemption the package needs](../docs-site/public/demo/demo-clip-policy.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo/demo-clip-policy.mp4)
+[![Demo clip: what UDS admission changed on a TAK pod, and the one exemption the package needs](../docs-site/public/demo/demo-clip-policy.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo-run-44802574418-attempt-1/demo-clip-policy.mp4)
 
 ## Exemptions
 
@@ -65,7 +65,7 @@ Only the optional ATAK test device uses this. It is not part of the package: `at
 
 These are not exemptions. The policy engine mutates these settings or leaves them alone, so no `Exemption` object exists.
 
-[![Demo clip: the ambient mesh, a generated network policy that drops a pod, and the release signature and provenance](../docs-site/public/demo/demo-clip-secure.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo/demo-clip-secure.mp4)
+[![Demo clip: the ambient mesh, a generated network policy that drops a pod, and the release signature and provenance](../docs-site/public/demo/demo-clip-secure.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo-run-44802574418-attempt-1/demo-clip-secure.mp4)
 
 ### Non-root user and writable root filesystem
 
@@ -79,6 +79,17 @@ TAK still starts because the image makes the directories it writes world-writabl
 ### Ambient mesh instead of sidecars
 
 Both Package CRs set `serviceMesh.mode: ambient`. Passthrough Transport Layer Security (TLS) on 8443, 8446, and 8089 has to reach TAK unchanged, and there is no waypoint and no Authservice in front of TAK. See [Networking](networking.md).
+
+### TAK admission policies
+
+Alongside UDS Core's cluster-wide policies, the `takserver-oidc` Pepr module registers capability `takserver-policy` (fail-closed `ValidatingWebhookConfiguration` entries scoped strictly to namespaces `takserver`, `cloudtak`, and `takclients`, with a Common Expression Language (CEL) `matchConditions` filter limiting `ConfigMap` checks to `core-config` and `cert-migration`):
+
+- **Pods (`takserver`, `cloudtak`):** Enforce UDS Core v1.17 Pod and Istio parity: reject `sidecar.istio.io/inject` labels/annotations, Istio sidecar/traffic/ambient override annotations (preserving only `proxy.istio.io/config` on `takserver-db-setup-*`), `istio-proxy`/`istio-validation` containers, UID/GID `1337`, explicit root (`runAsUser: 0` or `runAsNonRoot: false`), `hostNetwork`/`hostPID`/`hostIPC`, non-core volume types (including `hostPath`), `privileged: true`, `allowPrivilegeEscalation: true`, non-default `procMount`, added Linux capabilities, `seLinuxOptions`, non-default/non-localhost `seccompProfile`, and positive `hostPort` values.
+- **Services (`takserver`):** Reject `NodePort` and `ExternalName` Services as well as plaintext port `8080` (except the statically declared `rest` port on upstream `takserver-ignite`, which runs with `ignite-rest-http` removed and `takserver-deny-plaintext-8080` active).
+- **ConfigMaps (`takserver`):** Reject `core-config` updates containing `tls="false"` connectors and reject malformed X.509 PEM payloads in `cert-migration` `ca.pem` before gateway or CloudTAK propagation.
+- **`TakClient` (`takclients`):** Validate `spec.callsign`, `spec.groups`, and `spec.validityDays` at admission time.
+
+The webhook records decisions on Prometheus counters `pepr_tak_policy_allowed` and `pepr_tak_policy_denied`, and `tests/zero-trust.py` checks these rejections live via `--dry-run=server`.
 
 ## UDS package requirements
 

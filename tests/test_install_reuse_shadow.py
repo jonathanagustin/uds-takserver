@@ -171,6 +171,86 @@ class PolicyTests(unittest.TestCase):
                 SHADOW.compare_prospective(self.receipt, p, self.target)
             self.assertNotIn('SENTINEL', str(caught.exception))
 
+    def test_execution_class_match_and_mismatch_stay_fresh(self):
+        self.job['labels'] = ['ubuntu-22.04']
+        self.job['runner_group_name'] = 'GitHub Actions'
+        raw = json.dumps(self.receipt).encode()
+        self.api.artifact.return_value = raw
+
+        matched = SHADOW.shadow(self.api, raw, self.verification(raw), 5, self.target,
+                                self.policy, expected_runner='ubuntu-22.04')
+        self.assertTrue(matched['evidence_qualified'])
+        self.assertEqual(matched['execution_class_comparison'], {
+            'historical_runner': 'ubuntu-22.04',
+            'expected_runner': 'ubuntu-22.04',
+            'runner_group': 'GitHub Actions',
+            'execution_class_equal': True,
+            'reuse_authorized': False,
+        })
+        self.assertEqual(matched['decision'], 'execute-fresh')
+        self.assertFalse(matched['reuse_authorized'])
+        self.assertIn('execution-class-policy-not-established', matched['blockers'])
+        self.assertNotIn('execution-class-differs', matched['blockers'])
+
+        mismatched = SHADOW.shadow(self.api, raw, self.verification(raw), 5, self.target,
+                                   self.policy, expected_runner='ubuntu-24.04')
+        self.assertTrue(mismatched['evidence_qualified'])
+        self.assertFalse(mismatched['execution_class_comparison']['execution_class_equal'])
+        self.assertEqual(mismatched['blockers'][0], 'execution-class-differs')
+        self.assertEqual(mismatched['decision'], 'execute-fresh')
+        self.assertFalse(mismatched['reuse_authorized'])
+
+    def test_execution_class_invalid_labels_group_or_expected_runner_fail_closed(self):
+        valid_job = {'labels': ['ubuntu-22.04'], 'runner_group_name': 'GitHub Actions'}
+        self.assertTrue(SHADOW.compare_execution_class(
+            {'labels': ['ubuntu-22.04-arm'], 'runner_group_name': 'GitHub Actions'},
+            'arm64', 'ubuntu-22.04-arm')['execution_class_equal'])
+
+        bad_cases = [
+            (valid_job, 'amd64', 'ubuntu-22.04-arm', 'execution-class-expected-runner-invalid'),
+            (valid_job, 'amd64', 'self-hosted', 'execution-class-expected-runner-invalid'),
+            (valid_job, 'ppc64', 'ubuntu-22.04', 'execution-class-expected-runner-invalid'),
+            ({'labels': ['ubuntu-22.04'], 'runner_group_name': 'Default'}, 'amd64', 'ubuntu-22.04',
+             'execution-class-runner-group-invalid'),
+            ({'labels': ['ubuntu-22.04']}, 'amd64', 'ubuntu-22.04',
+             'execution-class-runner-group-invalid'),
+            ({'labels': [], 'runner_group_name': 'GitHub Actions'}, 'amd64', 'ubuntu-22.04',
+             'execution-class-job-labels-invalid'),
+            ({'labels': ['ubuntu-22.04', 'self-hosted'], 'runner_group_name': 'GitHub Actions'},
+             'amd64', 'ubuntu-22.04', 'execution-class-job-labels-invalid'),
+            ({'labels': ['ubuntu-22.04-arm'], 'runner_group_name': 'GitHub Actions'},
+             'amd64', 'ubuntu-22.04', 'execution-class-job-labels-invalid'),
+            ({'labels': ['SENTINEL-runner'], 'runner_group_name': 'GitHub Actions'},
+             'amd64', 'ubuntu-22.04', 'execution-class-job-labels-invalid'),
+        ]
+        for job, arch, expected, reason in bad_cases:
+            with self.subTest(job=job, arch=arch, expected=expected):
+                with self.assertRaises(SHADOW.Unavailable) as caught:
+                    SHADOW.compare_execution_class(job, arch, expected)
+                self.assertEqual(str(caught.exception), reason)
+                self.assertNotIn('SENTINEL', str(caught.exception))
+
+    def test_cli_accepts_expected_runner_and_keeps_fresh(self):
+        self.job['labels'] = ['ubuntu-22.04']
+        self.job['runner_group_name'] = 'GitHub Actions'
+        raw = json.dumps(self.receipt).encode()
+        self.api.artifact.return_value = raw
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'receipt.json').write_bytes(raw)
+            (root / 'bundle.jsonl').write_text('{}')
+            argv = ['shadow', '--receipt', str(root / 'receipt.json'), '--bundle', str(root / 'bundle.jsonl'),
+                    '--pr', '5', '--target', self.target, '--policy-ref', self.policy,
+                    '--expected-runner', 'ubuntu-22.04']
+            with mock.patch.object(sys, 'argv', argv), mock.patch.object(SHADOW, 'GitHub', return_value=self.api), \
+                    mock.patch.object(SHADOW, 'command', return_value=self.verification(raw)), \
+                    mock.patch.object(sys, 'stdout', new=io.StringIO()) as output:
+                SHADOW.main()
+            result = json.loads(output.getvalue())
+        self.assertTrue(result['execution_class_comparison']['execution_class_equal'])
+        self.assertEqual(result['decision'], 'execute-fresh')
+        self.assertFalse(result['reuse_authorized'])
+
     def result(self, verified_change=None):
         raw = json.dumps(self.receipt).encode()
         self.api.artifact.return_value = raw
@@ -396,8 +476,33 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(self.result(altered_subject)['evidence_qualified'])
 
     def test_reviewed_workflow_and_helpers_not_just_content_key(self):
-        self.api.file.side_effect = lambda commit, path: self.workflow if commit == self.merge else b'changed'
-        self.assertFalse(self.result()['evidence_qualified'])
+        repo_root = Path(__file__).resolve().parents[1]
+        self.assertEqual(len(set(SHADOW.POLICY_FILES)), len(SHADOW.POLICY_FILES))
+        expected_entries = (
+            'tasks.yaml',
+            'tasks/test.yaml',
+            '.github/scripts/test-airgap.sh',
+            '.github/scripts/fit-runner.sh',
+            '.github/scripts/redact-then-filter.sh',
+            'bundle/uds-bundle.yaml',
+            'bundle/uds-config.yaml',
+            'bundle/airgap-config.yaml',
+            'bundle/test-values.yaml',
+        )
+        for rel in expected_entries:
+            self.assertIn(rel, SHADOW.POLICY_FILES)
+        for rel in SHADOW.POLICY_FILES:
+            with self.subTest(exists=rel):
+                self.assertTrue((repo_root / rel).is_file(), f'missing policy file: {rel}')
+        for drifted in SHADOW.POLICY_FILES:
+            with self.subTest(drifted=drifted):
+                self.api.file.side_effect = (
+                    lambda commit, path, target=drifted:
+                    b'changed' if (commit == self.policy and path == target) else self.workflow
+                )
+                result = self.result()
+                self.assertFalse(result['evidence_qualified'])
+                self.assertEqual(result['blockers'][0], 'unreviewed-producer-or-workflow')
 
     def test_api_failure_becomes_bounded_fresh_result(self):
         self.api.get.side_effect = SHADOW.Unavailable('command-failed')
@@ -567,6 +672,142 @@ class TransportTests(unittest.TestCase):
     def test_real_output_limit_refuses_oversized_child(self):
         with self.assertRaises(SHADOW.Unavailable):
             SHADOW.command([sys.executable, '-c', 'import os; os.write(1, b"x" * (5 * 1024 * 1024))'])
+
+
+class ScenarioSetTests(unittest.TestCase):
+    def setUp(self):
+        self.tested, self.tree, self.target = [c * 40 for c in '364']
+
+    def shadow_entry(self, scenario='install', arch='amd64', job_id=30, artifact_id=40, **overrides):
+        entry = {
+            'schema_version': 1, 'mode': 'shadow', 'reuse_authorized': False,
+            'decision': 'execute-fresh', 'evidence_qualified': True,
+            'evidence': {
+                'source_run': 100, 'attempt': 2, 'job_id': job_id, 'artifact_id': artifact_id,
+                'scenario': scenario, 'architecture': arch,
+                'tested_commit': self.tested, 'tested_tree': self.tree, 'target_commit': self.target,
+            },
+            'blockers': ['prospective-input-equivalence-not-proven'],
+        }
+        entry.update(overrides)
+        return entry
+
+    def test_complete_three_scenario_set_matches_validation_mode_contract_and_stays_fresh(self):
+        results = [
+            self.shadow_entry('install-airgap', 'amd64', job_id=32, artifact_id=42),
+            self.shadow_entry('install', 'arm64', job_id=31, artifact_id=41),
+            self.shadow_entry('install', 'amd64', job_id=30, artifact_id=40,
+                              prospective_comparison={'inputs_equal': True, 'reuse_authorized': False},
+                              execution_class_comparison={'execution_class_equal': True, 'reuse_authorized': False}),
+        ]
+        summary = SHADOW.evaluate_scenario_set(results)
+        self.assertTrue(summary['set_qualified'])
+        self.assertTrue(summary['complete_install_set'])
+        self.assertEqual(summary['missing_scenarios'], [])
+        self.assertEqual(summary['decision'], 'execute-fresh')
+        self.assertFalse(summary['reuse_authorized'])
+        self.assertFalse(summary['verifier_preview']['reuse_authorized'])
+        self.assertNotIn('scenario-set-incomplete', summary['blockers'])
+
+        # Cross-contract check against .github/scripts/test-validation-mode.py.
+        mode_path = Path(__file__).resolve().parents[1] / '.github/scripts/test-validation-mode.py'
+        mode_spec = importlib.util.spec_from_file_location('test_validation_mode', mode_path)
+        mode = importlib.util.module_from_spec(mode_spec)
+        mode_spec.loader.exec_module(mode)
+
+        with self.assertRaisesRegex(ValueError, 'not authorized'):
+            mode.parse_reused_install_evidence('push', 'false', 'none', summary['verifier_preview'])
+
+        authorized_copy = copy.deepcopy(summary['verifier_preview'])
+        authorized_copy['reuse_authorized'] = True
+        parsed = mode.parse_reused_install_evidence('push', 'false', 'none', authorized_copy)
+        self.assertEqual(len(parsed), 3)
+        self.assertEqual({(row['scenario'], row['architecture']) for row in parsed},
+                         mode.REQUIRED_INSTALL_SCENARIOS)
+
+    def test_partial_set_reports_missing_scenarios_and_incomplete_blocker(self):
+        results = [
+            self.shadow_entry('install', 'amd64', job_id=30, artifact_id=40),
+            self.shadow_entry('install-airgap', 'amd64', job_id=32, artifact_id=42),
+        ]
+        summary = SHADOW.evaluate_scenario_set(results)
+        self.assertTrue(summary['set_qualified'])
+        self.assertFalse(summary['complete_install_set'])
+        self.assertEqual(summary['missing_scenarios'], [{'scenario': 'install-online', 'architecture': 'arm64'}])
+        self.assertEqual(summary['blockers'][0], 'scenario-set-incomplete')
+        self.assertFalse(summary['reuse_authorized'])
+
+    def test_scenario_set_rejects_duplicates_drift_and_mismatches_fail_closed(self):
+        cases = [
+            ([], 'scenario-set-empty-or-oversized'),
+            ([self.shadow_entry()] * 4, 'scenario-set-empty-or-oversized'),
+            ([self.shadow_entry(evidence_qualified=False)], 'scenario-set-entry-unqualified'),
+            ([self.shadow_entry(reuse_authorized=True)], 'scenario-set-entry-unqualified'),
+            ([self.shadow_entry('install', 'amd64'), self.shadow_entry('install', 'amd64', job_id=31)],
+             'scenario-set-duplicate-scenario'),
+            ([self.shadow_entry('install-airgap', 'arm64')], 'scenario-set-scenario-invalid'),
+            ([self.shadow_entry('install', 'amd64'),
+              self.shadow_entry('install', 'arm64', evidence={
+                  'source_run': 100, 'attempt': 2, 'job_id': 31, 'artifact_id': 41,
+                  'scenario': 'install', 'architecture': 'arm64',
+                  'tested_commit': self.tested, 'tested_tree': 'f' * 40, 'target_commit': self.target,
+              })], 'scenario-set-commit-or-tree-mismatch'),
+            ([self.shadow_entry(prospective_comparison={'inputs_equal': False, 'reuse_authorized': False})],
+             'scenario-set-prospective-mismatch'),
+            ([self.shadow_entry(execution_class_comparison={'execution_class_equal': False, 'reuse_authorized': False})],
+             'scenario-set-execution-class-mismatch'),
+        ]
+        for payload, reason in cases:
+            with self.subTest(reason=reason):
+                summary = SHADOW.evaluate_scenario_set(payload)
+                self.assertFalse(summary['set_qualified'])
+                self.assertFalse(summary['complete_install_set'])
+                self.assertEqual(summary['blockers'][0], reason)
+                self.assertEqual(summary['decision'], 'execute-fresh')
+                self.assertFalse(summary['reuse_authorized'])
+
+    def test_cli_scenario_set_aggregates_bounded_files_and_rejects_symlinks_or_mixed_flags(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            files = []
+            for name, entry in [
+                ('amd64.json', self.shadow_entry('install', 'amd64', job_id=30, artifact_id=40)),
+                ('arm64.json', self.shadow_entry('install', 'arm64', job_id=31, artifact_id=41)),
+                ('airgap.json', self.shadow_entry('install-airgap', 'amd64', job_id=32, artifact_id=42)),
+            ]:
+                path = root / name
+                path.write_text(json.dumps(entry))
+                files.append(path)
+
+            argv = ['shadow', '--scenario-set', *(str(p) for p in files)]
+            with mock.patch.object(sys, 'argv', argv), mock.patch.object(sys, 'stdout', new=io.StringIO()) as out:
+                SHADOW.main()
+            result = json.loads(out.getvalue())
+            self.assertEqual(result['mode'], 'shadow-set')
+            self.assertTrue(result['set_qualified'])
+            self.assertTrue(result['complete_install_set'])
+            self.assertEqual(result['decision'], 'execute-fresh')
+            self.assertFalse(result['reuse_authorized'])
+
+            # Symlink input must fail closed without traceback.
+            link = root / 'link.json'
+            link.symlink_to(files[0])
+            with mock.patch.object(sys, 'argv', ['shadow', '--scenario-set', str(link)]), \
+                    mock.patch.object(sys, 'stdout', new=io.StringIO()) as out:
+                SHADOW.main()
+            sym_result = json.loads(out.getvalue())
+            self.assertEqual(sym_result['mode'], 'shadow-set')
+            self.assertFalse(sym_result['set_qualified'])
+            self.assertEqual(sym_result['blockers'], ['scenario-set-input-unavailable'])
+
+            # Mixing --scenario-set with single-receipt flags must fail closed.
+            with mock.patch.object(sys, 'argv', ['shadow', '--scenario-set', str(files[0]), '--pr', '5']), \
+                    mock.patch.object(sys, 'stdout', new=io.StringIO()) as out:
+                SHADOW.main()
+            mixed_result = json.loads(out.getvalue())
+            self.assertEqual(mixed_result['mode'], 'shadow-set')
+            self.assertFalse(mixed_result['set_qualified'])
+            self.assertEqual(mixed_result['blockers'], ['scenario-set-input-unavailable'])
 
 
 if __name__ == '__main__':

@@ -65,8 +65,15 @@ replace values/common-values.yaml "tag: \"${postgis_version}\"" "tag: \"${postgi
 for name in takserver-api takserver-messaging takserver-config takserver-plugins takserver-database-setup takserver-ignite; do
   replace zarf.yaml "${repo}/${name}:${tak_version}\"" "${repo}/${name}:${tak_tag}\""
 done
-# zarf.yaml and tasks.yaml each have one default of the plain TAK tag.
-replace zarf.yaml "default: ${tak_version}" "default: ${tak_tag}"
+# zarf.yaml (v1alpha1) or values/zarf-values.yaml (v1beta1) and tasks.yaml
+# carry the default plain TAK tag.
+if grep -q "default: ${tak_version}" zarf.yaml; then
+  replace zarf.yaml "default: ${tak_version}" "default: ${tak_tag}"
+elif grep -q "imageTag: \"${tak_version}\"" values/zarf-values.yaml; then
+  replace values/zarf-values.yaml "imageTag: \"${tak_version}\"" "imageTag: \"${tak_tag}\""
+else
+  replace values/zarf-values.yaml "imageTag: ${tak_version}" "imageTag: ${tak_tag}"
+fi
 replace tasks.yaml "default: ${tak_version}" "default: ${tak_tag}"
 for config in bundle/uds-config.yaml bundle/full/uds-config.yaml bundle/airgap-config.yaml; do
   replace "${config}" "TAK_IMAGE_TAG: ${tak_version}" "TAK_IMAGE_TAG: ${tak_tag}"

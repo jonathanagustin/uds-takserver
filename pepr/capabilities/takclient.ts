@@ -26,6 +26,7 @@ export const TAK_NAMESPACE = "takserver";
 // Secret access outside takserver is this one namespace. See ADR 22.
 export const CLIENT_NAMESPACE = "takclients";
 export const GROUP = "tak.uds.dev";
+export const LEGACY_GROUP = "tak.jonathanagustin.github.io";
 export const CRL_SECRET = "takserver-crl";
 export const CA_KEY_SECRET = "takserver-ca-key";
 export const KEYSTORE_SECRET = "takserver-keystore";
@@ -493,6 +494,18 @@ export async function reconcileTakClient(client: TakClientDoc, phase: string, de
   });
 }
 
+function priorCertificate(annotations: Record<string, string>) {
+  const prefix = annotations[SERIAL] ? GROUP : annotations[`${LEGACY_GROUP}/serial`] ? LEGACY_GROUP : undefined;
+  if (!prefix) return undefined;
+  return {
+    serial: annotations[`${prefix}/serial`],
+    notAfter: annotations[`${prefix}/not-after`],
+    fingerprint: annotations[`${prefix}/fingerprint`],
+    callsign: annotations[`${prefix}/callsign`],
+    issuer: annotations[`${prefix}/issuer`],
+  };
+}
+
 async function reconcileCurrent(client: TakClientDoc, deps: Deps): Promise<boolean> {
   const { cluster } = deps;
   const name = client.metadata!.name!;
@@ -533,16 +546,16 @@ async function reconcileCurrent(client: TakClientDoc, deps: Deps): Promise<boole
     }
     const userPassword = priorPassword ?? await rememberCredential(cluster, name);
     if (issue) {
-      const old = { ...client.metadata?.annotations, ...current?.metadata?.annotations };
-      if (old[SERIAL]) {
-        if (old[ISSUER] === "tak") {
-          if (!old[FINGERPRINT]) throw new Error("The old TAK certificate fingerprint is missing");
-          await revokeEnrolled(deps.tak, admin, old[FINGERPRINT]);
+      const prior = priorCertificate({ ...client.metadata?.annotations, ...current?.metadata?.annotations });
+      if (prior) {
+        if (prior.issuer === "tak") {
+          if (!prior.fingerprint) throw new Error("The old TAK certificate fingerprint is missing");
+          await revokeEnrolled(deps.tak, admin, prior.fingerprint);
         }
-        await revoke(cluster, ca, old[SERIAL], old[NOT_AFTER], now, old[ISSUER] !== "tak");
+        await revoke(cluster, ca, prior.serial, prior.notAfter, now, prior.issuer !== "tak");
         // Legacy file-user passwords were discarded. Recreate the user with
         // the persisted password only after its old cert is revoked.
-        if (old[CALLSIGN]) await unregister(deps.tak, admin, old[CALLSIGN]);
+        if (prior.callsign) await unregister(deps.tak, admin, prior.callsign);
       }
       await register(deps.tak, admin, callsign, spec.groups!, userPassword);
       const issued = await enroll(deps.tak, admin, ca, callsign, userPassword, deps.now);
@@ -588,19 +601,19 @@ async function finalizeCurrent(client: TakClientDoc, deps: Deps): Promise<boolea
   }
   const current = await cluster.getSecret(CLIENT_NAMESPACE, name);
   const annotations = { ...client.metadata?.annotations, ...current?.metadata?.annotations };
-  const callsign = annotations[CALLSIGN] ?? client.spec?.callsign;
+  const prior = priorCertificate(annotations);
+  const callsign = prior?.callsign ?? client.spec?.callsign;
   const admin = await readAdmin(cluster, ca);
-  const serial = annotations[SERIAL];
-  if (annotations[ISSUER] === "tak") {
-    if (!admin || !annotations[FINGERPRINT]) return false;
+  if (prior?.issuer === "tak") {
+    if (!admin || !prior.fingerprint) return false;
     try {
-      await revokeEnrolled(deps.tak, admin, annotations[FINGERPRINT]);
+      await revokeEnrolled(deps.tak, admin, prior.fingerprint);
     } catch (err) {
       deps.log(`TakClient ${name}: ${(err as Error).message}`);
       return false;
     }
   }
-  if (serial) await revoke(cluster, ca, serial, annotations[NOT_AFTER], deps.now(), annotations[ISSUER] !== "tak");
+  if (prior) await revoke(cluster, ca, prior.serial, prior.notAfter, deps.now(), prior.issuer !== "tak");
   // The Basic file user can enroll again. Do not drop the Secret or the
   // finalizer until delete succeeded, TAK's missing-user response was
   // verified, or list-users shows the callsign is gone.

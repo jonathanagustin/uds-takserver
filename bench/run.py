@@ -1059,7 +1059,10 @@ def image_refs(text):
         stripped = line.strip()
         if not stripped.startswith("- "):
             continue
-        candidate = stripped[2:].split("#", 1)[0].strip().strip('"').strip("'")
+        candidate = stripped[2:].split("#", 1)[0].strip()
+        if candidate.startswith("name:"):
+            candidate = candidate[len("name:"):].strip()
+        candidate = candidate.strip('"').strip("'")
         if " " in candidate or candidate.count("/") < 1 or ":" not in candidate:
             continue
         if "://" in candidate:

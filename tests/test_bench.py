@@ -392,10 +392,14 @@ class ImageRefTests(unittest.TestCase):
         text = "\n".join([
             "    images:",
             '      - "ghcr.io/example/takserver-api:1"',
+            '      - name: "ghcr.io/example/cloudtak:2" # v1beta1 image object',
             "      - name: not-an-image",
             "      - https://example.com/docs",
         ])
-        self.assertEqual(runner.image_refs(text), ["ghcr.io/example/takserver-api:1"])
+        self.assertEqual(
+            runner.image_refs(text),
+            ["ghcr.io/example/takserver-api:1", "ghcr.io/example/cloudtak:2"],
+        )
 
     def test_the_package_lists_tak_images(self):
         text = (Path(__file__).resolve().parents[1] / "zarf.yaml").read_text(encoding="utf-8")

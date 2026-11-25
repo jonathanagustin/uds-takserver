@@ -46,7 +46,7 @@ variables:
     description: Domain suffix for gateway hosts. k3d-core-slim-dev uses uds.dev. The global.domain package value defaults to this and overrides it when set.
     default: uds.dev
   - name: TAK_IMAGE_TAG
-    description: Tag for images published at ghcr.io/jonathanagustin/uds-takserver. Building those images is separate from this package. The tak.imageTag package value defaults to this. The images list and certs.image read only this variable.
+    description: Tag for images published at ghcr.io/jonathanagustin/uds-takserver. Building those images is separate from this package. The tak.imageTag package value defaults to this. The images list uses a literal tag.
     default: 5.7-RELEASE-14
   - name: IN_CLUSTER_DNS
     description: On a uds-k3d cluster, the takserver-oidc watcher adds CoreDNS rewrites so DOMAIN hosts resolve to the right Istio gateway inside the cluster. Skipped when kube-system/coredns-custom does not exist. The dns.inCluster package value defaults to this.
@@ -144,7 +144,9 @@ components:
         # Sets the PostGIS StorageClass only when CLOUDTAK_STORAGE_CLASS is
         # not empty. An empty object otherwise.
         templatedValuesFiles:
+          - values/filesystem-backup-switch.yaml.tpl
           - values/cloudtak-storage.yaml.tpl
+          - values/cloudtak-publish-image.yaml.tpl
         values:
           - sourcePath: .global.domain
             targetPath: .domain

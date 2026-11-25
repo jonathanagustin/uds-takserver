@@ -5,7 +5,7 @@ const { createRequire } = require('node:module');
 const { join } = require('node:path');
 const assert = require('node:assert/strict');
 const local = createRequire(join(process.cwd(), 'package.json'));
-assert.equal(local('playwright-core/package.json').version, '1.65.0');
+assert.equal(local('playwright-core/package.json').version, '1.65.1');
 const { chromium } = local('playwright-core');
 if (process.argv[2] === 'paths') {
   const { registry } = local('playwright-core/lib/coreBundle').registry;

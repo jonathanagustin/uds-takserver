@@ -134,14 +134,33 @@ class BaselineChartOverrideTests(unittest.TestCase):
             self.assertFalse(node['additionalProperties']);self.assertEqual(set(node['properties']),set(charts))
             self.assertTrue(all(value['type']=='object' for value in node['properties'].values()))
         package=yaml.safe_load((ROOT/'common/zarf.yaml').read_text())
-        charts=[('takserver',chart) for component in package['components'] for chart in component.get('charts',[])]
+        common_components=[package['component']] if 'component' in package else package['components']
+        charts=[('takserver',chart) for component in common_components for chart in component.get('charts',[])]
         cloud=yaml.safe_load((ROOT/'zarf.yaml').read_text())
         charts += [('cloudtak',chart) for component in cloud['components'] if component['name']=='cloudtak' for chart in component.get('charts',[])]
         bridges=[(component,chart['name'],mapping) for component,chart in charts for mapping in chart.get('values',[])
                  if mapping['sourcePath'].startswith('.chartOverrides.')]
         self.assertEqual(len(bridges),4)
+        expected_excluded_paths=[
+            '.chartOverrides.takserver.takserver.imagePullSecret',
+            '.chartOverrides.takserver.takserver.global.imageRegistry',
+            '.chartOverrides.takserver.takserver.global.imagePullSecrets',
+            '.chartOverrides.takserver.takserver.takserver.ingress',
+            '.chartOverrides.takserver.takserver.takserver.config.image',
+            '.chartOverrides.takserver.takserver.takserver.messaging.image',
+            '.chartOverrides.takserver.takserver.takserver.api.image',
+            '.chartOverrides.takserver.takserver.takserver.plugins.image',
+            '.chartOverrides.takserver.takserver.takserver.takserverDatabaseSetup.image',
+            '.chartOverrides.takserver.takserver.ignite.image',
+            '.chartOverrides.takserver.takserver.postgresql.image',
+            '.chartOverrides.takserver.takserver.postgresql.global.imageRegistry',
+            '.chartOverrides.takserver.takserver.postgresql.global.imagePullSecrets',
+        ]
         for component,chart,mapping in bridges:
-            self.assertEqual(mapping,{'sourcePath':'.chartOverrides.'+component+'.'+chart,'targetPath':'.'})
+            expected={'sourcePath':'.chartOverrides.'+component+'.'+chart,'targetPath':'.'}
+            if (component,chart)==('takserver','takserver'):
+                expected['excludePaths']=expected_excluded_paths
+            self.assertEqual(mapping,expected)
             self.assertEqual(defaults[component][chart],{})
 
 

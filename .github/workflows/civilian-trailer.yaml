@@ -1,0 +1,97 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+name: Civilian hero trailer
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload rendered trailer, poster, and alpha overlays to the demo release (main only)"
+        type: boolean
+        default: false
+      veo_clip_url:
+        description: "Source live-action B-roll MP4 URL"
+        type: string
+        default: "https://github.com/user-attachments/assets/dfeb7d83-5728-4720-9f19-6707ca48af8f"
+      music_track_url:
+        description: "Optional soundtrack MP3 URL (leave empty to keep segment audio)"
+        type: string
+        default: "https://github.com/user-attachments/files/35176012/Pulse.of.Hope.mp3"
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install ffmpeg and Pillow
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg python3-pil fonts-dejavu-core
+
+      - name: Download source clips
+        env:
+          VEO_CLIP_URL: ${{ inputs.veo_clip_url }}
+          MUSIC_TRACK_URL: ${{ inputs.music_track_url }}
+        run: |
+          mkdir -p /tmp/trailer-src
+          curl -fsSL "$VEO_CLIP_URL" -o /tmp/trailer-src/veo-clip.mp4
+          curl -fsSL "https://github.com/jonathanagustin/uds-takserver/releases/download/v1.2.0/uds-takserver-ui-preview.mp4" -o /tmp/trailer-src/ui-preview.mp4
+          if [ -n "$MUSIC_TRACK_URL" ]; then
+            curl -fsSL "$MUSIC_TRACK_URL" -o /tmp/trailer-src/music-track.mp3
+          fi
+
+      - name: Render hero trailer and alpha overlays
+        run: |
+          extra_args=()
+          if [ -f /tmp/trailer-src/music-track.mp3 ]; then
+            extra_args+=(--music-track /tmp/trailer-src/music-track.mp3)
+          fi
+          python3 demo/civilian-trailer.py \
+            --veo-clip /tmp/trailer-src/veo-clip.mp4 \
+            --ui-clip /tmp/trailer-src/ui-preview.mp4 \
+            --topo-bg assets/tactical-topo.jpg \
+            --out-dir /tmp/trailer-out \
+            "${extra_args[@]}"
+          ls -lh /tmp/trailer-out
+
+      - name: Upload trailer artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: civilian-hero-trailer
+          path: /tmp/trailer-out
+          retention-days: 14
+
+  publish:
+    needs: render
+    if: github.ref == 'refs/heads/main' && inputs.publish == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Download trailer artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: civilian-hero-trailer
+          path: /tmp/trailer-out
+
+      - name: Upload assets to demo release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload demo \
+            /tmp/trailer-out/uds-takserver-civilian-trailer.mp4 \
+            /tmp/trailer-out/civilian-trailer-poster.jpg \
+            /tmp/trailer-out/tu-lockin-stinger-alpha.webm \
+            /tmp/trailer-out/tu-hud-lowerthird-alpha.webm \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber

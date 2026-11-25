@@ -1,0 +1,146 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+name: TAKX libglvnd native cache
+
+on:
+  pull_request:
+    paths:
+      - "takx/gles-cache/**"
+      - ".github/workflows/gles-cache.yaml"
+  push:
+    branches:
+      - main
+    paths:
+      - "takx/gles-cache/**"
+      - ".github/workflows/gles-cache.yaml"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the prebuilt TAKX libglvnd 1.7.0 OCI cache to GHCR
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: takx-gles-cache-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-and-qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run offline libglvnd cache verifier tests
+        timeout-minutes: 2
+        run: |
+          python3 -B takx/gles-cache/verify.py --phase verify
+          python3 -B -m unittest discover -s takx/gles-cache -p test_verify.py -v
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build libglvnd 1.7.0 OCI artifact locally
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: takx/gles-cache
+          file: takx/gles-cache/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: takx-native-gles:smoke
+          cache-from: type=gha,scope=takx-native-gles
+          cache-to: type=gha,mode=max,scope=takx-native-gles
+
+      - name: Extract and qualify restored libglvnd prefix inside prebuilt takx-gl-runner
+        timeout-minutes: 5
+        run: |
+          set -eu
+          cid="$(docker create takx-native-gles:smoke /glvnd)"
+          mkdir -p "${RUNNER_TEMP}/restored-glvnd"
+          docker cp "${cid}:/glvnd/." "${RUNNER_TEMP}/restored-glvnd/"
+          docker rm "${cid}"
+          python3 -B takx/gles-cache/verify.py --phase check-prefix --prefix "${RUNNER_TEMP}/restored-glvnd"
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}/takx/gles-cache:/src:ro" \
+            -v "${RUNNER_TEMP}/restored-glvnd:/opt/glvnd:ro" \
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64 \
+            bash -euo pipefail -c '
+              printf "%s\n" "{\"file_format_version\":\"1.0.0\",\"ICD\":{\"library_path\":\"/usr/lib/x86_64-linux-gnu/libEGL_mesa.so.0\"}}" > /tmp/mesa-vendor.json
+              gcc -std=c11 -Wall -Wextra -Werror -O2 \
+                -I/opt/glvnd/include /src/surfaceless_es3.c \
+                /opt/glvnd/lib/libEGL.so.1 /opt/glvnd/lib/libGLESv2.so.2 -ldl \
+                -Wl,-rpath,/opt/glvnd/lib -o /tmp/surfaceless_es3
+              LD_LIBRARY_PATH=/opt/glvnd/lib \
+              __EGL_VENDOR_LIBRARY_FILENAMES=/tmp/mesa-vendor.json \
+              LIBGL_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri \
+              LIBGL_ALWAYS_SOFTWARE=1 \
+              GALLIUM_DRIVER=llvmpipe \
+              EGL_PLATFORM=surfaceless \
+                /tmp/surfaceless_es3 | tee /tmp/out.txt
+              grep -q "^real_surfaceless_es3_clear_readback=true$" /tmp/out.txt
+              grep -q "^/opt/glvnd/lib/libEGL.so.1$" /tmp/out.txt
+              grep -q "^/opt/glvnd/lib/libGLESv2.so.2$" /tmp/out.txt
+              grep -q "^/opt/glvnd/lib/libGLdispatch.so.0$" /tmp/out.txt
+            '
+
+      - name: Retain verified libglvnd cache receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: takx-gles-cache-receipt
+          path: ${{ runner.temp }}/restored-glvnd/gles-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: build-and-qualify
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push prebuilt TAKX libglvnd 1.7.0 OCI cache
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: takx/gles-cache
+          file: takx/gles-cache/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/jonathanagustin/uds-takserver/takx-native-gles:1.7.0-amd64
+            ghcr.io/jonathanagustin/uds-takserver/takx-native-gles:sha-${{ github.sha }}
+          cache-from: type=gha,scope=takx-native-gles
+          cache-to: type=gha,mode=max,scope=takx-native-gles
+
+      - name: Attest OCI cache build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/jonathanagustin/uds-takserver/takx-native-gles
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

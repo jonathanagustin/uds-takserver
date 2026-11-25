@@ -66,6 +66,7 @@ compliance/README.md
 .github/workflows/unit-tests.yaml
 .github/workflows/mutation.yaml
 .github/workflows/ui-reel.yaml
+.github/workflows/civilian-trailer.yaml
 .github/workflows/atak.yaml
 .github/workflows/atak-vm.yaml
 .github/workflows/atak-e2e.yaml
@@ -73,6 +74,13 @@ compliance/README.md
 .github/workflows/migrate-packages.yaml
 .github/workflows/native-cache.yaml
 .github/workflows/native-cache-pr.yaml
+.github/workflows/geos-local-qualification.yaml
+.github/workflows/takx-gl-qualification.yaml
+.github/workflows/takx-gl-runner-image.yaml
+.github/workflows/proj-cache.yaml
+.github/workflows/gles-cache.yaml
+.github/workflows/mdbtools-cache.yaml
+.github/workflows/takx-native-caches.yaml
 .github/scripts/migrate-ghcr.py
 .github/workflows/test-aks.yaml
 .github/workflows/test-eks.yaml
@@ -131,6 +139,11 @@ pepr/scripts/coverage-summary.mjs
 .github/workflows/codeql-extended.yaml
 .github/workflows/codeql-language.yaml
 .github/scripts/codeql-languages.py
+.github/workflows/zarf-next-qualification.yaml
+.github/workflows/dhi-takserver-spike.yaml
+tests/zarf_next_live_qualification.py
+tests/zarf_beta_contract.py
+tests/fixtures/zarf-beta-contract/**
 EOF
 }
 

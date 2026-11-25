@@ -90,9 +90,15 @@ class ProfileTests(unittest.TestCase):
         # Its fallback and the Zarf variable defaults are the same numbers.
         source = (ROOT / "pepr/capabilities/workload.ts").read_text(encoding="utf-8")
         self.assertIn('PLUGINS_MEMORY: PluginsMemory = { request: "320Mi", limit: "512Mi" }', source)
-        variables = {v["name"]: v.get("default") for v in load("zarf.yaml")["variables"]}
-        self.assertEqual(variables["PLUGINS_MEMORY_REQUEST"], "320Mi")
-        self.assertEqual(variables["PLUGINS_MEMORY_LIMIT"], "512Mi")
+        package = load("zarf.yaml")
+        if "variables" in package:
+            variables = {v["name"]: v.get("default") for v in package["variables"]}
+            self.assertEqual(variables["PLUGINS_MEMORY_REQUEST"], "320Mi")
+            self.assertEqual(variables["PLUGINS_MEMORY_LIMIT"], "512Mi")
+        else:
+            plugins = load("values/zarf-values.yaml")["tak"]["plugins"]
+            self.assertEqual(plugins["memoryRequest"], "320Mi")
+            self.assertEqual(plugins["memoryLimit"], "512Mi")
 
     def test_documented_limit_sums(self):
         # Admission sets the plugins limit to 512Mi. NATS limits are 128Mi + 32Mi.

@@ -1,0 +1,121 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+name: TAKX GL runner image
+
+on:
+  pull_request:
+    paths:
+      - "takx/gl-runner/**"
+      - ".github/workflows/takx-gl-runner-image.yaml"
+  push:
+    branches:
+      - main
+    paths:
+      - "takx/gl-runner/**"
+      - ".github/workflows/takx-gl-runner-image.yaml"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the prebuilt TAKX GL/JNI runner image to GHCR
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: takx-gl-runner-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build TAKX GL runner image locally
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: takx/gl-runner
+          file: takx/gl-runner/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: takx-gl-runner:smoke
+          cache-from: type=gha,scope=takx-gl-runner
+          cache-to: type=gha,mode=max,scope=takx-gl-runner
+
+      - name: Smoke-test toolchain and Mesa/Xvfb inside container
+        timeout-minutes: 5
+        run: |
+          set -eu
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/work:ro" \
+            -w /work \
+            takx-gl-runner:smoke \
+            bash -euo pipefail -c '
+              gcc --version | head -n 1
+              g++ --version | head -n 1
+              cmake --version | head -n 1
+              ninja --version
+              javac -version
+              if [ -f takx/gl-qualification/qualify.py ]; then
+                python3 -B takx/gl-qualification/qualify.py --phase qualify --output /tmp/gl-qual
+              else
+                xvfb-run --auto-servernum --server-args="-screen 0 640x480x24" true
+              fi
+            '
+
+  publish:
+    needs: build-and-smoke
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push prebuilt TAKX GL runner image
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: takx/gl-runner
+          file: takx/gl-runner/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:bookworm-amd64
+            ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner:sha-${{ github.sha }}
+          cache-from: type=gha,scope=takx-gl-runner
+          cache-to: type=gha,mode=max,scope=takx-gl-runner
+
+      - name: Attest image build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/jonathanagustin/uds-takserver/takx-gl-runner
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

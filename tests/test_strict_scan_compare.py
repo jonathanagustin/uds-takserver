@@ -32,9 +32,22 @@ DIGEST = 'sha256:' + S.sha(NATIVE_MANIFEST)
 MIRROR = '127.0.0.1:5000/team/image@' + DIGEST
 
 
-def manifest(path, components):
+def manifest(path, components, *, api_version=None):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump({'kind': 'ZarfPackageConfig', 'components': components}))
+    doc = {'kind': 'ZarfPackageConfig', 'components': components}
+    if api_version is not None:
+        doc['apiVersion'] = api_version
+    path.write_text(yaml.safe_dump(doc))
+
+
+def component_manifest(path, component):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump({
+        'apiVersion': 'zarf.dev/v1beta1',
+        'kind': 'ZarfComponentConfig',
+        'metadata': {'name': path.parent.name, 'version': '0.1.0'},
+        'component': component,
+    }))
 
 
 def sbom(image='registry.example/team/image:released', arch='amd64'):
@@ -108,6 +121,79 @@ class InventoryTests(unittest.TestCase):
                     S.inventory(path, 'upstream')
             path.write_text('components: []\ncomponents: []\n')
             with self.assertRaisesRegex(S.Rejected, 'duplicate'):
+                S.inventory(path, 'upstream')
+
+    def test_v1beta1_package_and_component_config_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            component_manifest(root / 'common/zarf.yaml', {'images': [{'name': 'registry.example/common:1'}]})
+            manifest(root / 'zarf.yaml', [
+                {'name': 'first', 'selector': {'flavor': 'upstream'},
+                 'import': {'local': [{'path': 'common/zarf.yaml'}]},
+                 'images': [{'name': IMAGE}]},
+                {'name': 'second', 'selector': {'flavor': 'upstream'},
+                 'images': [{'name': IMAGE}, {'name': 'registry.example/second:1'}]},
+                {'name': 'common', 'images': [{'name': 'registry.example/all:1'}]},
+                {'name': 'other', 'selector': {'flavor': 'other'},
+                 'images': [{'name': 'registry.example/excluded:1'}]},
+            ], api_version='zarf.dev/v1beta1')
+            images, sources = S.inventory(root / 'zarf.yaml', 'upstream')
+            self.assertEqual(set(images), {IMAGE, 'registry.example/common:1',
+                                           'registry.example/second:1', 'registry.example/all:1'})
+            self.assertEqual(set(sources), {'zarf.yaml', 'common/zarf.yaml'})
+
+    def test_v1beta1_staged_production_inventory_matches_v1alpha1(self):
+        from tests import test_zarf_beta_production_parity as parity
+        root_alpha = yaml.safe_load((ROOT / 'zarf.yaml').read_text())
+        common_alpha = yaml.safe_load((ROOT / 'common/zarf.yaml').read_text())
+        expected_images, _ = S.inventory(ROOT / 'zarf.yaml', 'upstream')
+        with tempfile.TemporaryDirectory() as directory:
+            dest = Path(directory)
+            root_beta = {
+                'apiVersion': 'zarf.dev/v1beta1',
+                'kind': 'ZarfPackageConfig',
+                'metadata': root_alpha['metadata'],
+                'values': root_alpha['values'],
+                'components': [parity._convert_component(c) for c in root_alpha['components']],
+            }
+            common_comp = parity._convert_component(common_alpha['components'][0])
+            common_comp.pop('name', None)
+            common_meta = dict(common_alpha['metadata'])
+            common_meta.setdefault('version', root_alpha['metadata'].get('version', 'dev'))
+            common_beta = {
+                'apiVersion': 'zarf.dev/v1beta1',
+                'kind': 'ZarfComponentConfig',
+                'metadata': common_meta,
+                'component': common_comp,
+            }
+            (dest / 'common').mkdir()
+            (dest / 'common/zarf.yaml').write_text(yaml.safe_dump(common_beta, sort_keys=False))
+            (dest / 'zarf.yaml').write_text(yaml.safe_dump(root_beta, sort_keys=False))
+            beta_images, sources = S.inventory(dest / 'zarf.yaml', 'upstream')
+            self.assertEqual(beta_images, expected_images)
+            self.assertEqual(len(beta_images), 11)
+            self.assertEqual(set(sources), {'zarf.yaml', 'common/zarf.yaml'})
+
+    def test_v1beta1_rejects_invalid_images_selectors_and_imports(self):
+        cases = (
+            {'name': 'first', 'images': [IMAGE]},
+            {'name': 'first', 'only': {'flavor': 'upstream'}, 'images': [{'name': IMAGE}]},
+            {'name': 'first', 'selector': {'architecture': 'amd64'}, 'images': [{'name': IMAGE}]},
+            {'name': 'first', 'import': {'path': 'common'}, 'images': [{'name': IMAGE}]},
+            {'name': 'first', 'import': {'oci': 'oci://example/pkg:1'}, 'images': [{'name': IMAGE}]},
+            {'name': 'first', 'import': {'local': []}, 'images': [{'name': IMAGE}]},
+            {'name': 'first', 'import': {'local': [{'path': 'zarf.yaml'}]}, 'images': [{'name': IMAGE}]},
+        )
+        for component in cases:
+            with self.subTest(component=component), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'zarf.yaml'
+                manifest(path, [component], api_version='zarf.dev/v1beta1')
+                with self.assertRaises(S.Rejected):
+                    S.inventory(path, 'upstream')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'zarf.yaml'
+            manifest(path, [{'name': 'first', 'selector': {'flavor': 'upstream'}, 'images': [IMAGE]}])
+            with self.assertRaises(S.Rejected):
                 S.inventory(path, 'upstream')
 
 

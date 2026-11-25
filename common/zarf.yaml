@@ -16,10 +16,13 @@ components:
       # live in this chart rather than a manifest.
       - name: uds-takserver-config
         namespace: takserver
-        version: 0.18.2 # x-release-please-version
+        version: 1.4.0 # x-release-please-version
         localPath: ../charts/takserver
         valuesFiles:
           - ../values/filesystem-backup-switch.yaml
+        templatedValuesFiles:
+          - ../values/filesystem-backup-switch.yaml.tpl
+          - ../values/certs-image.yaml.tpl
         values:
           - sourcePath: .global.domain
             targetPath: .domain
@@ -78,3 +81,18 @@ components:
           # Optional whole-chart overlay, matching UDS bundle override semantics.
           - sourcePath: .chartOverrides.takserver.takserver
             targetPath: .
+            # Protect Zarf-packaged image coordinates, pull secrets, and UDS-managed ingress.
+            excludePaths:
+              - .chartOverrides.takserver.takserver.imagePullSecret
+              - .chartOverrides.takserver.takserver.global.imageRegistry
+              - .chartOverrides.takserver.takserver.global.imagePullSecrets
+              - .chartOverrides.takserver.takserver.takserver.ingress
+              - .chartOverrides.takserver.takserver.takserver.config.image
+              - .chartOverrides.takserver.takserver.takserver.messaging.image
+              - .chartOverrides.takserver.takserver.takserver.api.image
+              - .chartOverrides.takserver.takserver.takserver.plugins.image
+              - .chartOverrides.takserver.takserver.takserver.takserverDatabaseSetup.image
+              - .chartOverrides.takserver.takserver.ignite.image
+              - .chartOverrides.takserver.takserver.postgresql.image
+              - .chartOverrides.takserver.takserver.postgresql.global.imageRegistry
+              - .chartOverrides.takserver.takserver.postgresql.global.imagePullSecrets

@@ -26,10 +26,21 @@ T = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(T)
 require = T.require
 
+def node_agent_field_owners(managed_fields):
+    """Project four reviewed paths without persisting field values or arbitrary names."""
+    owners = {name: set() for name in T.NODE_AGENT_FIELDS}
+    for entry in managed_fields:
+        manager = entry.get('manager')
+        if manager not in T.NODE_AGENT_MANAGERS:
+            manager = 'other'
+        for name in T.node_agent_fields_owned(entry):
+            owners[name].add(manager)
+    return {name: sorted(values) for name, values in owners.items()}
+
+
 REVIEWED_HELPERS = ('tests/ephemeral-cluster.py', 'tests/velero-ownership/drive.py',
                          'tests/velero-ownership/transfer.py', 'tests/velero-ownership/observe.py',
                          'tests/backup-restore.sh', 'tests/backup-names.sh', 'tests/api-smoke.sh',
-                         'tests/velero-controller-restore-policy.yaml', '.github/scripts/velero-controller-state.py',
                          'tests/extract-certs.sh', 'tests/keystore-pass.sh', 'tests/db-dump-secret.sh',
                          'tests/ensure-tak-group.py', 'tasks.yaml', 'tasks/test.yaml',
                          '.github/scripts/checked-pipe.sh', '.github/scripts/redact-then-filter.sh',
@@ -108,7 +119,7 @@ class Driver:
         require(getattr(files, 'core_provider', None) == self.core_provider, 'driver requires the bound source provider plan')
         self.restore_helper = provider.HELPER if self.core_provider else 'tests/backup-restore.sh'
         self.identity = T.GUARD.verify(context, self.read_command)
-        self.transfer = T.Transfer(context, '', self.read_command)
+        self.transfer = T.Transfer(context, '', self.read_command, release_agent_fields=self.core_provider is not None)
         self.state = {'schema': 1, 'cluster': self.identity, 'driverSHA256': digest(Path(__file__)),
                       'inputs': {key: digest(value) for key, value in files.items()}, 'steps': [], 'accepted': False}
 
@@ -147,8 +158,15 @@ class Driver:
                 meta = current.get('metadata', {})
                 record['agentAtFailure'] = {'uid': meta.get('uid'), 'resourceVersion': meta.get('resourceVersion'),
                                             'owner': list(T.ownership(current)), 'terminating': bool(meta.get('deletionTimestamp'))}
+                if (name in ('deploy-core-agent', 'deploy-local-agent') and meta.get('uid')
+                        and meta['uid'] == self.transfer.uid and meta.get('resourceVersion')):
+                    managed = self.read_command(['kubectl', '--context', self.context, 'get', 'daemonset',
+                                                 'node-agent', '-n', 'velero', '-o', 'json', '--show-managed-fields'])
+                    snapshot = json.loads(managed)['metadata']
+                    if (snapshot.get('uid'), snapshot.get('resourceVersion')) == (meta['uid'], meta['resourceVersion']):
+                        record['agentFieldOwners'] = node_agent_field_owners(snapshot['managedFields'])
             except Exception:
-                record['agentAtFailure'] = 'unavailable; no identity inferred'
+                record.setdefault('agentAtFailure', 'unavailable; no identity inferred')
             self.journal()
             raise
         self.journal()

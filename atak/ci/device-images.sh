@@ -64,7 +64,7 @@ VIEWER_KEY="$(hash_of "${viewer_inputs[@]}")"
 # The optional Zarf package: its definition and manifests, the VM and viewer
 # images it carries, the local tag it is created with, and the UDS CLI that
 # creates it (UDS_VERSION, set by the workflow).
-PKG_KEY="$( { echo "${KEY_SALT} ${LOCAL_TAG} ${UDS_VERSION:-}"; git ls-files -s -- atak/zarf.yaml atak/deploy; echo "${VM_KEY} ${VIEWER_KEY}"; } | sha256sum | cut -c1-12)"
+PKG_KEY="$( { echo "${KEY_SALT} ${LOCAL_TAG} ${UDS_VERSION:-}"; git ls-files -s -- atak/zarf.yaml atak/values.yaml atak/deploy atak/ci/create-package.sh; echo "${VM_KEY} ${VIEWER_KEY}"; } | sha256sum | cut -c1-12)"
 PKG_REPO="${PKG_REPO:-${REPO}/packages}"
 PKG_REF="${PKG_REPO}/atak-device:${ATAK_VERSION}-${PKG_KEY}"
 
@@ -230,7 +230,7 @@ publish_package() {
   fi
   files=("${dir}"/zarf-package-atak-device-amd64-*.tar.zst)
   [[ -f "${files[0]}" ]] || { echo "No package in ${dir}" >&2; return 1; }
-  uds zarf package publish "${files[0]}" "oci://${PKG_REPO}" --tag "${ATAK_VERSION}-${PKG_KEY}" --confirm
+  uds zarf package publish "${files[0]}" "oci://${PKG_REPO}" --tag "${ATAK_VERSION}-${PKG_KEY}"
 }
 
 case "${1:-keys}" in

@@ -107,7 +107,7 @@ ManifestLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, u
 
 
 def inventory(manifest, flavor, root=None):
-    """Union selected/common components and exact local component imports."""
+    """Union selected/common components and exact local component imports (v1alpha1 & v1beta1)."""
     root = (root or manifest.parent).resolve()
     sources, images, documents = {}, set(), {}
 
@@ -117,50 +117,85 @@ def inventory(manifest, flavor, root=None):
         require(not path.is_symlink(), 'symlink_manifest')
         path = path.resolve()
         require(path == selected_manifest or path.is_relative_to(root), 'import_outside_source')
-        relative = str(path.relative_to(root)) if path.is_relative_to(root) else 'selected-manifest'
+        relative = path.relative_to(root).as_posix() if path.is_relative_to(root) else 'selected-manifest'
         if path not in documents:
             raw = read(path, 2 * 1024 * 1024)
             value = yaml.load(raw, Loader=ManifestLoader)
-            require(type(value) is dict and type(value.get('components')) is list, 'invalid_manifest')
-            names = [component.get('name') for component in value['components'] if type(component) is dict]
-            require(len(names) == len(value['components']) and all(type(n) is str and n for n in names)
-                    and len(names) == len(set(names)), 'ambiguous_components')
+            require(type(value) is dict, 'invalid_manifest')
+            api_version = value.get('apiVersion')
+            kind = value.get('kind')
+            if api_version == 'zarf.dev/v1beta1' and kind == 'ZarfComponentConfig':
+                require(type(value.get('component')) is dict, 'invalid_manifest')
+            else:
+                require(kind in (None, 'ZarfPackageConfig') and type(value.get('components')) is list,
+                        'invalid_manifest')
+                names = [component.get('name') for component in value['components'] if type(component) is dict]
+                require(len(names) == len(value['components']) and all(type(n) is str and n for n in names)
+                        and len(names) == len(set(names)), 'ambiguous_components')
             documents[path] = value
             sources[relative] = sha(raw)
         return path, documents[path]
 
-    def visit(path, component, stack):
-        identity = (path, component['name'])
+    def visit(path, component, stack, is_beta=False):
+        identity = (path, component.get('name') or '<component>')
         require(identity not in stack and len(stack) < 16, 'cyclic_or_deep_import')
-        only = component.get('only', {})
-        require(type(only) is dict and set(only) <= {'flavor'}, 'unsupported_component_selector')
-        selected = only.get('flavor', '')
+        if is_beta:
+            require('only' not in component, 'unsupported_component_selector')
+            selector = component.get('selector', {})
+        else:
+            require('selector' not in component, 'unsupported_component_selector')
+            selector = component.get('only', {})
+        require(type(selector) is dict and set(selector) <= {'flavor'}, 'unsupported_component_selector')
+        selected = selector.get('flavor', '')
         require(type(selected) is str, 'invalid_flavor')
         if selected and selected != flavor:
             return
         declared = component.get('images', [])
         require(type(declared) is list, 'invalid_images')
         for item in declared:
-            reference(item)
-            images.add(item)
+            if is_beta:
+                require(type(item) is dict and type(item.get('name')) is str and item['name'], 'invalid_images')
+                ref = item['name']
+            else:
+                ref = item
+            reference(ref)
+            images.add(ref)
         imported = component.get('import')
         if imported is not None:
-            require(type(imported) is dict and set(imported) <= {'path', 'name'}
-                    and type(imported.get('path')) is str and imported['path'], 'unsupported_import')
-            base = root if path == selected_manifest and not path.is_relative_to(root) else path.parent
-            target = base / imported['path']
-            require(not target.is_symlink(), 'symlink_import')
-            if target.is_dir():
-                target /= 'zarf.yaml'
-            target, value = document(target)
-            name = imported.get('name', component['name'])
-            matches = [item for item in value['components'] if item['name'] == name]
-            require(len(matches) == 1, 'unresolved_component_import')
-            visit(target, matches[0], (*stack, identity))
+            if is_beta:
+                require(type(imported) is dict and set(imported) <= {'local'}
+                        and type(imported.get('local')) is list and len(imported['local']) > 0,
+                        'unsupported_import')
+                entries = imported['local']
+            else:
+                require(type(imported) is dict and set(imported) <= {'path', 'name'}, 'unsupported_import')
+                entries = [imported]
+            for entry in entries:
+                require(type(entry) is dict and set(entry) <= {'path', 'name'}
+                        and type(entry.get('path')) is str and entry['path'], 'unsupported_import')
+                base = root if path == selected_manifest and not path.is_relative_to(root) else path.parent
+                target = base / entry['path']
+                require(not target.is_symlink(), 'symlink_import')
+                if target.is_dir():
+                    target /= 'zarf.yaml'
+                target, value = document(target)
+                target_beta = value.get('apiVersion') == 'zarf.dev/v1beta1'
+                require(target_beta if is_beta else not target_beta, 'unsupported_import')
+                if value.get('kind') == 'ZarfComponentConfig':
+                    visit(target, value['component'], (*stack, identity), is_beta=True)
+                else:
+                    name = entry.get('name', component.get('name'))
+                    require(type(name) is str and name, 'unresolved_component_import')
+                    matches = [item for item in value['components'] if item['name'] == name]
+                    require(len(matches) == 1, 'unresolved_component_import')
+                    visit(target, matches[0], (*stack, identity), is_beta=target_beta)
 
     manifest, value = document(manifest)
+    require(value.get('kind') != 'ZarfComponentConfig' and type(value.get('components')) is list,
+            'invalid_manifest')
+    is_beta = value.get('apiVersion') == 'zarf.dev/v1beta1'
     for component in value['components']:
-        visit(manifest, component, ())
+        visit(manifest, component, (), is_beta=is_beta)
     require(0 < len(images) <= 128, 'empty_or_large_inventory')
     return sorted(images), sources
 
@@ -707,9 +742,9 @@ def tool_identities(run=child):
     require(grype.get('version') == '0.120.1', 'unsupported_grype_version')
     require(run(['uds-pk', 'version'], timeout=30, limit=1024 * 1024).decode().strip() == '0.2.0',
             'unsupported_comparator_version')
-    require(run(['uds', 'version'], timeout=30, limit=1024 * 1024).decode().strip() == 'v0.41.0',
+    require(run(['uds', 'version'], timeout=30, limit=1024 * 1024).decode().strip() == 'v0.42.0',
             'unsupported_uds_version')
-    require(run(['uds', 'zarf', 'version'], timeout=30, limit=1024 * 1024).decode().strip() == 'v0.89.0',
+    require(run(['uds', 'zarf', 'version'], timeout=30, limit=1024 * 1024).decode().strip() == 'v1.0.1',
             'unsupported_zarf_version')
     result = {}
     for name in ('grype', 'uds-pk', 'uds', 'gh'):
@@ -719,7 +754,7 @@ def tool_identities(run=child):
             result[name] = hashlib.file_digest(stream, 'sha256').hexdigest()
     return {'binary_sha256': result, 'grype_version': grype['version'],
             'grype_build_commit': grype.get('gitCommit'), 'grype_platform': grype.get('platform'),
-            'comparator_version': '0.2.0', 'uds_version': '0.41.0', 'embedded_zarf_version': '0.89.0'}
+            'comparator_version': '0.2.0', 'uds_version': '0.42.0', 'embedded_zarf_version': '1.0.1'}
 
 
 def source_identity(root):

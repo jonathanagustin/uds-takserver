@@ -40,6 +40,30 @@ class StagedMigrationTests(unittest.TestCase):
         driver.transfer.read.side_effect = ValueError('private secondary observation')
         return module, driver, driver.directory / 'PRIVATE-command-failure.txt'
 
+    def test_handoff_field_owners_publication_is_allowlisted(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, ENV, clear=True):
+            root = Path(temporary).resolve()
+            module, driver, _ = self.owner_command_fixture(root)
+            node_agent = {'f:args': {}, 'f:env': {'k:{"name":"NODE_NAME"}': {'f:valueFrom': {'f:fieldRef': {}}}}}
+            fields = node_agent
+            for key in reversed(('f:spec', 'f:template', 'f:spec', 'f:containers', 'k:{"name":"node-agent"}')):
+                fields = {key: fields}
+            managers = [{'manager': name, 'fieldsType': 'FieldsV1', 'fieldsV1': fields}
+                        for name in ('zarf', 'fixture-secret-manager')]
+            owners = module.node_agent_field_owners(managers)
+            expected = {'args': ['other', 'zarf'], 'image': [], 'nodeNameFieldRef': ['other', 'zarf'],
+                        'namespaceFieldRef': []}
+            self.assertEqual(owners, expected)
+            driver.state['steps'] = [{'name': 'deploy-local-agent', 'status': 'failed',
+                                      'commandFailure': {'exitStatus': 1, 'terminationReason': 'nonzero-exit'},
+                                      'agentFieldOwners': owners}]
+            driver.journal()
+            binding = driver.state['cluster']
+            self.assertEqual(S.owner_failure_details(root, 'deploy-local-agent', binding)['agentFieldOwners'], expected)
+            owners['image'] = ['fixture-secret-manager']
+            driver.journal()
+            self.assertNotIn('agentFieldOwners', S.owner_failure_details(root, 'deploy-local-agent', binding))
+
     def test_real_child_exit_seven_survives_secondary_failure_and_publication(self):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, ENV, clear=True):
             root = Path(temporary).resolve()
@@ -236,7 +260,7 @@ class StagedMigrationTests(unittest.TestCase):
                                'manifest unknown; failed to verify signature; unauthorized; '
                                'helm upgrade failed; unknown field; connection refused; '
                                'checksum mismatch; unknown flag; certificate has expired; '
-                               'failed calling webhook; ' + 'context deadline exceeded; ' * 40)
+                               'failed calling webhook; apply failed with conflicts: fixture-manager; ' + 'context deadline exceeded; ' * 40)
             progress = {'ownerSteps': [{'name': 'bootstrap-exemption', 'status': 'failed'}]}
             diagnostic = S.failure_categories(root, progress)
             self.assertEqual(diagnostic['sourceSHA'], ENV['GITHUB_SHA'])
@@ -264,6 +288,8 @@ class StagedMigrationTests(unittest.TestCase):
                     'cli-arguments': ['unknown flag: --fixture-secret', 'unknown command fixture-secret'],
                     'tls-certificate': ['x509: fixture-secret', 'unknown CA fixture-secret',
                                         'certificate has expired fixture-secret'],
+                    'apply-field-conflict': ['Apply failed with 1 conflict: fixture-secret',
+                                             'Apply failed with conflicts with fixture-secret'],
                     'package-integrity': ['invalid tar fixture-secret', 'unexpected EOF fixture-secret',
                                           'checksum mismatch fixture-secret']}
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, ENV, clear=True):

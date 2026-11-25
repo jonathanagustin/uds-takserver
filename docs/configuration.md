@@ -6,7 +6,7 @@ The package deploys the public TAK Server chart from [TAK-Product-Center/Server]
 
 The flavor is `upstream`. `uds run create-dev-package` passes `--flavor upstream`.
 
-[![Demo clip: the Package custom resource reaches Ready after the deploy](../docs-site/public/demo/demo-clip-package-ready.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo/demo-clip-package-ready.mp4)
+[![Demo clip: the Package custom resource reaches Ready after the deploy](../docs-site/public/demo/demo-clip-package-ready.jpg)](https://github.com/jonathanagustin/uds-takserver/releases/download/demo-run-44802574418-attempt-1/demo-clip-package-ready.mp4)
 
 ![kubectl get packages shows the TAK Package as Ready](../docs-site/public/demo/screens/packages-ready.webp)
 
@@ -23,14 +23,15 @@ The flavor is `upstream`. `uds run create-dev-package` passes `--flavor upstream
 | `PLUGINS_MEMORY_REQUEST` | `320Mi` | Memory request for the TAK plugins container. See [Profiles](profiles.md#plugins-memory) |
 | `PLUGINS_MEMORY_LIMIT` | `512Mi` | Memory limit for the TAK plugins container |
 | `FILESYSTEM_BACKUP` | `false` | `true` runs a Velero node-agent and marks the TAK Postgres and CloudTAK PostGIS volumes for file-system backup. See [Data](data.md#backup) |
+| `FILESYSTEM_BACKUP_OWNER` | `local` | Experimental file-system node-agent owner (`local` or `core`). See [ADR 0021](../adr/0021-velero-node-agent.md) |
 | `POSTGRES_STORAGE_CLASS` | empty | StorageClass for the TAK Postgres volume. Empty keeps the cluster default. Set it only on a new install, because a StatefulSet cannot change its volume claim template. See [Data](data.md#backup) |
 | `CLOUDTAK_STORAGE_CLASS` | empty | StorageClass for the CloudTAK PostGIS volume. Same rules as `POSTGRES_STORAGE_CLASS`. See [Data](data.md#backup) |
 
 ### Package values
 
-`values/zarf-values.yaml` is the package values file, checked by `values/zarf-values.schema.json`. Zarf Values is beta. Chart mappings copy `global.domain` onto the config chart and CloudTAK, `health.enabled` onto the config chart, and `tak.imageTag` onto each upstream TAK image tag. The Pepr values file is templated, so the watcher env reads `global.domain`, `tak.imageTag`, `dns.inCluster`, and `dns.passthroughHosts`. The admission and watcher env both read `tak.plugins.memoryRequest` and `tak.plugins.memoryLimit`.
+`values/zarf-values.yaml` is the package values file, checked by `values/zarf-values.schema.json`. Zarf Values is beta. Chart mappings copy `global.domain` onto the config chart and CloudTAK, `health.enabled` onto the config chart, and `tak.imageTag` onto each upstream TAK image tag. Templated values files feed `global.domain`, `tak.imageTag`, `dns.inCluster`, `dns.passthroughHosts`, `tak.plugins.memoryRequest`, and `tak.plugins.memoryLimit` into the Pepr admission/watcher env, feed `tak.imageTag` into `certs.image` and CloudTAK's dump publisher image, and bridge `backup.filesystem.enabled`, `backup.filesystem.owner`, `storage.postgresClass`, and `storage.cloudtakClass` into the config, TAK, and CloudTAK charts before Helm renders.
 
-Each default is the placeholder of the matching variable, for example `global.domain: "###ZARF_VAR_DOMAIN###"`. Zarf replaces placeholders after Helm renders, so with no package value set the variable decides, exactly as before. `--set-variables DOMAIN=`, a bundle's `uds-config.yaml`, and Unified Defense Stack (UDS) command-line interface (CLI) 0.40 bundles keep working unchanged. A package value only overrides its variable, for that key: `uds zarf package deploy --set-values global.domain=example.com`, or `--values`. The `images:` list and `certs.image` in `charts/takserver/values.yaml` read only `TAK_IMAGE_TAG`. `health.enabled` is the exception: it has no variable and defaults to `true`, so Helm sees a real value.
+Each default is the placeholder of the matching variable, for example `global.domain: "###ZARF_VAR_DOMAIN###"`. With no package value set the variable decides, exactly as before. `--set-variables DOMAIN=`, a bundle's `uds-config.yaml`, and Unified Defense Stack (UDS) command-line interface (CLI) bundles keep working unchanged. A package value only overrides its variable, for that key: `uds zarf package deploy --set-values global.domain=example.com`, or `--values`. The `images:` list in `zarf.yaml` uses a literal tag. `health.enabled` is the exception: it has no variable and defaults to `true`, so Helm sees a real value.
 
 A file passed to `--values` sets the same keys:
 
@@ -42,21 +43,25 @@ global:
 | Package value | Defaults to | Overrides |
 | --- | --- | --- |
 | `global.domain` | `DOMAIN` | TAK, CloudTAK, and watcher hosts |
-| `tak.imageTag` | `TAK_IMAGE_TAG` | the upstream TAK image tags and the watcher render image |
+| `tak.imageTag` | `TAK_IMAGE_TAG` | the upstream TAK image tags, `certs.image`, CloudTAK's dump publisher image, and the watcher render image |
 | `dns.inCluster` | `IN_CLUSTER_DNS` | the watcher's CoreDNS rewrite switch |
 | `dns.passthroughHosts` | `PASSTHROUGH_HOSTS` | the watcher's passthrough host list |
 | `tak.plugins.memoryRequest` | `PLUGINS_MEMORY_REQUEST` | the plugins memory request |
 | `tak.plugins.memoryLimit` | `PLUGINS_MEMORY_LIMIT` | the plugins memory limit |
+| `backup.filesystem.enabled` | `FILESYSTEM_BACKUP` | Velero file-system backup annotations and node-agent switch |
+| `backup.filesystem.owner` | `FILESYSTEM_BACKUP_OWNER` | file-system node-agent owner (`local` or `core`) |
+| `storage.postgresClass` | `POSTGRES_STORAGE_CLASS` | TAK Postgres StatefulSet StorageClass |
+| `storage.cloudtakClass` | `CLOUDTAK_STORAGE_CLASS` | CloudTAK PostGIS StatefulSet StorageClass |
 | `health.enabled` | `true` (no variable) | the `tak-health` client-port checks. See [Client-port health](networking.md#client-port-health) |
-
-`FILESYSTEM_BACKUP`, `POSTGRES_STORAGE_CLASS`, and `CLOUDTAK_STORAGE_CLASS` are deployment variables. They reach the charts through values files that Zarf fills in before Helm renders the node agent, volume annotations, and storage class. Use these variables for the standard deployment settings.
 
 `chartOverrides` accepts optional objects merged at the root of four application
 charts: `takserver.uds-takserver-config`, `takserver.takserver-oidc`,
 `takserver.takserver`, and `cloudtak.uds-cloudtak`. All four default to `{}`, so
 ordinary package defaults stay unchanged. Core charts are outside this interface.
-For example, a file passed with `--values` can retain an existing TAK chart
-resource setting:
+`chartOverrides.takserver.takserver` excludes Zarf-packaged image coordinates,
+pull secrets, and upstream nginx ingress via `excludePaths` (matching the UDS
+package template). For example, a file passed with `--values` can retain an
+existing TAK chart resource setting:
 
 ```yaml
 chartOverrides:

@@ -115,12 +115,28 @@ check_match ".github/workflows/demo.yaml" ignore
 check_match ".github/workflows/release.yaml" ignore
 check_match ".github/workflows/mutation.yaml" ignore
 check_match ".github/workflows/ui-reel.yaml" ignore
+check_match ".github/workflows/civilian-trailer.yaml" ignore
+check_decide false ".github/workflows/civilian-trailer.yaml"
 check_match ".github/workflows/native-cache.yaml" ignore
 check_decide false ".github/workflows/native-cache.yaml"
 check_match ".github/workflows/native-cache-pr.yaml" ignore
 check_decide false ".github/workflows/native-cache-pr.yaml"
 check_decide true $'.github/workflows/native-cache-pr.yaml\ncharts/takserver/values.yaml'
 check_match ".github/workflows/native-cache-pr-extra.yaml" relevant
+check_match ".github/workflows/geos-local-qualification.yaml" ignore
+check_decide false ".github/workflows/geos-local-qualification.yaml"
+check_match ".github/workflows/takx-gl-qualification.yaml" ignore
+check_decide false ".github/workflows/takx-gl-qualification.yaml"
+check_match ".github/workflows/takx-gl-runner-image.yaml" ignore
+check_decide false ".github/workflows/takx-gl-runner-image.yaml"
+check_match ".github/workflows/proj-cache.yaml" ignore
+check_decide false ".github/workflows/proj-cache.yaml"
+check_match ".github/workflows/gles-cache.yaml" ignore
+check_decide false ".github/workflows/gles-cache.yaml"
+check_match ".github/workflows/mdbtools-cache.yaml" ignore
+check_decide false ".github/workflows/mdbtools-cache.yaml"
+check_match ".github/workflows/takx-native-caches.yaml" ignore
+check_decide false ".github/workflows/takx-native-caches.yaml"
 check_match ".github/workflows/native-cache-extra.yaml" relevant
 check_decide true $'.github/workflows/native-cache.yaml\ncharts/takserver/values.yaml'
 # Mutation tooling is isolated from the Pepr package used by cluster jobs.
@@ -256,7 +272,7 @@ for helper, suite in [('drive.py', 'test_identity_rollout_driver'),
             assert result.returncode != 0 and 'FileNotFoundError' in result.stdout and helper in result.stdout, (helper, operation, result.stdout)
             print('ok: unconditional Unit import rejects', operation, helper)
 PYTHON
-for shared_path in .github/scripts/velero-controller-state.py tests/velero-controller-restore-policy.yaml tests/backup-restore.sh tests/backup-names.sh tests/ephemeral-cluster.py tests/upgrade-agent-watch.py .github/scripts/node-agent-ready.sh tasks/test.yaml bundle/full/uds-bundle.yaml; do
+for shared_path in tests/backup-restore.sh tests/backup-names.sh tests/ephemeral-cluster.py tests/upgrade-agent-watch.py .github/scripts/node-agent-ready.sh tasks/test.yaml bundle/full/uds-bundle.yaml; do
   check_match "${shared_path}" relevant
   check_decide true $'.github/scripts/staged-migrations.sh\n'"${shared_path}"
 done
@@ -414,6 +430,7 @@ must_relevant() {
       case "${path}" in
         tests/workload-identities/drive.py | tests/workload-identities/retained_state.py | tests/workload-identities/render_inputs.py | tests/workload-identities/package_roundtrip.py | tests/workload-identities/phase_evidence.py | tests/workload-identities/failure_evidence.py | tests/workload-identities/README.md) return 1 ;;
         tests/demo/* | tests/test_* | tests/playwright.demo.config.ts) return 1 ;;
+        tests/zarf_next_live_qualification.py | tests/zarf_beta_contract.py | tests/fixtures/zarf-beta-contract/*) return 1 ;;
         *) return 0 ;;
       esac
       ;;

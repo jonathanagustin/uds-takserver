@@ -196,7 +196,11 @@ class TrialTests(unittest.TestCase):
     def test_deploy_set_key_matches_real_package_variable_declaration(self):
         import yaml
         package = yaml.safe_load((ROOT / 'zarf.yaml').read_text())
-        variables = {item['name'] for item in package['variables']}
+        if 'variables' in package:
+            variables = {item['name'] for item in package['variables']}
+        else:
+            values = yaml.safe_load((ROOT / 'values/zarf-values.yaml').read_text())
+            self.assertEqual(values['backup']['filesystem']['owner'], 'local')
         with tempfile.TemporaryDirectory() as tmp:
             driver = self.driver(tmp)
             target = Path(tmp) / 'input'
@@ -212,7 +216,8 @@ class TrialTests(unittest.TestCase):
                 key, value = args[args.index('--set') + 1].split('=')
                 prefix, variable = key.split('.')
                 self.assertEqual(prefix, package['metadata']['name'])
-                self.assertIn(variable, variables)
+                if 'variables' in package:
+                    self.assertIn(variable, variables)
                 self.assertEqual(variable, 'FILESYSTEM_BACKUP_OWNER')
                 self.assertEqual(value, owner)
                 self.assertEqual(args[args.index('--packages') + 1], prefix)

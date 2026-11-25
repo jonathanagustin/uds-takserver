@@ -71,6 +71,7 @@ on:
       - ".github/workflows/unit-tests.yaml"
       - ".github/workflows/mutation.yaml"
       - ".github/workflows/ui-reel.yaml"
+      - ".github/workflows/civilian-trailer.yaml"
       - ".github/workflows/atak.yaml"
       - ".github/workflows/atak-vm.yaml"
       - ".github/workflows/atak-e2e.yaml"
@@ -78,6 +79,13 @@ on:
       - ".github/workflows/migrate-packages.yaml"
       - ".github/workflows/native-cache.yaml"
       - ".github/workflows/native-cache-pr.yaml"
+      - ".github/workflows/geos-local-qualification.yaml"
+      - ".github/workflows/takx-gl-qualification.yaml"
+      - ".github/workflows/takx-gl-runner-image.yaml"
+      - ".github/workflows/proj-cache.yaml"
+      - ".github/workflows/gles-cache.yaml"
+      - ".github/workflows/mdbtools-cache.yaml"
+      - ".github/workflows/takx-native-caches.yaml"
       - ".github/scripts/migrate-ghcr.py"
       - ".github/workflows/test-aks.yaml"
       - ".github/workflows/test-eks.yaml"
@@ -136,6 +144,11 @@ on:
       - ".github/workflows/codeql-extended.yaml"
       - ".github/workflows/codeql-language.yaml"
       - ".github/scripts/codeql-languages.py"
+      - ".github/workflows/zarf-next-qualification.yaml"
+      - ".github/workflows/dhi-takserver-spike.yaml"
+      - "tests/zarf_next_live_qualification.py"
+      - "tests/zarf_beta_contract.py"
+      - "tests/fixtures/zarf-beta-contract/**"
 
   # The same install runs again after a relevant pull request merges.
   push:
@@ -498,7 +511,7 @@ jobs:
         run: python3 .github/scripts/test-validation-mode.py plan
 
       - name: test-flavor
-        uses: defenseunicorns/uds-common/.github/actions/test-flavor@9cb4ebfd9f9a5efd1dbc454bf3aae843d0b57b9f # v1.32.2
+        uses: defenseunicorns/uds-common/.github/actions/test-flavor@807de6f4efca9f51ee5e8d3e466d5f089c9eaab8 # v1.34.1
         id: test-flavor
     outputs:
       upgrade-flavors: ${{ steps.test-flavor.outputs.upgrade-flavors }}
@@ -611,14 +624,14 @@ jobs:
         if: (env.TEST_TYPE == 'install' || steps.baseline.outputs.available == 'true')
         uses: docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a # v2.4.0
         with:
-          version: v5.7.0
+          version: v5.8.0
 
       - name: Install UDS CLI
         if: (env.TEST_TYPE == 'install' || steps.baseline.outputs.available == 'true')
         uses: defenseunicorns/setup-uds@d6add59d4c2ca789ed7c92741e91bd340b4e950b # v1.0.2
         with:
           # renovate: datasource=github-tags depName=defenseunicorns/uds-cli versioning=semver
-          version: v0.41.0
+          version: v0.42.0
 
       - name: Trim the runner
         if: (env.TEST_TYPE == 'install' || steps.baseline.outputs.available == 'true') && (vars.TEST_RUNNER == '' || vars.TEST_RUNNER == 'ubuntu-22.04' || vars.TEST_RUNNER == 'ubuntu-24.04' || vars.TEST_RUNNER == 'ubuntu-26.04' || runner.arch == 'ARM64')
@@ -635,11 +648,19 @@ jobs:
       # (run 40174810574). The amd64 hit took 32s to unpack. The miss saved
       # the same images in about 9s. The ATAK e2e job keeps the 5.5 GB slim
       # checkpoint in the Actions cache, which needs the room.
+      - name: Install pinned k3d
+        if: (env.TEST_TYPE == 'install' || steps.baseline.outputs.available == 'true')
+        uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
+        with:
+          install_args: k3d
+          cache: true
+
       - name: Environment setup
         if: (env.TEST_TYPE == 'install' || steps.baseline.outputs.available == 'true')
         run: |
           echo "MARU_AUTH=\"{\"raw.githubusercontent.com\": \"${{ secrets.GITHUB_TOKEN }}\"}\"" >> "$GITHUB_ENV"
           uds run actions:setup-environment \
+          --set INSTALL_DEPENDENCIES=false \
           --set REGISTRY1_USERNAME="${{ secrets.IRON_BANK_ROBOT_USERNAME }}" \
           --set REGISTRY1_PASSWORD="${{ secrets.IRON_BANK_ROBOT_PASSWORD }}" \
           --set GH_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
