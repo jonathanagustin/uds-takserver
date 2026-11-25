@@ -369,10 +369,23 @@ jobs:
       - name: Restore every provider, build the Kernel and compile the client
         run: takx/desktop-prototype/ci/run-group.sh client
 
-      # On arm64 this step is expected to fail until the assembler, which is
-      # amd64-only today, is ported (takx/desktop-prototype/ci/ARCH-CACHE-NOTE.md).
+      # On arm64 this step fails until the assembler, which is amd64-only
+      # today, is ported (takx/desktop-prototype/ci/ARCH-CACHE-NOTE.md). The
+      # failure is kept visible (step outcome, warning, status table) but does
+      # not turn the arm64 leg red: the leg's result is the Kernel and client
+      # build above. No arm64 boot is claimed.
       - name: Assemble and boot
+        id: boot
+        continue-on-error: ${{ matrix.arch == 'arm64' }}
         run: takx/desktop-prototype/ci/run-group.sh boot
+
+      - name: Report an assembly or boot that did not pass
+        if: ${{ always() && steps.boot.outcome == 'failure' }}
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          echo "::warning title=TAKX desktop prototype (${ARCH})::assemble or boot did not pass; see status/assemble.json and status/boot.json in the artifact"
 
       - name: Summarize statuses
         if: always()

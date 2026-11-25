@@ -17,7 +17,7 @@
    "toolchain_id": "sha256:2ad98b1fa1d85fed875a0819db899ed5c6f9c6e8199700fb51b27c8d7240a1f0",
    "provider_cache": "ghcr.io/jonathanagustin/uds-takserver/takx-desktop-proto-cache",
    "keys_assume": {"work_root": "/var/lib/takx-proto", "repository": "/home/user/uds-takserver"},
-   "source": "built in the development sandbox on 2026-11-25 from ../Dockerfile as it was before the multi-architecture change (tags toolchain-wip and runtime-wip); the ids are those of status/images.json there and of the header of ../cache-index.tsv. Whether GITHUB_TOKEN may pull them was not verified from the sandbox."
+   "source": "built in the development sandbox on 2026-11-25 from ../Dockerfile as it was before the multi-architecture change (tags toolchain-wip and runtime-wip); the ids are those of status/images.json there and of the header of ../cache-index.tsv. The workflow's GITHUB_TOKEN cannot pull them: run 45702964185 (2026-11-25) got 'manifest unknown' for the toolchain digest, and provider_cache.py classified the registry's answer for the hand-pushed takx-desktop-proto-cache packages as unauthorized ('docker is not logged in to the cache registry'), so amd64 was built from the CI images under takx-desktop-proto-ci instead. Granting this repository access to those packages (Package settings, Manage Actions access) would let step 1 of ci/images.sh succeed."
   }
  }
 }
