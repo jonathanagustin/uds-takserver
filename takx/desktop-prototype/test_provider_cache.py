@@ -3125,6 +3125,42 @@ class MoreDetails(ServiceCase):
         for status in ('OK', 'ok ', 'o', 'okay', 'a', 'zz', '', None, True):
             self.assertEqual(PC.decide_push(True, status, True, 'absent')[0], 'skip', status)
 
+    def test_decisions_for_every_combination(self):
+        remotes = ('present', 'absent', 'unauthorized', 'error', None)
+        for enabled in (True, False):
+            for flag in (True, False):
+                for other in (True, False):
+                    for remote in remotes:
+                        # push: enabled, status ok?, marker present?
+                        answers = {'present': 'present', 'absent': 'push', 'unauthorized': 'skip'}
+                        expected = ('skip' if not enabled or not flag else 'refuse' if not other else
+                                    answers.get(remote, 'refuse'))
+                        got = PC.decide_push(enabled, 'ok' if flag else 'failed', other, remote)
+                        self.assertEqual(got[0], expected, (enabled, flag, other, remote))
+                        self.assertTrue(got[1])
+                        # restore: enabled, directory exists?, prerequisites ok?
+                        answers = {'present': 'restore', 'absent': 'skip', 'unauthorized': 'skip'}
+                        expected = ('skip' if not enabled else 'refuse' if flag else 'skip' if not other else
+                                    answers.get(remote, 'refuse'))
+                        got = PC.decide_restore(enabled, flag, other, remote)
+                        self.assertEqual(got[0], expected, (enabled, flag, other, remote))
+                        self.assertTrue(got[1])
+        # Whatever the decision, only 'push' publishes and only 'restore' fetches.
+        self.make('base')
+        for remote in ('unauthorized', 'error', 'present'):
+            self.registry.state = remote
+            try:
+                self.service.push('base')
+            except (PC.Skip, PC.CacheError):
+                pass
+            self.assertEqual(self.registry.published, 0, remote)
+        self.set_aside('base')
+        for remote in ('unauthorized', 'error', 'absent'):
+            self.registry.state = remote
+            with self.assertRaises((PC.Skip, PC.CacheError)):
+                self.service.restore('base')
+            self.assertEqual(self.registry.fetched, [], remote)
+
     def test_bundle_identity_is_exact_in_both_directions(self):
         key, tar, files = 'b' * 64, 'c' * 64, 'd' * 64
         good = dict(name='mm', key=key, root='/r',
@@ -3582,6 +3618,29 @@ class Archiving(ServiceCase):
             with self.subTest(what=what), self.assertRaisesRegex(PC.CacheError, message):
                 self.service.push('base')
             self.assertEqual((self.registry.published, self.leftovers()), (0, []))
+
+    def test_files_larger_than_one_read_are_hashed_whole(self):
+        top = self.make('base')
+        data = hashlib.sha256(b'seed').digest() * 81920 + b'tail'  # 2.5 MiB and four bytes
+        (top / 'install/big.bin').write_bytes(data)
+        digest = hashlib.sha256(data).hexdigest()
+        self.assertEqual(PC.sha256_file(top / 'install/big.bin'), digest)
+        listed = {entry['path']: entry for entry in PC.WorkTree.entries(top)}
+        self.assertEqual((listed['install/big.bin']['size'], listed['install/big.bin']['sha256']), (len(data), digest))
+        ref = self.service.push('base')
+        tar = Path(self.tmp.name) / 'base.tar'
+        tar.write_bytes(self.registry.images[ref][1]['base.tar'])
+        archived = {entry['path']: entry for entry in PC.WorkTree.tar_entries(tar, 'base')}
+        self.assertEqual(archived, listed)
+        self.assertEqual(self.registry.images[ref][0]['dev.uds.takx.tar-sha256'],
+                         hashlib.sha256(tar.read_bytes()).hexdigest())
+        good = snapshot(top)
+        self.set_aside('base')
+        self.service.restore('base')
+        self.assertEqual(snapshot(top), good)
+        empty = Path(self.tmp.name) / 'empty'
+        empty.write_bytes(b'')
+        self.assertEqual(PC.sha256_file(empty), hashlib.sha256(b'').hexdigest())
 
     def test_push_record_is_written_under_a_lock(self):
         tree = PC.WorkTree(self.root, self.repo)
