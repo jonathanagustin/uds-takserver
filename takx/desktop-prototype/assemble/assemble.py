@@ -303,7 +303,8 @@ def main():
                  '%s (takx/desktop-prototype kernel stage; not the private 8.57.11)' % KERNEL_LABEL)
     members[KERNEL].append(os.path.basename(kernel_jar))
     # The overlay JAR (kernel_overlay.py) holds Kernel classes rebuilt with the
-    # recorded prototype patches; it precedes the Kernel JAR in the module.
+    # recorded prototype patches, and from recipe sources newer than the
+    # composed Kernel; it precedes the Kernel JAR in the module.
     overlay_dir = need(os.path.join(root, 'P', 'kernel-overlay'))
     with open(os.path.join(overlay_dir, 'receipt.json')) as stream:
         overlay = json.load(stream)
@@ -311,9 +312,12 @@ def main():
             sha256(overlay['jar']['path']) != overlay['jar']['sha256']:
         raise SystemExit('assemble: the Kernel overlay does not match its receipt or the current Kernel classes')
     overlay_name = os.path.basename(overlay['jar']['path'])
+    refresh = overlay.get('recipe_refresh')
     assembly.put(overlay['jar']['path'], os.path.join(module_dir(KERNEL), overlay_name),
-                 'desktop-prototype Kernel Java overlay: %d Kernel classes rebuilt with %s'
-                 % (len(overlay['classes']), ', '.join(item['patch'] for item in overlay['patches'])))
+                 'desktop-prototype Kernel Java overlay: %d Kernel classes rebuilt with %s%s'
+                 % (len(overlay['classes']), ', '.join(item['patch'] for item in overlay['patches']),
+                    '; %d source(s) refreshed from %s (patch sha256 %s)'
+                    % (len(refresh['sources']), refresh['recipe'], refresh['context_patch_sha256']) if refresh else ''))
     first[KERNEL] = [overlay_name]
     superseded = []
     for name in sorted(os.listdir(os.path.join(kernel, 'third-party'))):
@@ -442,7 +446,8 @@ def main():
             'postgresql': 'absent; the default database is hsqldb',
         },
         'modules': {name: first.get(name, []) + sorted(jars) for name, jars in members.items()},
-        'kernel_java_overlay': {'patches': overlay['patches'], 'classes': sorted(overlay['classes']),
+        'kernel_java_overlay': {'patches': overlay['patches'], 'recipe_refresh': refresh,
+                                'classes': sorted(overlay['classes']),
                                 'jar_sha256': overlay['jar']['sha256'],
                                 'kernel_controls_rerun_with_overlay': False},
         'module_graph_note': 'hand-written; coarser than the official generated one-module-per-artifact graph',
