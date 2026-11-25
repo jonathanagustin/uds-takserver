@@ -80,7 +80,8 @@ resolve="${repo}/takx/desktop-prototype/client/resolve_runtime.py"
 # stage itself runs from the patched copy of the tree, see ../arch.sh), so a
 # first run records it where it can be reviewed and committed.
 arch="$(takx_arch)"
-tracked_lock="${repo}/takx/desktop-prototype/client/inputs.lock.json"
+# shellcheck disable=SC2250 # test_arch.py (StageHandOver) asserts this text unbraced
+tracked_lock="$repo/takx/desktop-prototype/client/inputs.lock.json"
 if [[ "${arch}" != amd64 ]]; then
   lock_home="${repo}"
   [[ -f "${repo}/.takx-arch-tree.base" ]] && lock_home="$(<"${repo}/.takx-arch-tree.base")"

@@ -97,6 +97,8 @@ do_check() {
   frame="${media}/${attempt}-check.png"
   if running; then
     age="$(inside bash -c 'ps -o etimes= -C java | head -1 | tr -d " "' || echo 0)"
+    # $w and the $(...) calls expand in the container's shell. Quoting them here would expand them now.
+    # shellcheck disable=SC2016
     windows="$(inside bash -c 'for w in $(xdotool search --onlyvisible --name . 2>/dev/null); do printf "%s|%s|%s\n" "$w" "$(xdotool getwindowname "$w")" "$(xdotool getwindowgeometry "$w" | tr "\n" " ")"; done' || true)"
     title="$(printf '%s\n' "${windows}" | grep -i 'TAK' | head -1 | cut -d'|' -f2 || true)"
     inside ffmpeg -nostdin -loglevel error -y -f x11grab -video_size 1920x1080 -i :99 -frames:v 1 "${frame}" || true

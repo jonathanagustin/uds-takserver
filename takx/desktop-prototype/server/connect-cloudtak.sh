@@ -40,6 +40,7 @@ user=takx-cloudtak
 source "${root}/server/endpoints.env"
 export CLOUDTAK_URL NODE_PATH="${NODE_PATH:-$(npm root -g)}"
 # The Keycloak admin calls of 'signin' must not go through the sandbox proxy.
+# shellcheck disable=SC2154 # DOMAIN is set by ${root}/server/endpoints.env (written by server/45-hosts.sh), sourced above
 export NO_PROXY="${NO_PROXY:-},.${DOMAIN}" no_proxy="${no_proxy:-},.${DOMAIN}"
 
 driver() { node "${here}/connect_cloudtak.cjs" "$@"; }

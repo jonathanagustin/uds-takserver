@@ -107,6 +107,7 @@ set_aside() { # provider: move an existing output dir to failed/<provider>-<n>
   log "moved previous P/${name} to failed/${name}-${n}"
 }
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 seed_cache() { # provider recipe-dir [extra lock files...]
   # Hard-link every cache/<sha256> whose digest is named by the recipe's lock or
   # entrypoint. The recipe itself re-verifies size and digest of each entry.
@@ -188,15 +189,18 @@ provider() {
   if [[ "$(status_of "${name}")" == ok && -s "${out}/complete.json" ]]; then
     log "${name} already ok, skipping"; return 0
   fi
-  set_aside "${name}"
-  if cache_restored "${name}" complete.json; then
+  # shellcheck disable=SC2250 # test_provider_cache.py (RepositoryManifest) asserts this text unbraced
+  set_aside "$name"
+  # shellcheck disable=SC2250 # test_provider_cache.py (RepositoryManifest) asserts this text unbraced
+  if cache_restored "$name" complete.json; then
     log "${name} restored from the provider cache, build skipped"; return 0
   fi
   docker rm -f "takx-${name}" >/dev/null 2>&1 || true
   start=$(date +%s)
   printf '\n===== %s lane3 %s: build.py %s\n' "$(date -u +%FT%TZ)" "${name}" "$*" >>"${logf}"
   log "${name}: running takx/${recipe}/build.py (log ${logf})"
-  "${run}" -d --name "takx-${name}" --log "${logf}" -- \
+  # shellcheck disable=SC2250 # test_provider_cache.py (RepositoryManifest) asserts this text unbraced
+  "$run" -d --name "takx-${name}" --log "${logf}" -- \
     python3 -B "${repo}/takx/${recipe}/build.py" --output "${out}" "$@" >/dev/null
   rc="$(docker wait "takx-${name}")"
   docker rm "takx-${name}" >/dev/null 2>&1 || true
@@ -221,19 +225,22 @@ provider() {
   for item in "${!outputs[@]}"; do
     [[ -e "${out}/${outputs[${item}]}" ]] || {
       write_status "${name}" failed "${seconds}" "expected output ${outputs[${item}]} is missing"; return 1; }
-    outputs[${item}]="${out}/${outputs[${item}]}"
+    outputs[item]="${out}/${outputs[${item}]}"
   done
-  write_status "${name}" ok "${seconds}" \
+  # shellcheck disable=SC2250 # test_provider_cache.py (RepositoryManifest) asserts this text unbraced
+  write_status "$name" ok "${seconds}" \
     "takx/${recipe}/build.py exit 0; its tests (test*.py) passed ($(tail -n 3 "${vlog}" | tr '\n' ' ' | sed 's/  */ /g')); complete.json sha256 ${sha}${extra_note:+; ${extra_note}}" \
     "${outputs[@]}"
   log "${name}: ok in ${seconds}s"
-  cache_push "${name}"
+  # shellcheck disable=SC2250 # test_provider_cache.py (RepositoryManifest) asserts this text unbraced
+  cache_push "$name"
 }
 
 
 gdal_archive="${root}/src/atak-civ-lfs/depends/gdal-2.4.4-mod.tar.gz"
 libkml_archive="${root}/src/atak-civ-lfs/takthirdparty/distfiles/libkml.tar.gz"
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_draco() {
   seed_cache draco "${repo}/takx/native-deps/build.py" "${repo}/takx/native-deps/inputs.lock.json"
   provider draco native-deps "TAKX_NATIVE_DEPS_PROOF=${root}/P/draco" \
@@ -242,12 +249,14 @@ stage_draco() {
     --jobs 1 "${fetch[@]}"
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_las() {
   seed_cache las "${repo}/takx/native-las/build.py" "${repo}/takx/native-las/inputs.lock.json"
   provider las native-las "TAKX_NATIVE_LAS_PROOF=${root}/P/las" complete.json -- \
     --cache "${root}/cache-lane3/las" --cmake "${cmake}" --ninja "${ninja}" "${fetch[@]}"
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_mdb() {
   seed_cache mdb "${repo}/takx/native-mdbtools/build.py" "${repo}/takx/native-mdbtools/inputs.lock.json" \
     "${repo}/takx/native-mdbtools/patch.json"
@@ -260,6 +269,7 @@ stage_mdb() {
     --cache "${root}/cache-lane3/mdb" "${fetch[@]}" --with-upstream-fixture
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_gles() {
   need gles draco || return 1
   seed_cache gles "${repo}/takx/native-gles/build.py" "${repo}/takx/native-gles/inputs.lock.json"
@@ -268,6 +278,7 @@ stage_gles() {
     --cache "${root}/cache-lane3/gles" --headers "${root}/P/draco/install/include" --ninja "${ninja}" "${fetch[@]}"
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_scene() {
   wait_for scene proj "${wait_s}" || return 1
   wait_for scene assimp "${wait_s}" || return 1
@@ -321,6 +332,7 @@ stage_gdal_jni() {
     --gis-build "${gis}" --java-home "${jdk}"
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_curl() {
   wait_for curl sqlcipher "${wait_s}" || return 1
   wait_for curl assimp "${wait_s}" || return 1

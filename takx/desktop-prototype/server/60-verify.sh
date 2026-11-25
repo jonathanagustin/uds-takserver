@@ -29,20 +29,24 @@ for deployment in takserver-api takserver-messaging takserver-config takserver-p
 done
 kubectl get packages.uds.dev -A --no-headers | awk '{print $1, $2, $3}'
 
+# shellcheck disable=SC2154 # TAK_STREAM_HOST, TAK_STREAM_PORT and PASSTHROUGH_GATEWAY_IP are set by ${SERVER_STATE}/endpoints.env (written by 45-hosts.sh), sourced above
 note "streaming port ${TAK_STREAM_HOST}:${TAK_STREAM_PORT} at ${PASSTHROUGH_GATEWAY_IP}, server certificate (no client certificate offered)"
 openssl s_client -connect "${PASSTHROUGH_GATEWAY_IP}:${TAK_STREAM_PORT}" -servername "${TAK_STREAM_HOST}" \
   </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -enddate -ext subjectAltName
 
+# shellcheck disable=SC2154 # TAK_API_HOST and TAK_API_PORT are set by ${SERVER_STATE}/endpoints.env (written by 45-hosts.sh), sourced above
 note "API host ${TAK_API_HOST}:${TAK_API_PORT} by SNI on the passthrough gateway, server certificate"
 openssl s_client -connect "${PASSTHROUGH_GATEWAY_IP}:${TAK_API_PORT}" -servername "${TAK_API_HOST}" \
   </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -ext subjectAltName
 
 note "browser endpoints on the tenant gateway (public *.${DOMAIN} certificate, verified)"
+# shellcheck disable=SC2154 # CLOUDTAK_URL is set by ${SERVER_STATE}/endpoints.env (written by 45-hosts.sh), sourced above
 for url in "https://sso.${DOMAIN}/realms/uds/.well-known/openid-configuration" "https://takserver.${DOMAIN}/" "${CLOUDTAK_URL}"; do
   curl -sS -o /dev/null -w "%{http_code} %{remote_ip} ${url}\n" "${url}" || fail=1
 done
 
 if [[ -s "${dir}/client.pem" ]]; then
+  # shellcheck disable=SC2154 # TAK_CERT_NAME is set by ${SERVER_STATE}/endpoints.env (written by 45-hosts.sh), sourced above
   note "mutual TLS as ${identity}: TAK CA as the only trust root, server name ${TAK_CERT_NAME} checked"
   if openssl s_client -connect "${PASSTHROUGH_GATEWAY_IP}:${TAK_STREAM_PORT}" \
       -CAfile "${dir}/ca.pem" -verify_return_error -verify_hostname "${TAK_CERT_NAME}" \

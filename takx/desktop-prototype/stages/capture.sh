@@ -147,6 +147,8 @@ DRIVE
 do_finish() {
   local attempt dir start
   attempt="$(cat "${root}/capture/current")"; dir="${root}/capture/${attempt}"; start=$(date +%s)
+  # The script expands in the container's shell (DIR and OUT are passed with -e). Quoting it here would expand it now.
+  # shellcheck disable=SC2016
   "${run}" --runtime --mount "${media}:${media}" -e "DIR=${dir}" -e "OUT=${media}" -- bash -euo pipefail -c '
     at() { awk -F"\t" -v k="$1" "index(\$2,k)==1{print \$1; exit}" "$DIR/events.tsv"; }
     enc() { # output start duration

@@ -69,8 +69,10 @@ if [[ "${TAKX_LANE2_FETCH:-1}" == 1 ]]; then fetch=(--fetch-dependencies); fi
 
 mkdir -p "${root}"/{P,failed,logs,status,cache-lane2}
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 log() { printf '%s lane2: %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 write_status() { # stage status seconds notes outputs...
   local stage="$1" status="$2" seconds="$3" notes="$4"; shift 4
   python3 -I - "${root}/status/${stage}.json" "${stage}" "${status}" "${seconds}" "${notes}" "$@" <<'PY'
@@ -85,6 +87,7 @@ os.replace(tmp, path)
 PY
 }
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 status_of() { # stage -> ok|failed|missing
   python3 -I - "${root}/status/$1.json" <<'PY' 2>/dev/null || echo missing
 import json, sys
@@ -92,6 +95,7 @@ print(json.load(open(sys.argv[1]))['status'])
 PY
 }
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 set_aside() { # provider: move an existing output dir to failed/<provider>-<n>
   local name="$1" n=1
   [[ -e "${root}/P/${name}" ]] || return 0
@@ -100,6 +104,7 @@ set_aside() { # provider: move an existing output dir to failed/<provider>-<n>
   log "moved previous P/${name} to failed/${name}-${n}"
 }
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 seed_cache() { # provider recipe-dir [extra lock files...]
   # Hard-link every cache/<sha256> whose digest is named by the recipe's lock or
   # entrypoint. The recipe itself re-verifies size and digest of each entry.
@@ -112,6 +117,7 @@ seed_cache() { # provider recipe-dir [extra lock files...]
   log "cache-lane2/${name} holds $(find "${dir}" -maxdepth 1 -type f | wc -l) entries"
 }
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 need() { # stage dependency...
   local stage="$1" dep; shift
   for dep in "$@"; do
@@ -123,6 +129,7 @@ need() { # stage dependency...
   done
 }
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 wait_for() { # stage dependency seconds
   local stage="$1" dep="$2" left="$3" state
   while :; do
@@ -143,6 +150,7 @@ wait_for() { # stage dependency seconds
 # provider, and TAKX_PROTO_CACHE=off skips both.
 cache="${repo}/takx/desktop-prototype/provider_cache.py"
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 cache_restored() { # provider marker: 0 when the cache installed a verified P/<provider>
   [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 1
   python3 -I "${cache}" restore "$1" >>"${root}/logs/provider-cache.log" 2>&1 || return 1
@@ -150,6 +158,7 @@ cache_restored() { # provider marker: 0 when the cache installed a verified P/<p
   set_aside "$1"; return 1
 }
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 cache_push() { # provider: best effort
   [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 0
   python3 -I "${cache}" push "$1" >>"${root}/logs/provider-cache.log" 2>&1 \
@@ -160,6 +169,7 @@ cache_push() { # provider: best effort
 # provider <name> <recipe dir> <proof env assignments or ''> <outputs csv> -- recipe args...
 # Runs takx/<recipe>/build.py --output P/<name> ..., then the recipe's
 # test_build.py (with the proof variables set, which replays its real controls).
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 provider() {
   local name="$1" recipe="$2" proofenv="$3" outs="$4"; shift 5
   local out="${root}/P/${name}" logf="${root}/logs/${name}.log" vlog="${root}/logs/${name}-verify.log"
@@ -167,15 +177,18 @@ provider() {
   if [[ "$(status_of "${name}")" == ok && -s "${out}/complete.json" ]]; then
     log "${name} already ok, skipping"; return 0
   fi
-  set_aside "${name}"
-  if cache_restored "${name}" complete.json; then
+  # shellcheck disable=SC2250 # test_provider_cache.py (RepositoryManifest) asserts this text unbraced
+  set_aside "$name"
+  # shellcheck disable=SC2250 # test_provider_cache.py (RepositoryManifest) asserts this text unbraced
+  if cache_restored "$name" complete.json; then
     log "${name} restored from the provider cache, build skipped"; return 0
   fi
   docker rm -f "takx-${name}" >/dev/null 2>&1 || true
   start=$(date +%s)
   printf '\n===== %s lane2 %s: build.py %s\n' "$(date -u +%FT%TZ)" "${name}" "$*" >>"${logf}"
   log "${name}: running takx/${recipe}/build.py (log ${logf})"
-  "${run}" -d --name "takx-${name}" --log "${logf}" -- \
+  # shellcheck disable=SC2250 # test_provider_cache.py (RepositoryManifest) asserts this text unbraced
+  "$run" -d --name "takx-${name}" --log "${logf}" -- \
     python3 -B "${repo}/takx/${recipe}/build.py" --output "${out}" "$@" >/dev/null
   rc="$(docker wait "takx-${name}")"
   docker rm "takx-${name}" >/dev/null 2>&1 || true
@@ -200,15 +213,18 @@ provider() {
   for item in "${!outputs[@]}"; do
     [[ -e "${out}/${outputs[${item}]}" ]] || {
       write_status "${name}" failed "${seconds}" "expected output ${outputs[${item}]} is missing"; return 1; }
-    outputs[${item}]="${out}/${outputs[${item}]}"
+    outputs[item]="${out}/${outputs[${item}]}"
   done
-  write_status "${name}" ok "${seconds}" \
+  # shellcheck disable=SC2250 # test_provider_cache.py (RepositoryManifest) asserts this text unbraced
+  write_status "$name" ok "${seconds}" \
     "takx/${recipe}/build.py exit 0; its test_build.py passed ($(tail -n 3 "${vlog}" | tr '\n' ' ' | sed 's/  */ /g')); complete.json sha256 ${sha}${extra_note:+; ${extra_note}}" \
     "${outputs[@]}"
   log "${name}: ok in ${seconds}s"
-  cache_push "${name}"
+  # shellcheck disable=SC2250 # test_provider_cache.py (RepositoryManifest) asserts this text unbraced
+  cache_push "$name"
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_proj() {
   seed_cache proj "${repo}/takx/native-proj/build.py" "${repo}/takx/native-proj/inputs.lock.json"
   provider proj native-proj "TAKX_NATIVE_PROJ_PROOF=${root}/P/proj" \
@@ -216,6 +232,7 @@ stage_proj() {
     --cache "${root}/cache-lane2/proj" --cmake "${cmake}" "${fetch[@]}"
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_geos() {
   seed_cache geos "${repo}/takx/native-geos/build.py" "${repo}/takx/native-geos/inputs.lock.json" \
     "${repo}/takx/native-geos/patch.json"
@@ -224,6 +241,7 @@ stage_geos() {
     --cache "${root}/cache-lane2/geos" "${fetch[@]}"
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_assimp() {
   seed_cache assimp "${repo}/takx/native-assimp/build.py" "${repo}/takx/native-assimp/inputs.lock.json"
   provider assimp native-assimp "TAKX_NATIVE_ASSIMP_PROOF=${root}/P/assimp" \
@@ -231,6 +249,7 @@ stage_assimp() {
     --cache "${root}/cache-lane2/assimp" --jdk-home "${jdk}" --cmake "${cmake}" --ninja "${ninja}" "${fetch[@]}"
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_spatial() {
   need spatial proj geos assimp || return 1
   wait_for spatial sqlcipher "${sqlcipher_wait}" || return 1
@@ -242,6 +261,7 @@ stage_spatial() {
     --sqlcipher-proof "${root}/P/sqlcipher" --zlib-proof "${root}/P/assimp" "${fetch[@]}"
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_crypto() {
   wait_for crypto sqlcipher "${sqlcipher_wait}" || return 1
   seed_cache crypto "${repo}/takx/native-crypto/build.py" "${repo}/takx/native-crypto/inputs.lock.json"
@@ -251,6 +271,7 @@ stage_crypto() {
     --cache "${root}/cache-lane2/crypto" --modern-proof "${root}/P/sqlcipher" "${fetch[@]}"
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_commoncommo() {
   need commoncommo assimp spatial crypto || return 1
   local tools="${root}/cache-commoncommo-tools"

@@ -7,14 +7,17 @@
 # as a user would: Home > TAK Server > Add, then the Connection Details form
 # (TakServerConnectionDetailsPanel). Mouse and keyboard only, through xdotool.
 #
-# Usage: connect-configure.sh [TAKCLIENT] [--ca-from TAKCLIENT] [--name NAME]
-#        [--address HOST] [--no-ok]
+# Usage: connect-configure.sh [TAKCLIENT] [--ca-from TAKCLIENT] [--ca-file FILE]
+#        [--name NAME] [--address HOST] [--no-ok]
 #   TAKCLIENT  directory name under $TAKX_PROTO_ROOT/secrets (default
 #              takx-desktop); its client.p12 is the client certificate
 #   --ca-from  the directory whose truststore.p12 (and password file) is the
 #              CA file; default: the same directory. The negative checks mix
 #              the two: a foreign CA with the real client certificate, and
 #              the real CA with a foreign client certificate
+#   --ca-file  the CA file's name in that directory (default truststore.p12,
+#              the one in the TakClient's data package; truststore-java.p12
+#              is the same CA written by JDK keytool)
 #   --address  dial this name instead of the certificate name (used once, to
 #              find out whether the client checks the server name)
 #   --no-ok    fill the form but do not press OK
@@ -40,13 +43,15 @@ cafrom=""
 label="UDS TAK Server"
 ok=1
 address=""
+cafile=truststore.p12
 while (($#)); do
   case "$1" in
     --ca-from) cafrom="$2"; shift 2;;
+    --ca-file) cafile="$2"; shift 2;;
     --name) label="$2"; shift 2;;
     --address) address="$2"; shift 2;;
     --no-ok) ok=0; shift;;
-    -h|--help) sed -n '5,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help) sed -n '5,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0;;
     -*) echo "connect-configure.sh: unknown option '$1'" >&2; exit 2;;
     *) client="$1"; shift;;
   esac
@@ -55,9 +60,10 @@ done
 source "${root}/server/endpoints.env"
 secrets="${root}/secrets/${client}"
 casecrets="${root}/secrets/${cafrom:-${client}}"
-ca="${casecrets}/truststore.p12"
+ca="${casecrets}/${cafile}"
 [[ -s "${secrets}/client.p12" && -s "${ca}" && -s "${secrets}/password.txt" && -s "${casecrets}/password.txt" ]] || { echo "connect-configure.sh: incomplete identity ${secrets}" >&2; exit 1; }
 
+# shellcheck disable=SC2154 # TAK_STREAM_PORT is set by ${root}/server/endpoints.env (written by server/45-hosts.sh), sourced above
 docker exec -i -e DISPLAY=:99 -e LABEL="${label}" -e ADDRESS="${address:-${TAK_CERT_NAME}}" -e PORT="${TAK_STREAM_PORT}" \
   -e CA="${ca}" -e CERT="${secrets}/client.p12" -e CA_SECRET_FILE="${casecrets}/password.txt" -e SECRET_FILE="${secrets}/password.txt" -e OK="${ok}" "${name}" bash -s <<'DRIVE'
 set -euo pipefail

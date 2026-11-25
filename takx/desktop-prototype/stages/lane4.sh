@@ -79,8 +79,10 @@ fetch="${TAKX_LANE4_FETCH:-1}"
 
 mkdir -p "${root}"/{P,failed,logs,status,cache-lane4}
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 log() { printf '%s lane4: %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 write_status() { # stage status seconds notes outputs...
   local stage="$1" status="$2" seconds="$3" notes="$4"; shift 4
   python3 -I - "${root}/status/${stage}.json" "${stage}" "${status}" "${seconds}" "${notes}" "$@" <<'PY'
@@ -95,6 +97,7 @@ os.replace(tmp, path)
 PY
 }
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 status_of() { # stage -> ok|failed|missing
   python3 -I - "${root}/status/$1.json" <<'PY' 2>/dev/null || echo missing
 import json, sys
@@ -102,6 +105,7 @@ print(json.load(open(sys.argv[1]))['status'])
 PY
 }
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 set_aside() { # stage: move an existing output dir to failed/<stage>-<n>
   local name="$1" n=1
   [[ -e "${root}/P/${name}" ]] || return 0
@@ -110,6 +114,7 @@ set_aside() { # stage: move an existing output dir to failed/<stage>-<n>
   log "moved previous P/${name} to failed/${name}-${n}"
 }
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 need() { # stage dependency marker-relative-to-P/dependency
   local stage="$1" dep="$2" marker="$3"
   if [[ "$(status_of "${dep}")" != ok || ! -s "${root}/P/${dep}/${marker}" ]]; then
@@ -125,6 +130,7 @@ need() { # stage dependency marker-relative-to-P/dependency
 # stage, and TAKX_PROTO_CACHE=off skips both.
 cache="${repo}/takx/desktop-prototype/provider_cache.py"
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 cache_restored() { # stage marker: 0 when the cache installed a verified P/<stage>
   [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 1
   python3 -I "${cache}" restore "$1" >>"${root}/logs/provider-cache.log" 2>&1 || return 1
@@ -132,6 +138,7 @@ cache_restored() { # stage marker: 0 when the cache installed a verified P/<stag
   set_aside "$1"; return 1
 }
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 cache_push() { # stage: best effort
   [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 0
   python3 -I "${cache}" push "$1" >>"${root}/logs/provider-cache.log" 2>&1 \
@@ -143,6 +150,7 @@ cache_push() { # stage: best effort
 # Runs the command detached in the toolchain image, then the recipe's own
 # test*.py. The stage is ok only if the command exits 0, the marker and every
 # listed output exist and the tests pass.
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 stage() {
   local name="$1" recipe="$2" marker="$3" verifyenv="$4" outs="$5"; shift 6
   local out="${root}/P/${name}" logf="${root}/logs/${name}.log" vlog="${root}/logs/${name}-verify.log"
@@ -152,15 +160,18 @@ stage() {
   if [[ "$(status_of "${name}")" == ok && -s "${out}/${marker}" ]]; then
     log "${name} already ok, skipping"; return 0
   fi
-  set_aside "${name}"
-  if cache_restored "${name}" "${marker}"; then
+  # shellcheck disable=SC2250 # test_provider_cache.py (RepositoryManifest) asserts this text unbraced
+  set_aside "$name"
+  # shellcheck disable=SC2250 # test_provider_cache.py (RepositoryManifest) asserts this text unbraced
+  if cache_restored "$name" "${marker}"; then
     log "${name} restored from the provider cache, build skipped"; return 0
   fi
   docker rm -f "takx-${name}" >/dev/null 2>&1 || true
   start=$(date +%s)
   printf '\n===== %s lane4 %s: %s\n' "$(date -u +%FT%TZ)" "${name}" "$*" >>"${logf}"
   log "${name}: running takx/${recipe} (log ${logf})"
-  "${run}" -d --name "takx-${name}" --log "${logf}" "${envargs[@]}" -- "$@" >/dev/null
+  # shellcheck disable=SC2250 # test_provider_cache.py (RepositoryManifest) asserts this text unbraced
+  "$run" -d --name "takx-${name}" --log "${logf}" "${envargs[@]}" -- "$@" >/dev/null
   rc="$(docker wait "takx-${name}")"
   docker rm "takx-${name}" >/dev/null 2>&1 || true
   seconds=$(($(date +%s) - start))
@@ -173,7 +184,7 @@ stage() {
   for item in "${!outputs[@]}"; do
     [[ -e "${out}/${outputs[${item}]}" ]] || {
       write_status "${name}" failed "${seconds}" "expected output ${outputs[${item}]} is missing"; return 1; }
-    outputs[${item}]="${out}/${outputs[${item}]}"
+    outputs[item]="${out}/${outputs[${item}]}"
   done
   for item in ${verifyenv}; do venv+=(-e "${item}"); done
   printf '\n===== %s lane4 %s: unittest test*.py %s\n' "$(date -u +%FT%TZ)" "${name}" "${verifyenv}" >>"${vlog}"
@@ -186,15 +197,18 @@ stage() {
     return 1
   fi
   seconds=$(($(date +%s) - start))
-  write_status "${name}" ok "${seconds}" \
+  # shellcheck disable=SC2250 # test_provider_cache.py (RepositoryManifest) asserts this text unbraced
+  write_status "$name" ok "${seconds}" \
     "takx/${recipe} exit 0; its tests (test*.py) passed ($(tail -n 3 "${vlog}" | tr '\n' ' ' | sed 's/  */ /g')); ${marker} sha256 $(sha256sum "${out}/${marker}" | cut -d' ' -f1); compile-only, no native library loaded${extra_note:+; ${extra_note}}" \
     "${outputs[@]}"
   log "${name}: ok in ${seconds}s"
-  cache_push "${name}"
+  # shellcheck disable=SC2250 # test_provider_cache.py (RepositoryManifest) asserts this text unbraced
+  cache_push "$name"
 }
 
 javapath="PATH=${jdk}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_gis_java() {
   # gis-java is configured by environment and builds in place; a directory
   # left with .building by an interrupted run is refused by the recipe, so it
@@ -209,6 +223,7 @@ stage_gis_java() {
     python3 -B "${repo}/takx/gis-java/build.py"
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_kernel_java() {
   need kernel-java gis-java build-state.json || return 1
   # The recipe may add downloaded JARs to --classpath-dir, so it gets its own
@@ -229,6 +244,7 @@ stage_kernel_java() {
     --output "${root}/P/kernel-java" --java-home "${jdk}" "${flags[@]}" --jni-headers
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_gdal_jni() {
   # lane3.sh owns the native-gdal-jni invocation (flags per the native-kernel
   # map, step 16); this lane only supplies the gis-java build it waits for.
@@ -236,6 +252,7 @@ stage_gdal_jni() {
   TAKX_LANE3_GIS_BUILD="${root}/P/gis-java" TAKX_LANE3_WAIT_S=0 "${here}/lane3.sh" gdal-jni
 }
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 worldwind() { # stage-name jar-name [--interop]
   local name="$1" jar="$2"; shift 2
   need "${name}" gis-java build-state.json || return 1
@@ -246,16 +263,19 @@ worldwind() { # stage-name jar-name [--interop]
     --output "${root}/P/${name}"
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_worldwind_java() {
   local extra_note="NASA WorldWindJava v2.2.1 + standard-gdal.patch; not the private 2.2.1-TAKX-4 artifact; tests are the recipe's offline guards"
   worldwind worldwind-java uds-takserver-worldwind-java.jar
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_worldwind_interop() {
   local extra_note="NASA WorldWindJava v2.2.1 + standard-gdal.patch + project-interop.patch (--interop); not the private 2.2.1-TAKX-4 artifact; tests are the recipe's offline guards"
   worldwind worldwind-interop uds-takserver-worldwind-java-interop.jar --interop
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_consumers57() {
   local extra_note="staged from official TAKX 5.7 0b59a9bb; test_stage.py reran exact staging with TAKX_SOURCE_DIR"
   stage consumers57 worldwind-consumers staging-receipt.json "TAKX_SOURCE_DIR=${root}/src/takx57" \
@@ -264,6 +284,7 @@ stage_consumers57() {
     --output "${root}/P/consumers57"
 }
 
+# shellcheck disable=SC2329 # called only from the stage_* functions, which the dispatch loop at the end of this file invokes by name
 ui() { # stage-name profile outputs
   local name="$1" profile="$2" outs="$3"
   stage "${name}" ui-java receipt.json "" "receipt.json,${outs}" -- "${javapath}" -- \
@@ -272,16 +293,19 @@ ui() { # stage-name profile outputs
     --output "${root}/P/${name}" --failure-report "${root}/logs/${name}-failure-$(date +%s).json"
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_ui_original() {
   local extra_note="source-built candidates for the private UI libraries (DockingFrames, ColorChooser 1.5, toast 1.0.3, svgSalamander v1.1.1); tests are the recipe's offline guards"
   ui ui-original original uds-takserver-ui-docking-core.jar,uds-takserver-ui-docking-common.jar,uds-takserver-ui-colorchooser-author-1.5.jar,uds-takserver-ui-toast-1.0.3.jar,uds-takserver-ui-salamander-tag-v1.1.1.jar
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_ui_wizard_reference() {
   local extra_note="unauthenticated Wizard reference copy, source-built; tests are the recipe's offline guards"
   ui ui-wizard-reference wizard-reference uds-takserver-ui-wizard-reference.jar
 }
 
+# shellcheck disable=SC2329 # invoked by name: the dispatch loop at the end of this file calls "stage_<target>"
 stage_java_classpath() {
   # Maps every classpath and processor-path entry of the client-compiler lock
   # to a concrete file or directory under the work root. It hashes what is

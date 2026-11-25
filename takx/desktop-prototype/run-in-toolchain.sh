@@ -171,7 +171,7 @@ args+=("${image}")
 if [[ -n "${log}" ]]; then
   case "${log}" in "${root}"/*) ;; *) echo "run-in-toolchain.sh: --log must be under ${root}" >&2; exit 2;; esac
   # A '..' component would name a file outside the work root after all.
-  case "/${log#"${root}"/}/" in */../*) echo "run-in-toolchain.sh: --log must be under ${root}" >&2; exit 2;; esac
+  case "/${log#"${root}"/}/" in */../*) echo "run-in-toolchain.sh: --log must be under ${root}" >&2; exit 2;; *) ;; esac
   mkdir -p "$(dirname "${log}")"
   # The command runs as given; only its output is redirected, and the exit
   # status of the container is the exit status of the command.

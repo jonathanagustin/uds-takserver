@@ -57,6 +57,7 @@ launch() { # attempt [takx arguments...]
   for pair in ${TAKX_BOOT_ENV:-}; do envs+=(-e "${pair}"); done
   mkdir -p "${root}/connect/${attempt}"
   echo "${attempt}" >"${root}/connect/current"
+  # shellcheck disable=SC2154 # TAK_CERT_NAME is set by ${root}/server/endpoints.env (written by server/45-hosts.sh), sourced above
   "${run}" --runtime -d --name "${name}" --docker-arg --shm-size=1g \
     --docker-arg "--add-host=${TAK_CERT_NAME}:${TAKX_CONNECT_SERVER_IP:-${PASSTHROUGH_GATEWAY_IP}}" "${envs[@]}" \
     -e "EXTRA_JVM_OPTS=${TAKX_BOOT_JVM_OPTS:-}" -- \

@@ -27,6 +27,7 @@ mapfile -t vmoptions < <(grep -v '^[[:space:]]*$' template-64bit.vmoptions)
 # classes through the system class loader.
 # shellcheck disable=SC1091
 source ./prototype-launch.env
+# shellcheck disable=SC2154 # KERNEL_STOCK_LOADER_SUBDIR is set by ./prototype-launch.env (written by assemble.py), sourced above
 library_path="${PWD}/native/linux64:${rundir}/tmp/${KERNEL_STOCK_LOADER_SUBDIR}"
 
 # shellcheck disable=SC2086

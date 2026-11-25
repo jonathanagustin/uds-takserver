@@ -137,6 +137,7 @@ do_record() {
   "${cloudtak}" view -20 -20 3.2 >/dev/null
 
   # Two silent real clients for the whole take.
+  # shellcheck disable=SC2154 # PASSTHROUGH_GATEWAY_IP is set by ${root}/server/endpoints.env (written by server/45-hosts.sh), sourced above
   python3 -I "${server}/connect_peer.py" "${root}/secrets/takx-outsider" --connect "${PASSTHROUGH_GATEWAY_IP}" \
     --listen 150 --out "${dir}/outsider.json" >/dev/null 2>"${dir}/outsider.err" &
   local outsider=$!
