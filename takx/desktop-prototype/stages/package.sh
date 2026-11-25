@@ -375,20 +375,45 @@ do_inspect() {
   write_status inspect ok "definition, images, SBOM and attachments read back from $(basename "${archive}")"
 }
 
-upstream_refs() {
-  uds zarf tools yq '.packages[] | select(.repository) | .repository + ":" + .ref' "${proto}/bundle/uds-bundle.yaml"
-}
-
+# Resolve every upstream package of the bundle without its layers: the
+# definition only (tens of kilobytes), anonymously, with the signature checked
+# against the identity the bundle itself names. Then compare what the bundle
+# asks of each package (optional components, the components and charts it
+# overrides) with what the package has.
 do_upstream() {
-  local ref rc=0
+  local bundle="${proto}/bundle/uds-bundle.yaml" rc=0 count index name repository ref regexp issuer file wanted have
+  count="$(uds zarf tools yq '.packages | length' "${bundle}")"
   {
-    while IFS= read -r ref; do
-      echo "== uds zarf package inspect definition oci://${ref} (anonymous, definition only)"
-      uds zarf package inspect definition "oci://${ref}" --no-color --skip-signature-validation \
-        >"${work}/upstream-$(basename "${ref%%:*}").yaml" || rc=1
-      uds zarf tools yq '"name " + .metadata.name + ", version " + .metadata.version + ", components " + ([.components[].name] | join(" "))' \
-        "${work}/upstream-$(basename "${ref%%:*}").yaml" || rc=1
-    done < <(upstream_refs)
+    for ((index = 0; index < count; index++)); do
+      repository="$(uds zarf tools yq ".packages[${index}].repository // \"\"" "${bundle}")"
+      [[ -n "${repository}" ]] || continue
+      name="$(uds zarf tools yq ".packages[${index}].name" "${bundle}")"
+      ref="$(uds zarf tools yq ".packages[${index}].ref" "${bundle}")"
+      regexp="$(uds zarf tools yq ".packages[${index}].keylessVerification.certificateIdentityRegexp" "${bundle}")"
+      issuer="$(uds zarf tools yq ".packages[${index}].keylessVerification.certificateOIDCIssuer" "${bundle}")"
+      file="${work}/upstream-${name}.yaml"
+      echo "== ${name}: uds zarf package inspect definition oci://${repository}:${ref} --verify=always (anonymous, definition only)"
+      if ! HOME="${work}/home-upstream" DOCKER_CONFIG="${work}/home-upstream/no-docker-config" \
+        "${UDS}" zarf package inspect definition "oci://${repository}:${ref}" --no-color --verify=always \
+        --certificate-identity-regexp "${regexp}" --certificate-oidc-issuer "${issuer}" \
+        >"${file}" 2>"${file}.err"; then
+        rc=1
+      fi
+      grep -E 'pulling package|Verified OK|ERR' "${file}.err" | sed -e 's/^[0-9: -]* //' || true
+      grep -q '^Verified OK' "${file}.err" || { echo "signature not verified"; rc=1; }
+      uds zarf tools yq '"package " + .metadata.name + " " + .metadata.version + " (" + .metadata.architecture + "): components " + ([.components[].name] | join(" "))' "${file}" || rc=1
+      while IFS= read -r wanted; do
+        have="$(COMPONENT="${wanted}" uds zarf tools yq '[.components[] | select(.name == strenv(COMPONENT))] | length' "${file}")"
+        echo "  optional component ${wanted}: $([[ "${have}" == 1 ]] && echo present || echo MISSING)"
+        [[ "${have}" == 1 ]] || rc=1
+      done < <(uds zarf tools yq ".packages[${index}].optionalComponents[]" "${bundle}")
+      while IFS= read -r wanted; do
+        have="$(COMPONENT="${wanted%%/*}" CHART="${wanted##*/}" uds zarf tools yq \
+          '[.components[] | select(.name == strenv(COMPONENT)) | .charts[] | select(.name == strenv(CHART))] | length' "${file}")"
+        echo "  override ${wanted}: $([[ "${have}" == 1 ]] && echo "component and chart present" || echo MISSING)"
+        [[ "${have}" == 1 ]] || rc=1
+      done < <(uds zarf tools yq ".packages[${index}].overrides // {} | to_entries[] | .key as \$component | .value | keys[] | \$component + \"/\" + ." "${bundle}")
+    done
     echo "upstream exit ${rc}"
   } 2>&1 | tee "${evidence}/upstream.txt"
   [[ "$(tail -1 "${evidence}/upstream.txt")" == "upstream exit 0" ]]

@@ -1259,7 +1259,14 @@ def main_built(inspect_dir, tag):
     sbom = []
     for folder, _dirs, names in os.walk(os.path.join(inspect_dir, "sbom")):
         sbom += [os.path.join(folder, name) for name in names]
+    kinds = {}
+    for path in sbom:
+        if path.endswith(".json"):
+            with open(path, encoding="utf-8") as stream:
+                for artifact in json.load(stream).get("artifacts", []):
+                    kinds[artifact.get("type")] = kinds.get(artifact.get("type"), 0) + 1
     checks = {
+        "SBOM lists Debian packages and Java archives": kinds.get("deb", 0) > 100 and kinds.get("java-archive", 0) > 100,
         "tag ends in the tree digest of SOURCES.json": tag.endswith("-" + digest[:12]),
         "SOURCES.json says publishable false": sources.get("publishable") is False,
         "SOURCES.json maps every tree file": sources["counts"]["files"] == sources["tree"]["files"] == len(sources["files"]),
@@ -1274,7 +1281,7 @@ def main_built(inspect_dir, tag):
     for label, ok in checks.items():
         print(f"{'ok  ' if ok else 'FAIL'} {label}")
     print(f"attachments {sorted(found)}; licence files {len(licences)}; patch and lock files {len(patches)}; "
-          f"Debian package rows {packages}; SBOM files {len(sbom)}; tree {digest}; "
+          f"Debian package rows {packages}; SBOM files {len(sbom)}, artifacts {dict(sorted(kinds.items()))}; tree {digest}; "
           f"publishable blockers {len(sources.get('publishable_blockers', []))}")
     return 0 if all(checks.values()) else 1
 

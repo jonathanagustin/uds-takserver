@@ -41,6 +41,9 @@ packages:
   - name: init
     repository: ghcr.io/zarf-dev/packages/init
     ref: v1.0.1
+    keylessVerification:
+      certificateIdentityRegexp: "^https://github\\.com/zarf-dev/zarf/\\.github/workflows/release\\.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$"
+      certificateOIDCIssuer: https://token.actions.githubusercontent.com
 
   # The same block as ../../../bundle/full/uds-bundle.yaml. The passthrough
   # gateway is what the desktop dials: TAK streaming on 8089.
