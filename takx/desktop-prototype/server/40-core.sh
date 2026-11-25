@@ -27,7 +27,7 @@ spec = json.load(sys.stdin)["spec"]["template"]["spec"]
 index = [v["name"] for v in spec["volumes"]].index("cni-host-procfs")
 print(json.dumps([{"op": "replace", "path": "/spec/template/spec/volumes/%d/hostPath/path" % index, "value": sys.argv[1]}]))
 ' "${HOSTPROC}" > "${WORK}/cni-patch.json"
-      kubectl -n istio-system patch ds istio-cni-node --type=json --patch-file "${WORK}/cni-patch.json"
+      kubectl -n istio-system patch ds istio-cni-node --type=json --patch-file "${WORK}/cni-patch.json" || true
     fi
     sleep 5
   done

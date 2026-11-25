@@ -43,16 +43,22 @@ for url in "https://sso.${DOMAIN}/realms/uds/.well-known/openid-configuration" "
 done
 
 if [ -s "${dir}/client.pem" ]; then
-  note "mutual TLS as ${identity}: TAK CA as the only trust root, hostname checked"
-  if openssl s_client -connect "${PASSTHROUGH_GATEWAY_IP}:${TAK_STREAM_PORT}" -servername "${TAK_STREAM_HOST}" \
-      -CAfile "${dir}/ca.pem" -verify_return_error -verify_hostname "${TAK_STREAM_HOST}" \
+  note "mutual TLS as ${identity}: TAK CA as the only trust root, server name ${TAK_CERT_NAME} checked"
+  if openssl s_client -connect "${PASSTHROUGH_GATEWAY_IP}:${TAK_STREAM_PORT}" \
+      -CAfile "${dir}/ca.pem" -verify_return_error -verify_hostname "${TAK_CERT_NAME}" \
       -cert "${dir}/client.pem" -key "${dir}/client.key" </dev/null 2>&1 |
       grep -E 'Verification: OK|Verified peername|Verify return code|^New, ' ; then :; else fail=1; fi
-  note "client-certificate API as ${identity}"
-  curl -sS --cacert "${dir}/ca.pem" --cert "${dir}/client.pem" --key "${dir}/client.key" \
-    -w '\n%{http_code} %{remote_ip}\n' "https://${TAK_API_HOST}/Marti/api/version" || fail=1
+  note "the gateway host name is not in the certificate: a name-checking client must dial ${TAK_CERT_NAME}"
+  if openssl s_client -connect "${PASSTHROUGH_GATEWAY_IP}:${TAK_STREAM_PORT}" \
+      -CAfile "${dir}/ca.pem" -verify_return_error -verify_hostname "${TAK_STREAM_HOST}" \
+      -cert "${dir}/client.pem" -key "${dir}/client.key" </dev/null 2>&1 | grep -E 'Verify return code'; then :; fi
+  note "client-certificate API as ${identity}: SNI ${TAK_API_HOST} for the route, certificate name ${TAK_CERT_NAME} checked"
+  printf 'GET /Marti/api/version HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n' "${TAK_API_HOST}" |
+    openssl s_client -quiet -connect "${PASSTHROUGH_GATEWAY_IP}:${TAK_API_PORT}" -servername "${TAK_API_HOST}" \
+      -CAfile "${dir}/ca.pem" -verify_return_error -verify_hostname "${TAK_CERT_NAME}" \
+      -cert "${dir}/client.pem" -key "${dir}/client.key" 2>/dev/null | grep -v -i '^set-cookie' | tr -d '\r' | sed -n '1p;$p'
   note "wrong trust root is rejected (system roots do not include the TAK CA)"
-  if openssl s_client -connect "${PASSTHROUGH_GATEWAY_IP}:${TAK_STREAM_PORT}" -servername "${TAK_STREAM_HOST}" \
+  if openssl s_client -connect "${PASSTHROUGH_GATEWAY_IP}:${TAK_STREAM_PORT}" \
       -verify_return_error </dev/null >/dev/null 2>&1; then
     echo "FAIL: handshake succeeded without the TAK CA"; fail=1
   else
@@ -60,11 +66,11 @@ if [ -s "${dir}/client.pem" ]; then
   fi
 
   note "from a ${RUNTIME_IMAGE} container on the default Docker bridge, with --add-host"
-  docker run --rm --add-host "${TAK_STREAM_HOST}:${PASSTHROUGH_GATEWAY_IP}" \
+  docker run --rm --add-host "${TAK_CERT_NAME}:${PASSTHROUGH_GATEWAY_IP}" \
     -v "${dir}/ca.pem:/ca.pem:ro" "${RUNTIME_IMAGE}" bash -c "
-      getent hosts ${TAK_STREAM_HOST}
-      openssl s_client -connect ${TAK_STREAM_HOST}:${TAK_STREAM_PORT} -servername ${TAK_STREAM_HOST} \
-        -CAfile /ca.pem -verify_hostname ${TAK_STREAM_HOST} </dev/null 2>&1 |
+      getent hosts ${TAK_CERT_NAME}
+      openssl s_client -connect ${TAK_CERT_NAME}:${TAK_STREAM_PORT} -servername ${TAK_CERT_NAME} \
+        -CAfile /ca.pem -verify_return_error -verify_hostname ${TAK_CERT_NAME} </dev/null 2>&1 |
         grep -E 'Verification|Verified peername|Verify return code|subject=' | head -4" || fail=1
 fi
 

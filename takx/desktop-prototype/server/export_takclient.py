@@ -12,6 +12,10 @@ Files written (mode 600):
   truststore.p12   TAK certificate authority, the "CA File"
   password.txt     protects both PKCS#12 files
   package.zip      the device data package (manifest, server.pref, both .p12)
+  takx-package.zip the same package with the connect string changed from
+                   takserver-stream.<domain>:8089:ssl to takserver:8089:ssl,
+                   the only name in the TAK server certificate, for a client
+                   that checks the server name
   client.pem, client.key, ca.pem   PEM forms for openssl and curl checks
   connection.json  endpoint facts and public fingerprints, no secrets
 """
@@ -48,6 +52,18 @@ def main():
         entries = package.namelist()
         write(out / "client.p12", package.read(f"certs/{name}.p12"))
         write(out / "truststore.p12", package.read("certs/truststore.p12"))
+        gateway_name = f"takserver-stream.{domain}:8089:ssl".encode()
+        pref = package.read("certs/server.pref")
+        if pref.count(gateway_name) != 1:
+            raise SystemExit("server.pref does not hold exactly one expected connect string")
+        variant = io.BytesIO()
+        with zipfile.ZipFile(variant, "w", zipfile.ZIP_STORED) as target:
+            for entry in entries:
+                content = package.read(entry)
+                if entry == "certs/server.pref":
+                    content = pref.replace(gateway_name, b"takserver:8089:ssl")
+                target.writestr(zipfile.ZipInfo(entry, date_time=(1980, 1, 1, 0, 0, 0)), content)
+        write(out / "takx-package.zip", variant.getvalue())
 
     def x509(pem, *fields):
         return run("openssl", "x509", "-noout", *fields, data=pem).decode().strip()
@@ -56,8 +72,11 @@ def main():
         "takclient": name,
         "callsign": name,
         "group": group,
-        "stream": {"host": f"takserver-stream.{domain}", "port": 8089, "protocol": "ssl"},
-        "api": {"host": f"takserver-api.{domain}", "port": 443},
+        # certificate_name is the only DNS name in the TAK server certificate.
+        "stream": {"host": f"takserver-stream.{domain}", "port": 8089, "protocol": "ssl",
+                   "certificate_name": "takserver"},
+        "api": {"host": f"takserver-api.{domain}", "port": 443, "sni": f"takserver-api.{domain}",
+                "certificate_name": "takserver"},
         "client_certificate": {
             "subject": x509(data["client.pem"], "-subject"),
             "issuer": x509(data["client.pem"], "-issuer"),

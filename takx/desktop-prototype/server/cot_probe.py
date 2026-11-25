@@ -4,8 +4,9 @@
 """A minimal TAK streaming client for checks against the live server.
 
 Connects to the streaming port with one exported TakClient identity, mutual
-TLS, the TAK certificate authority as the only trust root and hostname
-verification on. Sends one clearly synthetic position report for its own
+TLS, the TAK certificate authority as the only trust root and server name
+verification on. The name checked is the certificate name recorded in
+connection.json ("takserver"); --connect gives the address to dial. Sends one clearly synthetic position report for its own
 callsign every few seconds, and reports which events it received. It speaks
 the XML form of Cursor on Target and does not negotiate the protobuf form.
 
@@ -44,13 +45,14 @@ def main():
     parser.add_argument("--listen", type=float, default=20.0)
     parser.add_argument("--lat", type=float, default=0.5)
     parser.add_argument("--lon", type=float, default=0.5)
-    parser.add_argument("--connect", help="address to dial instead of resolving the host name")
+    parser.add_argument("--connect", help="address to dial instead of resolving the certificate name")
+    parser.add_argument("--suffix", default="", help="appended to the uid, to tell runs apart")
     args = parser.parse_args()
 
     facts = json.loads((args.secret_dir / "connection.json").read_text())
-    host, port = facts["stream"]["host"], facts["stream"]["port"]
+    host, port = facts["stream"]["certificate_name"], facts["stream"]["port"]
     callsign = facts["callsign"]
-    uid = f"probe-{callsign}"
+    uid = f"probe-{callsign}{args.suffix}"
 
     context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=str(args.secret_dir / "ca.pem"))
     context.check_hostname = True

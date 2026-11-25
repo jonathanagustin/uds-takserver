@@ -45,5 +45,20 @@ for pair in "$@"; do
   mkdir -p "${out}"
   chmod 700 "${out}"
   python3 -I "${here}/export_takclient.py" "${name}" "${group}" "${out}" "${DOMAIN}"
+  # The package's truststore.p12 carries the CA without the attribute the JDK
+  # needs to treat a certificate as trusted: JDK 17 keytool lists 0 entries
+  # in it, OpenSSL reads the CA. truststore-java.p12 is the same CA, written
+  # by the runtime image's keytool with the same password, for Java code.
+  rm -f "${out}/truststore-java.p12"
+  docker run --rm -v "${out}:/s" "${RUNTIME_IMAGE:-takx-desktop-proto:runtime}" \
+    keytool -importcert -noprompt -trustcacerts -alias tak-ca -file /s/ca.pem \
+    -keystore /s/truststore-java.p12 -storetype PKCS12 -storepass:file /s/password.txt >/dev/null 2>&1
+  chmod 600 "${out}/truststore-java.p12"
+  for store in truststore.p12 truststore-java.p12; do
+    count="$(docker run --rm -v "${out}:/s:ro" "${RUNTIME_IMAGE:-takx-desktop-proto:runtime}" \
+      keytool -list -storetype PKCS12 -keystore "/s/${store}" -storepass:file /s/password.txt 2>/dev/null |
+      sed -n 's/^Your keystore contains \([0-9]*\) entr.*/\1/p')"
+    echo "${out}/${store}: JDK lists ${count:-?} entries"
+  done
 done
 write_status server-takclients ok "TakClients $* Ready; material exported under ${SECRETS}/<name>/ (mode 600)"

@@ -7,6 +7,9 @@
 # host needs /etc/hosts entries. k3d publishes the tenant gateway on host
 # port 443; here each gateway has its own MetalLB address instead.
 #
+# The TAK server certificate names only "takserver" (see README.md), so that
+# bare name also points at the passthrough gateway.
+#
 # Writes one marked block in /etc/hosts and ${SERVER_STATE}/endpoints.env,
 # which later stages source. Run it again when a gateway address changes.
 set -euo pipefail
@@ -28,7 +31,7 @@ cat >> "${tmp}" <<HOSTS
 ${begin}
 ${admin} keycloak.admin.${DOMAIN}
 ${tenant} sso.${DOMAIN} takserver.${DOMAIN} map.${DOMAIN}
-${passthrough} takserver-stream.${DOMAIN} takserver-api.${DOMAIN}
+${passthrough} takserver-stream.${DOMAIN} takserver-api.${DOMAIN} takserver
 ${end}
 HOSTS
 cat "${tmp}" > /etc/hosts
@@ -42,6 +45,9 @@ TENANT_GATEWAY_IP=${tenant}
 PASSTHROUGH_GATEWAY_IP=${passthrough}
 TAK_STREAM_HOST=takserver-stream.${DOMAIN}
 TAK_STREAM_PORT=8089
+# The only DNS name in the TAK server certificate (CN and subjectAltName).
+# A client that checks the server name must dial this name.
+TAK_CERT_NAME=takserver
 TAK_API_HOST=takserver-api.${DOMAIN}
 TAK_API_PORT=443
 TAK_ENROLL_HOST=takserver.${DOMAIN}
