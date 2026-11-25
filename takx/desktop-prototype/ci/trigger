@@ -13,5 +13,7 @@
 # run 3: Kernel and client from the provider cache only (providers=cached); the
 #        logs of the Kernel controls are uploaded, because the ones that load
 #        the native engine failed on amd64 in run 2; arm64 client lock tracked.
-arches=arm64,amd64
+# run 4: amd64 only, from the cache, with diagnostics for the amd64 Kernel
+#        control failure "real GDAL JNI unavailable" (ci/ARCH-CACHE-NOTE.md).
+arches=amd64
 providers=cached
