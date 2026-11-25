@@ -1,0 +1,81 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# yaml-language-server: $schema=https://raw.githubusercontent.com/zarf-dev/zarf/v1.0.1/src/pkg/schema/zarf-v1beta1-package-schema.json
+#
+# Optional package: the TAKX 5.7 desktop prototype in a browser, behind the
+# UDS tenant gateway and Keycloak, with a TAK identity from a TakClient. It
+# is separate from the TAK Server package and nothing in the server build or
+# its CI uses it. Deploy it after UDS Core and the TAK Server package.
+#
+# What it carries is TAKX 5.7 (0b59a9bb) built from public sources on Kernel
+# 8.30.5 + project patches, CommonCommo 1.17.2 patched and the NASA WorldWind
+# interop build. It is not the official TAKX 5.7 distribution, and the image
+# is not cleared for distribution: see the SOURCES attachment, "publishable".
+#
+# The package is composed from four component files (import.local), so
+# another package can import any of them. Names, descriptions, selection and
+# the package values stay here. `takx-build-tag` is replaced by
+# create-package.sh; the directory is not meant to be built as it stands:
+#
+#   ./takx/desktop-prototype/zarf/create-package.sh TAG --confirm
+#   uds zarf package deploy zarf-package-takx-desktop-amd64-TAG.tar.zst --confirm
+#
+# README.md has the build, the checks and what a deploy still has to prove.
+apiVersion: zarf.dev/v1beta1
+kind: ZarfPackageConfig
+metadata:
+  name: takx-desktop
+  description: TAKX 5.7 (0b59a9bb) desktop prototype in a browser, a public-source build on Kernel 8.30.5 + project patches and CommonCommo 1.17.2 patched; not the official TAKX distribution (amd64 only)
+  version: "takx-build-tag"
+  architecture: amd64
+
+# Package values. `desktop` is passed to the chart as it is, so every chart
+# value can be set at deploy with --set-values desktop.<key>=<value>.
+values:
+  files: [values.yaml]
+  schema: values.schema.json
+
+# Shipped in the package. Read them with:
+#   uds zarf package inspect documentation <package>
+# All but README are staged by create-package.sh. It copies them out of the
+# image (/usr/share/takx-desktop, written by ../image/gen_notices.py), so the
+# package and its image carry the same notices: the licence texts, the source
+# manifest with revisions and archive digests, the patches and lock files,
+# and the Debian package list with source versions.
+attachments:
+  README: README.md
+  NOTICE: NOTICE.md
+  SOURCES: SOURCES.json
+  LICENSES: LICENSES.tar
+  PATCHES: PATCHES.tar
+  DEBIAN-PACKAGES: DEBIAN-PACKAGES.tsv
+
+components:
+  - name: takx-desktop-image
+    description: The TAKX 5.7 desktop prototype image (X server, window manager, JVM, noVNC bridge)
+    selector:
+      architecture: amd64
+    import:
+      local:
+        - path: components/image.yaml
+
+  - name: takx-desktop-takclient
+    optional: true
+    description: A TakClient that issues the desktop's TAK client certificate. Needs the TAK Server package. Skip it to use an existing TakClient named by the identity.name value.
+    import:
+      local:
+        - path: components/takclient.yaml
+
+  - name: takx-desktop-identity
+    optional: true
+    description: Copy package.zip and password of the TakClient device Secret into the desktop namespace. Without it the desktop starts with no TAK identity.
+    import:
+      local:
+        - path: components/identity.yaml
+
+  - name: takx-desktop
+    description: The desktop pod, its Service and the UDS Package (tenant gateway, Keycloak sign-in, network policy)
+    import:
+      local:
+        - path: components/desktop.yaml

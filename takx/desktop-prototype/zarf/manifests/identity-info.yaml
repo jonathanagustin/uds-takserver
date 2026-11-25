@@ -1,0 +1,18 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Which TakClient the desktop's identity Secret was copied from. Names only:
+# no certificate, key or password. Rendered by Zarf (enableTemplating).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: takx-desktop-identity-info
+  namespace: takx-desktop
+  labels:
+    app.kubernetes.io/part-of: takx-desktop
+data:
+  takclient: '{{ .Values.identity.name }}'
+  takclientNamespace: takclients
+  callsign: '{{ .Values.identity.callsign }}'
+  group: '{{ .Values.identity.group }}'
+  secret: takx-desktop-identity

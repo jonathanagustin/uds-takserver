@@ -1,0 +1,26 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Package values, checked against values.schema.json. Set them at deploy
+# with `uds zarf package deploy ... --set-values <path>=<value>`.
+
+global:
+  # Domain suffix of the UDS gateways. Mapped to the chart value `domain`.
+  domain: uds.dev
+
+# The TAK identity of the desktop. Used by the components
+# takx-desktop-takclient and takx-desktop-identity; without them these
+# values do nothing.
+identity:
+  # Name of the TakClient in namespace takclients, and of its device Secret.
+  # To use a TakClient that already exists, set its name here and do not
+  # select takx-desktop-takclient.
+  name: takx-browser
+  # Certificate common name and TAK user name. 4 to 63 characters.
+  callsign: takx-browser
+  # TAK group of the identity, without slashes.
+  group: Operators
+
+# Values of the takx-desktop chart, passed through as they are. See
+# ../chart/values.yaml for the keys. `desktop.image` is ignored.
+desktop: {}

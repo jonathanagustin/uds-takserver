@@ -9,7 +9,7 @@
 #             1024x700 is mapped whose title is "TAKX 5.7 ... : <project> ...":
 #             the real main window with a project open, not the X server
 #             alone and not the bare frame TAKX shows while a start-up error
-#             dialog is up (seen in evidence/try1). Startup probe.
+#             dialog is up. Startup probe.
 #             TAKX_HEALTH_TITLE replaces the title pattern, for a session
 #             that is meant to stay without a project.
 #   ready     'started', and the RFB socket for the web bridge exists.

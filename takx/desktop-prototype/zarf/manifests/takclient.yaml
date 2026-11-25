@@ -1,0 +1,15 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Rendered by Zarf with the package values (enableTemplating).
+apiVersion: tak.uds.dev/v1alpha1
+kind: TakClient
+metadata:
+  name: '{{ .Values.identity.name }}'
+  namespace: takclients
+  labels:
+    app.kubernetes.io/part-of: takx-desktop
+spec:
+  callsign: '{{ .Values.identity.callsign }}'
+  groups:
+    - '{{ .Values.identity.group }}'

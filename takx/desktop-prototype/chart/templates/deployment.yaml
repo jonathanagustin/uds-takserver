@@ -1,0 +1,214 @@
+# yamllint disable-file
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# One pod, one image, three containers (../image/README.md, "Entrypoint
+# modes"):
+#
+#   identity (init)  uid 10001  validates the copied TakClient Secret and
+#                               stages it under /run/takx/identity. The only
+#                               container that sees the Secret volume.
+#   desktop          uid 10001  Xtigervnc on a Unix socket, openbox, the TAKX
+#                               JVM. No listening TCP port.
+#   web              uid 10002  websockify: noVNC on TCP 6080, bridged to the
+#                               RFB socket. It reads the socket directory and
+#                               nothing else, so the HTTP parser that faces
+#                               the gateway cannot read the identity files.
+#
+# The root filesystem of every container is read-only. One replica: the
+# session is one X display and one TAK identity, so a second pod would be a
+# second client with the same certificate.
+{{- $gatewayIP := include "takx-desktop.gatewayIP" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: takx-desktop
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "takx-desktop.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # The session volume is ReadWriteOnce when persistence is on, and two
+  # clients must never share the identity.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "takx-desktop.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      # Selector labels only, so a chart version change alone does not
+      # restart the session.
+      labels:
+        {{- include "takx-desktop.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/part-of: takx-desktop
+    spec:
+      serviceAccountName: takx-desktop
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      # The image is linux/amd64 only.
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        # Group of the RFB socket. The web container gets it as a
+        # supplementary group, which is how uid 10002 may connect.
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      {{- if or $gatewayIP .Values.tak.hostAliases }}
+      hostAliases:
+        {{- if $gatewayIP }}
+        # TAKX checks the server name it dials against the TAK Server
+        # certificate, which names only this host.
+        - ip: {{ $gatewayIP | quote }}
+          hostnames:
+            - {{ .Values.tak.certName | quote }}
+        {{- end }}
+        {{- with .Values.tak.hostAliases }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      initContainers:
+        - name: identity
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          args: ["identity"]
+          env:
+            {{- with .Values.identity.expectHost }}
+            - name: TAKX_IDENTITY_EXPECT_HOST
+              value: {{ . | quote }}
+            {{- end }}
+            - name: TAKX_IDENTITY_CONNECT_HOST
+              value: {{ .Values.identity.connectHost | default .Values.tak.certName | quote }}
+          securityContext:
+            {{- include "takx-desktop.containerSecurityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources.identity | nindent 12 }}
+          volumeMounts:
+            - name: identity-secret
+              mountPath: /run/takx/secret
+              readOnly: true
+            - name: identity
+              mountPath: /run/takx/identity
+      containers:
+        - name: desktop
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          args: ["desktop"]
+          env:
+            - name: EXTRA_JVM_OPTS
+              value: {{ .Values.jvm.extraOpts | quote }}
+            {{- with .Values.takx.args }}
+            - name: TAKX_ARGS
+              value: {{ . | quote }}
+            {{- end }}
+            - name: TAKX_GEOMETRY
+              value: {{ .Values.display.geometry | quote }}
+            - name: TAKX_DEPTH
+              value: {{ .Values.display.depth | quote }}
+          securityContext:
+            {{- include "takx-desktop.containerSecurityContext" . | nindent 12 }}
+          # started: the JVM runs and the main window with a project is
+          # mapped. Ten minutes; the image self-test saw 30 to 40 seconds on
+          # 1.5 CPUs.
+          startupProbe:
+            exec:
+              command: ["/opt/takx-desktop/healthcheck.sh", "started"]
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["/opt/takx-desktop/healthcheck.sh", "ready"]
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["/opt/takx-desktop/healthcheck.sh", "live"]
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources.desktop | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: session
+              mountPath: /run/takx/session
+            - name: vnc
+              mountPath: /run/takx/vnc
+            - name: identity
+              mountPath: /run/takx/identity
+              readOnly: true
+        - name: web
+          image: {{ .Values.image | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          args: ["web"]
+          ports:
+            - name: http
+              containerPort: 6080
+              protocol: TCP
+          securityContext:
+            {{- include "takx-desktop.containerSecurityContext" . | nindent 12 }}
+            runAsUser: 10002
+            runAsGroup: 10002
+          # An exec probe: it asks the bridge on loopback, so it does not
+          # depend on how the mesh treats kubelet traffic.
+          readinessProbe:
+            exec:
+              command: ["/opt/takx-desktop/healthcheck.sh", "web"]
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["/opt/takx-desktop/healthcheck.sh", "web"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources.web | nindent 12 }}
+          volumeMounts:
+            - name: vnc
+              mountPath: /run/takx/vnc
+              readOnly: true
+      volumes:
+        # X socket and lock file.
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        # ProjectData, home, java.io.tmpdir, the run tree. Must allow exec:
+        # the Kernel loader maps its native libraries from here.
+        - name: session
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: takx-desktop-session
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ .Values.persistence.size | quote }}
+          {{- end }}
+        # rfb.sock, mode 0660, group 10001.
+        - name: vnc
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        # Staged identity files, mode 0400, uid 10001. Never on disk.
+        - name: identity
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Mi
+        # Optional: without the Secret the desktop starts with no identity.
+        - name: identity-secret
+          secret:
+            secretName: {{ .Values.identity.secretName | quote }}
+            optional: true
+            # 0440, in decimal: YAML readers disagree about a leading zero.
+            # Owner root, group 10001 (fsGroup), so uid 10001 may read it.
+            defaultMode: 288

@@ -111,7 +111,7 @@ FROM os AS base
 # a read-only root and cannot change them. They must not be made read-only
 # for the owner: TAKX copies conf/Default*.xml into a new project together
 # with their mode, and a read-only copy ends in an "Access Denied" dialog
-# instead of the globe (seen with --chmod=a-w, evidence/try1).
+# instead of the globe (seen with --chmod=a-w on this COPY).
 COPY --from=tree --chown=0:0 . /opt/takx
 COPY --chmod=0555 assemble/launch.sh /opt/takx-desktop/launch.sh
 COPY --chmod=0555 image/entrypoint.sh image/healthcheck.sh image/stage_identity.py \

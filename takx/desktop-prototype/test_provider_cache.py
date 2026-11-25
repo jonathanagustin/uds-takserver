@@ -2952,6 +2952,37 @@ exit 0
             self.registry.publish('reg/p:tag', self.context, ['p.tar'], {})
         self.assertEqual([call.split()[0] for call in self.calls()], ['import'])
 
+    def test_import_whose_pipe_cannot_even_be_closed_is_still_a_refusal(self):
+        events = []
+
+        class Pipe:
+            def write(self, data):
+                raise BrokenPipeError(32, 'Broken pipe')
+
+            def close(self):
+                events.append('close')
+                raise BrokenPipeError(32, 'Broken pipe')
+
+        class Process:
+            stdin = Pipe()
+
+            def kill(self):
+                events.append('kill')
+
+            def wait(self, timeout=None):
+                events.append('wait')
+                return -9
+
+        def popen(args, stdin=None, stdout=None, stderr=None):
+            stderr.write(b'daemon went away\n')
+            return Process()
+        with mock.patch.object(PC.subprocess, 'Popen', popen), self.assertRaises(PC.CacheError) as caught:
+            self.registry.publish('reg/p:tag', self.context, ['p.tar'], {})
+        self.assertEqual(str(caught.exception),
+                         'docker import failed (interrupted: [Errno 32] Broken pipe): daemon went away')
+        self.assertEqual(events, ['kill', 'wait', 'close'])
+        self.assertEqual(self.calls(), [])  # nothing is pushed or removed after a failed import
+
     def test_probe_reads_both_streams_in_any_case(self):
         ref = 'ghcr.io/owner/cache/p:tag'
         for text, expected in (('echo "MANIFEST UNKNOWN" >&2', 'absent'), ('echo "Manifest Unknown"', 'absent'),

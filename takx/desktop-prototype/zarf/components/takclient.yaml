@@ -1,0 +1,22 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# A TakClient in namespace takclients. The takserver-oidc watcher of the TAK
+# Server package issues the certificate and writes a Secret of the same name
+# there (adr/0022-takclient-operator.md). Removing this component deletes the
+# TakClient, which revokes the certificate.
+#
+# The default name is takx-browser, not takx-desktop: a TakClient that was
+# created with kubectl is not owned by a Helm release, and installing one of
+# the same name from here would fail.
+apiVersion: zarf.dev/v1beta1
+kind: ZarfComponentConfig
+metadata:
+  name: takx-desktop-takclient
+component:
+  manifests:
+    - name: takx-desktop-takclient
+      namespace: takclients
+      enableTemplating: true
+      files:
+        - ../manifests/takclient.yaml

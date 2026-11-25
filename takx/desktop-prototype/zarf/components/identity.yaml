@@ -1,0 +1,55 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Hands the TAK identity to the desktop namespace before the desktop starts.
+#
+# The copy is made by whoever deploys the package, with their own cluster
+# access. Nothing in the cluster gets permission to read Secrets of another
+# namespace: the desktop's service account has no token and no RoleBinding.
+# Only two of the five keys of the device Secret are copied. package.zip
+# already holds the client store and the trust store, and password protects
+# both; client.pem, client.key and ca.pem stay in takclients.
+#
+# The copy is not kept in step. After the TakClient certificate is renewed or
+# reissued, deploy this component again; the pod-reload label then lets UDS
+# Core restart the desktop pod.
+apiVersion: zarf.dev/v1beta1
+kind: ZarfComponentConfig
+metadata:
+  name: takx-desktop-identity
+component:
+  manifests:
+    # Not a secret. It is here so that Zarf creates the namespace, with its
+    # registry pull Secret, before the action below writes into it.
+    - name: takx-desktop-identity-info
+      namespace: takx-desktop
+      enableTemplating: true
+      files:
+        - ../manifests/identity-info.yaml
+  actions:
+    onDeploy:
+      onSuccess:
+        - description: Wait for the TakClient certificate
+          enableTemplating: true
+          maxTotalSeconds: 330
+          cmd: ./zarf tools kubectl wait "takclient/{{ .Values.identity.name }}" -n takclients --for=condition=Ready --timeout=300s
+        # The Secret goes from one kubectl to the next through pipes and is
+        # never written to a file, a variable or the terminal. `silent` keeps
+        # the command's output out of the deploy log as well.
+        - description: Copy package.zip and password of the TakClient Secret into takx-desktop
+          enableTemplating: true
+          silent: true
+          maxTotalSeconds: 60
+          shell:
+            linux: bash
+            darwin: bash
+          cmd: |
+            set -euo pipefail
+            ./zarf tools kubectl get secret "{{ .Values.identity.name }}" -n takclients -o json |
+              ./zarf tools yq -p json -o json 'select(.data."package.zip" != null and .data.password != null) | { "apiVersion": "v1", "kind": "Secret", "type": "Opaque", "metadata": { "name": "takx-desktop-identity", "namespace": "takx-desktop", "labels": { "app.kubernetes.io/part-of": "takx-desktop", "uds.dev/pod-reload": "true" }, "annotations": { "uds.dev/pod-reload-selector": "app.kubernetes.io/name=takx-desktop", "tak.uds.dev/takclient": .metadata.name, "tak.uds.dev/fingerprint": (.metadata.annotations."tak.uds.dev/fingerprint" // ""), "tak.uds.dev/not-after": (.metadata.annotations."tak.uds.dev/not-after" // "") } }, "data": { "package.zip": .data."package.zip", "password": .data.password } }' |
+              ./zarf tools kubectl apply --server-side --force-conflicts --field-manager=takx-desktop-identity -f - >/dev/null
+    onRemove:
+      before:
+        - description: Delete the copied identity Secret
+          maxTotalSeconds: 60
+          cmd: ./zarf tools kubectl delete secret takx-desktop-identity -n takx-desktop --ignore-not-found

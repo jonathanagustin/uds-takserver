@@ -1,0 +1,24 @@
+# yamllint disable-file
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+{{- if .Values.persistence.enabled }}
+# The session directory. It holds the TAKX project, which includes TAKX's own
+# copies of the PKCS#12 files and their passwords once a connection is saved.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: takx-desktop-session
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "takx-desktop.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size | quote }}
+{{- end }}

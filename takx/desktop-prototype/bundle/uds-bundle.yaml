@@ -1,0 +1,166 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# yaml-language-server: $schema=https://raw.githubusercontent.com/defenseunicorns/uds-cli/refs/heads/main/uds.schema.json
+#
+# The whole stack for the TAKX 5.7 desktop prototype as one bundle, for an
+# empty cluster: Zarf init, the two UDS Core layers the k3d-core-slim-dev
+# checkpoint is made of (base and identity-authorization), the published TAK
+# Server package, and the takx-desktop package from ../zarf.
+#
+#   ./takx/desktop-prototype/bundle/create-bundle.sh PACKAGE_DIR TAG --confirm
+#   uds deploy uds-bundle-takx-desktop-proto-amd64-TAG.tar.zst --confirm
+#
+# On a cluster that already runs UDS Core and TAK Server, deploy only the
+# last package (`uds deploy ... --packages takx-desktop`), or build a bundle
+# with only that package (`create-bundle.sh ... --packages takx-desktop`).
+#
+# The first four packages are pulled from GHCR by tag and nothing of them is
+# built. `takx-package-dir`, `takx-build-tag` and the path of test-values.yaml
+# are replaced by create-bundle.sh in a staged copy; the file is not meant
+# to be built as it stands.
+#
+# What is not here: a cluster, its load balancer addresses and DNS for the
+# three gateways. Monitoring, logging, runtime security and backup are
+# separate Core layers and are not listed.
+#
+# The desktop is TAKX 5.7 (0b59a9bb) built from public sources on Kernel
+# 8.30.5 + project patches, CommonCommo 1.17.2 patched and the NASA WorldWind
+# interop build. It is not the official TAKX 5.7 distribution, and its image
+# is not cleared for distribution (SOURCES attachment of the package).
+kind: UDSBundle
+metadata:
+  name: takx-desktop-proto
+  description: Zarf init, UDS Core base and identity, TAK Server and the TAKX 5.7 desktop prototype (public-source build, not the official TAKX distribution)
+  version: "takx-build-tag"
+  architecture: amd64
+
+packages:
+  # Registry, agent and the rest of Zarf's cluster services, at the Zarf
+  # version of the pinned uds CLI (mise.toml: uds 0.42.0, Zarf 1.0.1).
+  - name: init
+    repository: ghcr.io/zarf-dev/packages/init
+    ref: v1.0.1
+
+  # The same block as ../../../bundle/full/uds-bundle.yaml. The passthrough
+  # gateway is what the desktop dials: TAK streaming on 8089.
+  - name: core-base
+    repository: ghcr.io/defenseunicorns/packages/uds/core-base
+    ref: 1.16.0-upstream
+    optionalComponents:
+      - istio-passthrough-gateway
+    keylessVerification:
+      certificateIdentityRegexp: "^https://github\\.com/defenseunicorns/uds-core/\\.github/workflows/publish\\.yaml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$"
+      certificateOIDCIssuer: https://token.actions.githubusercontent.com
+    overrides:
+      pepr-uds-core:
+        module:
+          values:
+            - path: watcher.resources.requests.cpu
+              value: 100m
+            - path: watcher.resources.requests.memory
+              value: 64Mi
+            - path: admission.resources.requests.cpu
+              value: 100m
+            - path: admission.resources.requests.memory
+              value: 64Mi
+      istio-controlplane:
+        istiod:
+          values:
+            - path: resources.requests.cpu
+              value: 100m
+            - path: resources.requests.memory
+              value: 1024Mi
+            - path: rollingMaxSurge
+              value: "0%"
+            - path: rollingMaxUnavailable
+              value: "100%"
+      istio-passthrough-gateway:
+        gateway:
+          values:
+            - path: resources.requests.cpu
+              value: 50m
+            # Upstream defaults plus the standard TAK ports.
+            - path: service.ports
+              value:
+                - name: status-port
+                  port: 15021
+                  protocol: TCP
+                  targetPort: 15021
+                - name: http2
+                  port: 80
+                  protocol: TCP
+                  targetPort: 80
+                - name: https
+                  port: 443
+                  protocol: TCP
+                  targetPort: 443
+                - name: tls-tak-cert
+                  port: 8446
+                  protocol: TCP
+                  targetPort: 8446
+                - name: tls-tak-stream
+                  port: 8089
+                  protocol: TCP
+                  targetPort: 8089
+            - path: autoscaling.enabled
+              value: false
+
+  # Keycloak and Authservice: the sign-in in front of the desktop.
+  - name: core-identity-authorization
+    repository: ghcr.io/defenseunicorns/packages/uds/core-identity-authorization
+    ref: 1.16.0-upstream
+    keylessVerification:
+      certificateIdentityRegexp: "^https://github\\.com/defenseunicorns/uds-core/\\.github/workflows/publish\\.yaml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$"
+      certificateOIDCIssuer: https://token.actions.githubusercontent.com
+
+  # The published TAK Server package of this repository. Its takserver-oidc
+  # module reconciles the TakClient the desktop's identity comes from.
+  - name: takserver
+    repository: ghcr.io/jonathanagustin/uds-takserver/takserver
+    ref: 1.4.0-upstream
+    # CloudTAK, the browser map client at map.<domain>: a second client to
+    # exchange markers with.
+    optionalComponents:
+      - cloudtak
+    keylessVerification:
+      certificateIdentityRegexp: "^https://github\\.com/jonathanagustin/(uds-k3d-takserver|uds-takserver)/\\.github/workflows/release\\.yaml@refs/(tags/v[0-9]+\\.[0-9]+\\.[0-9]+|heads/main)$"
+      certificateOIDCIssuer: https://token.actions.githubusercontent.com
+    overrides:
+      takserver:
+        takserver:
+          valuesFiles:
+            # Sizing of the repository's test bundle (4 CPU, 16 GB).
+            - ../../../bundle/test-values.yaml
+
+  # Built by ../zarf/create-package.sh. Local only: it is in no registry.
+  - name: takx-desktop
+    path: takx-package-dir
+    ref: takx-build-tag
+    # Both optional components: create the TakClient takx-browser and hand
+    # its data package to the desktop. A bundle cannot set package values, so
+    # the names are the package defaults; to use another TakClient, deploy
+    # the package itself with --set-values (../zarf/README.md).
+    optionalComponents:
+      - takx-desktop-takclient
+      - takx-desktop-identity
+    overrides:
+      takx-desktop:
+        takx-desktop:
+          variables:
+            - name: DOMAIN
+              description: Domain suffix of the gateways; the desktop is served at <TAKX_HOST>.<DOMAIN>
+              path: domain
+              default: uds.dev
+            - name: TAKX_HOST
+              description: Host of the desktop under DOMAIN on the tenant gateway
+              path: host
+            - name: TAKX_JVM_OPTS
+              description: Extra JVM options of the TAKX client, for example -Xmx2g
+              path: jvm.extraOpts
+            - name: TAKX_DESKTOP_MEMORY_LIMIT
+              description: Memory limit of the desktop container
+              path: resources.desktop.limits.memory
+            - name: TAKX_GATEWAY_IP
+              description: Address of the passthrough gateway for the pod's hosts entry; unset looks up the Service ClusterIP
+              path: tak.gateway.ip

@@ -21,6 +21,7 @@
 //                               Input, type the name and the position,
 //                               create the point, open it (radial menu >
 //                               details), Share > Broadcast To All Users
+//   close                       close an open details panel
 //   find NAME [SECONDS]         a user's steps: the map's search box until
 //                               its MAP FEATURES list has NAME, select it
 //                               (the map flies to the feature), open its
@@ -126,7 +127,14 @@ async function view(page, lat, lon, zoom) {
   return { url: page.url() };
 }
 
+// A details panel left open by an earlier step.
+async function closePanel(page) {
+  await page.locator('[title="Close Menu"], [aria-label="Close Menu"]').first().click({ timeout: 800 }).catch(() => {});
+  await pause(page, 500);
+}
+
 async function place(page, name, lat, lon) {
+  await closePanel(page);
   await page.locator('[title="Geometry Editing"], [aria-label="Geometry Editing"]').first().click();
   await pause(page, 900);
   await page.getByText("Coordinate Input").click();
@@ -156,6 +164,7 @@ async function place(page, name, lat, lon) {
 
 async function find(page, name, seconds) {
   const deadline = Date.now() + seconds * 1000;
+  await closePanel(page);
   for (;;) {
     await page.locator('[title="Search Button"]').first().click();
     await pause(page, 700);
@@ -182,8 +191,7 @@ async function find(page, name, seconds) {
 async function remove(page, name) {
   const found = await find(page, name, 0);
   if (!found.found) return { removed: false, name };
-  await page.locator('[title="Close Menu"], [aria-label="Close Menu"]').first().click().catch(() => {});
-  await pause(page, 800);
+  await closePanel(page);
   await radial(page, -21, -66);
   await page.getByRole("button", { name: /^(Delete|Yes|OK|Confirm)$/ }).first().click({ timeout: 2500 }).catch(() => {});
   await pause(page, 1000);
@@ -194,13 +202,20 @@ async function remove(page, name) {
   const [command, ...args] = process.argv.slice(2);
   const browser = await chromium.connectOverCDP(cdp);
   const context = browser.contexts()[0];
-  const page = context.pages()[0] || (await context.newPage());
+  const page = context.pages().find((one) => one.url().startsWith(new URL(url).origin)) || context.pages()[0] || (await context.newPage());
   let result;
-  if (command === "signin") result = await signin(page, args[0], args[1]);
+  if (command === "signin") {
+    // One tab only: a restarted browser may have restored an older one.
+    for (const other of context.pages()) if (other !== page) await other.close();
+    result = await signin(page, args[0], args[1]);
+  }
   else if (command === "whoami") result = await whoami(page);
   else if (command === "shot") {
     await page.screenshot({ path: args[0] });
     result = { shot: args[0], url: page.url() };
+  } else if (command === "close") {
+    await closePanel(page);
+    result = { closed: true };
   } else if (command === "view") result = await view(page, args[0], args[1], args[2]);
   else if (command === "place") result = await place(page, args[0], args[1], args[2]);
   else if (command === "find") result = await find(page, args[0], Number(args[1] || 30));

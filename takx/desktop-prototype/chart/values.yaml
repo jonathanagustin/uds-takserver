@@ -1,0 +1,119 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Values of the TAKX 5.7 desktop prototype chart. values.schema.json checks
+# them; an unknown key is an error. The Zarf package in ../zarf maps its
+# `desktop` package value onto this file, so every key here can be set at
+# deploy time with `--set-values desktop.<key>=...`.
+
+# Domain suffix of the UDS gateways. The package maps global.domain here.
+domain: uds.dev
+# The desktop is served at https://<host>.<domain>/ on the tenant gateway.
+host: takx
+
+# The one image of the pod. All three containers run it with a different
+# mode (identity, desktop, web). ../zarf/create-package.sh replaces the tag
+# in the staged copy, and ../zarf/image-values.yaml sets the reference of
+# the packaged image at deploy time. As written here the tag is a
+# placeholder that only lets `helm lint` and `helm template` render.
+image: ghcr.io/jonathanagustin/uds-takserver/takx-desktop:takx-build-tag
+imagePullPolicy: IfNotPresent
+
+# The bridge in the pod has no login of its own: whoever reaches port 6080
+# controls the desktop. Authservice at the tenant gateway is the only access
+# control, and it cannot be switched off in this chart.
+sso:
+  clientId: uds-takx-desktop
+  # Keycloak group paths that may open the desktop. Everyone in these groups
+  # shares the one session and the one TAK identity.
+  groups:
+    - /UDS Core/Admin
+
+display:
+  # WIDTHxHEIGHT of the X desktop. 1920x1080 is the only size that was run.
+  geometry: 1920x1080
+  # Colour depth: 16, 24 or 32.
+  depth: 24
+
+jvm:
+  # EXTRA_JVM_OPTS of the official runTakx command line. With -Xmx2g the
+  # container peaked at 2.1 to 2.2 GB after five idle minutes in the image
+  # self-test (not in a cluster, not under use).
+  extraOpts: "-Xmx2g"
+
+takx:
+  # TAKX program arguments, space separated. Empty: `-create` when
+  # ProjectData is empty, otherwise none.
+  args: ""
+
+identity:
+  # Secret in this namespace with the keys package.zip and password: the
+  # two-key copy of a TakClient device Secret that the package component
+  # takx-desktop-identity makes. It is optional. Without it the init
+  # container stages nothing and the desktop starts without an identity.
+  secretName: takx-desktop-identity
+  # Reject a package whose connect string names another host. Empty: not
+  # checked. The TakClient operator writes takserver-stream.<domain>.
+  expectHost: ""
+  # Also stage takx-package.zip with this host in the connect string. Empty:
+  # tak.certName. TAKX checks the server name it dials against the server
+  # certificate, and the issued package names takserver-stream.<domain>,
+  # which is not in that certificate.
+  connectHost: ""
+
+tak:
+  # The only DNS name in the TAK Server certificate of this repository's
+  # package (common name and subject alternative name). TAKX has to dial this
+  # name; the pod gets a hosts entry that maps it to the passthrough gateway.
+  certName: takserver
+  gateway:
+    namespace: istio-passthrough-gateway
+    service: passthrough-ingressgateway
+    # Pod labels of the passthrough gateway, for the egress rules.
+    selector:
+      app: passthrough-ingressgateway
+    # Address for the hosts entry. Empty: the ClusterIP of the Service above,
+    # read with a Helm lookup when the chart is installed or upgraded. A
+    # render without a cluster (`helm template`, `zarf dev inspect`) finds
+    # nothing and writes no hosts entry.
+    ip: ""
+  egress:
+    # TCP 8089, Cursor on Target streaming with the client certificate.
+    streaming: true
+    # TCP 443, the client-certificate API by SNI. Off: TAKX 5.7 asks
+    # https://<address>:8443 for missions and contacts, which the gateway does
+    # not serve, and it sends the dialled name as SNI, so 443 would not
+    # answer it either. See ../STATUS.md, "HTTPS API from TAKX".
+    api: false
+  # Further hosts entries of the pod: [{ip: 10.0.0.1, hostnames: [name]}].
+  hostAliases: []
+
+egress:
+  # External hosts the desktop may reach on TCP 443 with TLS, for example a
+  # map tile server. Each entry becomes one remoteHost rule of the UDS
+  # Package. Empty: the pod reaches the passthrough gateway and DNS only, and
+  # TAKX shows its built-in base map.
+  hosts: []
+
+persistence:
+  # false: the session directory (ProjectData, home, the JVM's temporary
+  # directory) is an emptyDir of `size` and is lost with the pod, including a
+  # TAK Server connection saved in the project. true: a PersistentVolumeClaim
+  # of `size` keeps it. TAKX stores its own copies of the PKCS#12 files and
+  # their passwords in the project, so the volume then holds key material.
+  # A start on an existing project has not been run with this image.
+  enabled: false
+  size: 2Gi
+  # Empty: the cluster default StorageClass.
+  storageClass: ""
+
+resources:
+  identity:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  desktop:
+    requests: {cpu: 500m, memory: 2Gi}
+    limits: {cpu: "2", memory: 5Gi}
+  web:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}

@@ -1,0 +1,19 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The one image of the package, in a component of its own so that another
+# package can import it without the chart. The chart finds it by ID:
+#   ( .Pkg.GetComponent "takx-desktop-image" ).GetImageByID "desktop"
+#
+# The image exists only in the Docker image store of the build host
+# (../../stages/image.sh). create-package.sh therefore builds with
+# `source: daemon`; `registry` is what a published image would use.
+apiVersion: zarf.dev/v1beta1
+kind: ZarfComponentConfig
+metadata:
+  name: takx-desktop-image
+component:
+  images:
+    - name: ghcr.io/jonathanagustin/uds-takserver/takx-desktop:takx-build-tag
+      id: desktop
+      source: registry

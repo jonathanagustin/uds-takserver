@@ -1,0 +1,81 @@
+# yamllint disable-file
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# What the UDS operator builds from this: a Keycloak client and an Authservice
+# chain in front of the pod, a VirtualService on the tenant gateway, and
+# default-deny NetworkPolicies with the rules under `allow`. DNS and the
+# ingress from the tenant gateway to port 6080 come from the operator.
+#
+# The pod may open exactly these connections: the passthrough gateway on the
+# TAK ports that are switched on in values, and the hosts under egress.hosts
+# (none by default). There is no Anywhere, KubeAPI or IntraNamespace rule and
+# no policy exemption.
+apiVersion: uds.dev/v1alpha1
+kind: Package
+metadata:
+  name: takx-desktop
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "takx-desktop.labels" . | nindent 4 }}
+spec:
+  sso:
+    # Browser access only. TAKX itself does not use this session: its TAK
+    # Server connection is a client certificate from a TakClient.
+    - name: TAKX desktop prototype
+      description: "Keycloak sign-in in front of the TAKX desktop prototype."
+      clientId: {{ .Values.sso.clientId | quote }}
+      redirectUris:
+        - "{{ include "takx-desktop.url" . }}/login"
+      enableAuthserviceSelector:
+        {{- include "takx-desktop.selectorLabels" . | nindent 8 }}
+      groups:
+        anyOf:
+          {{- toYaml .Values.sso.groups | nindent 10 }}
+  network:
+    serviceMesh:
+      mode: ambient
+    expose:
+      - description: TAKX desktop prototype in a browser
+        service: takx-desktop
+        selector:
+          {{- include "takx-desktop.selectorLabels" . | nindent 10 }}
+        gateway: tenant
+        host: {{ .Values.host | quote }}
+        port: 6080
+    {{- if or .Values.tak.egress.streaming .Values.tak.egress.api .Values.egress.hosts }}
+    allow:
+      {{- if .Values.tak.egress.streaming }}
+      # The same route the ATAK test device uses (atak/deploy/device.yaml).
+      - direction: Egress
+        selector:
+          {{- include "takx-desktop.selectorLabels" . | nindent 10 }}
+        remoteNamespace: {{ .Values.tak.gateway.namespace | quote }}
+        remoteSelector:
+          {{- toYaml .Values.tak.gateway.selector | nindent 10 }}
+        port: 8089
+        description: TAKX to TAK streaming
+      {{- end }}
+      {{- if .Values.tak.egress.api }}
+      - direction: Egress
+        selector:
+          {{- include "takx-desktop.selectorLabels" . | nindent 10 }}
+        remoteNamespace: {{ .Values.tak.gateway.namespace | quote }}
+        remoteSelector:
+          {{- toYaml .Values.tak.gateway.selector | nindent 10 }}
+        port: 443
+        description: TAKX to TAK API by SNI
+      {{- end }}
+      {{- range .Values.egress.hosts }}
+      - direction: Egress
+        selector:
+          {{- include "takx-desktop.selectorLabels" $ | nindent 10 }}
+        # A remoteHost rule goes through the ambient egress waypoint, which
+        # authorises by service account (as charts/cloudtak does for tiles).
+        serviceAccount: takx-desktop
+        remoteHost: {{ . | quote }}
+        remoteProtocol: TLS
+        port: 443
+        description: {{ printf "TAKX to %s" . | quote }}
+      {{- end }}
+    {{- end }}

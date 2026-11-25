@@ -1,0 +1,50 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The chart ../../chart: one Deployment, its Service and ServiceAccount, and
+# the UDS Package that puts it behind the tenant gateway and Keycloak.
+apiVersion: zarf.dev/v1beta1
+kind: ZarfComponentConfig
+metadata:
+  name: takx-desktop
+component:
+  charts:
+    - name: takx-desktop
+      namespace: takx-desktop
+      local:
+        path: ../../chart
+      valuesFiles:
+        # Sets the chart's image to the reference of the packaged image.
+        - path: ../image-values.yaml
+          enableTemplating: true
+      values:
+        - sourcePath: .global.domain
+          targetPath: .domain
+        # Everything under `desktop` goes to the chart, except the image:
+        # the package decides which image runs.
+        - sourcePath: .desktop
+          targetPath: .
+          excludePaths:
+            - .desktop.image
+  actions:
+    onDeploy:
+      onSuccess:
+        - description: Wait for the UDS operator to reconcile the Package
+          maxTotalSeconds: 300
+          wait:
+            cluster:
+              kind: packages.uds.dev
+              name: takx-desktop
+              namespace: takx-desktop
+              condition: "'{.status.phase}'=Ready"
+        # Available means both containers are ready: the TAKX main window is
+        # mapped and the bridge serves noVNC. The start-up probe allows ten
+        # minutes.
+        - description: Wait for the desktop
+          maxTotalSeconds: 900
+          wait:
+            cluster:
+              kind: deployment
+              name: takx-desktop
+              namespace: takx-desktop
+              condition: Available

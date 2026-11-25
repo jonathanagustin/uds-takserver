@@ -1,0 +1,12 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+apiVersion: v2
+name: takx-desktop
+description: TAKX 5.7 desktop prototype (public-source build) in a browser, behind the UDS tenant gateway
+type: application
+version: 0.1.0
+# TAKX 5.7 (0b59a9bb) built from public sources on Kernel 8.30.5 + project
+# patches, CommonCommo 1.17.2 patched and the NASA WorldWind interop build.
+# Not the official TAKX 5.7 distribution.
+appVersion: "5.7-0b59a9bb-proto"

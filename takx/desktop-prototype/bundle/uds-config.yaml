@@ -1,0 +1,9 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# Deploy-time variables of the takx-desktop-proto bundle. Do not put
+# passwords in this file. Use it with: UDS_CONFIG=<this file> uds deploy ...
+# `shared` goes to every package that has the variable: the gateways of UDS
+# Core, the TAK Server hosts and the desktop host all use the one domain.
+shared:
+  DOMAIN: uds.dev

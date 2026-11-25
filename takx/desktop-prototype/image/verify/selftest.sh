@@ -98,7 +98,7 @@ do_wait() {
   while ((waited < budget)); do
     if docker exec "${desktop}" "${app}/healthcheck.sh" started 2>/dev/null; then
       echo "selftest: 'started' probe passed after about ${waited} s of waiting"
-      echo "${waited}" >"${evidence}/started-after-seconds.txt"
+      echo "${waited}" >"${evidence}/started-after-seconds${wait_label:-}.txt"
       return 0
     fi
     [[ "$(docker inspect -f '{{.State.Running}}' "${desktop}" 2>/dev/null)" == true ]] ||
@@ -413,7 +413,7 @@ do_linker() {
     --mount "type=volume,src=${volume},dst=/run/takx/vnc" \
     -e "EXTRA_JVM_OPTS=${TAKX_SELFTEST_JVM:--Xmx2g}" -e LD_DEBUG=libs -e LD_DEBUG_OUTPUT=/tmp/ld \
     "${image}" desktop >/dev/null
-  do_wait 300
+  wait_label=-linker do_wait 300
   # shellcheck disable=SC2016 # expanded by the shell in the container
   docker exec -e LD_DEBUG= "${desktop}" bash -c '
     jvm="$(cat /run/takx/session/jvm.pid)"

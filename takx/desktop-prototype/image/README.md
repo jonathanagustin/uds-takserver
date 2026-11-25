@@ -17,7 +17,7 @@ takx/desktop-prototype/stages/image.sh notices    # licence texts, NOTICE.md, SO
 takx/desktop-prototype/stages/image.sh test       # unit tests, no Docker
 takx/desktop-prototype/stages/image.sh build      # docker buildx build with the build gates
 takx/desktop-prototype/stages/image.sh inspect    # size, layers, history, layer scan, notices in the image
-takx/desktop-prototype/stages/image.sh selftest start|wait|check|browser|stats|supervision|audit|identity|stop
+takx/desktop-prototype/stages/image.sh selftest start|wait|check|browser|stats|supervision|audit|linker|identity|stop
 ```
 
 Tags, with `<digest12>` the first 12 hex digits of the SHA-256 of the tree's `manifest.json`:
@@ -115,6 +115,7 @@ The tree is copied byte for byte. No binary is patched and no JAR is repacked, s
 
 - **Kernel libraries.** The nine libraries sit in the Kernel JAR under unversioned names, while `libtakengine.so` and `libtakenginejni.so` ask for SONAMEs such as `libassimp.so.4`. The stock loader extracts them and maps each one by absolute path in dependency order, so every later request finds an SONAME that is already loaded. The dynamic linker searches no directory.
 - **Dead RUNPATH.** `libtakengine.so` and `libtakenginejni.so` still carry `RUNPATH` entries below `/var/lib/takx-proto/P` from their build. They are not removed, because that would change the Kernel JAR. They are never searched, and the build fails if that directory exists in the image. Removing them belongs in the Kernel build.
+- **Linker trace.** `selftest.sh linker` boots the client under `LD_DEBUG=libs`. The trace shows the nine libraries initialised in the stock order, no file tried for any of their SONAMEs, and no line that names `/var/lib/takx-proto`.
 - **Gates.** `check_native_closure.py` resolves every `DT_NEEDED` of every bundled Linux x86-64 library to a bundled SONAME, the JDK or `ldconfig`. `elf_audit.sh` runs `ldd -r` on each of them with its siblings visible under their SONAMEs. Both run in the build; `selftest.sh audit` runs the second one again in the finished image.
 - **One exception.** `libnewt_head.so` from the JOGL 2.5.0 Maven artifact has 21 undefined symbols (Broadcom VideoCore and EGL helpers, `ceil`, `floor`). That is how JOGL publishes it. The audit counts them on their own line and allows them for that file only.
 

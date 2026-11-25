@@ -1,0 +1,22 @@
+# yamllint disable-file
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# noVNC and its WebSocket, served by the web container. The only port of the
+# pod: the RFB protocol itself stays on a Unix socket inside the pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: takx-desktop
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "takx-desktop.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "takx-desktop.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 6080
+      targetPort: http
+      protocol: TCP
