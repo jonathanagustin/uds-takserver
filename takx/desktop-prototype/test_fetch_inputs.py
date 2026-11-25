@@ -414,7 +414,7 @@ class Download(Case):
                 self.assertEqual(self.names(self.tmp), [])
 
     def test_transient_failures_are_retried(self):
-        failures = (http_error(400), http_error(402), http_error(405), http_error(409), http_error(411), http_error(429),
+        failures = (http_error(400), http_error(402), http_error(405), http_error(409), http_error(411),
                     http_error(500), http_error(503), urllib.error.URLError('boom'), ConnectionResetError('reset'),
                     http.client.IncompleteRead(b'xy', 5))
         for failure in failures:
@@ -431,6 +431,41 @@ class Download(Case):
         self.sleeps.clear()
         self.assertIsNotNone(F.download(self.URL, self.target, attempts=2))
         self.assertEqual((len(self.net.calls), self.sleeps), (2, [3, 6]))
+
+    def test_rate_limit_gets_longer_pauses_and_does_not_use_up_attempts(self):
+        self.patch(F, 'RATE_LIMIT_BUDGET', [1200])
+        self.net.routes[self.URL] = [http_error(429), http_error(429), urllib.error.URLError('one'), http_error(429), b'payload']
+        self.assertIsNone(F.download(self.URL, self.target, attempts=2))
+        self.assertEqual(self.sleeps, [20, 45, 3, 90])
+        self.assertEqual((self.target.read_bytes(), F.RATE_LIMIT_BUDGET), (b'payload', [1200 - 155]))
+
+    def test_rate_limit_that_persists_ends_the_download(self):
+        self.patch(F, 'RATE_LIMIT_BUDGET', [1200])
+        self.net.routes[self.URL] = [http_error(429)]
+        self.assertEqual(F.download(self.URL, self.target), 'HTTPError: HTTP Error 429: status 429')
+        self.assertEqual((len(self.net.calls), self.sleeps), (4, [20, 45, 90]))
+        self.assertEqual(self.names(self.tmp), [])
+
+    def test_rate_limit_honours_retry_after_up_to_the_longest_pause(self):
+        self.patch(F, 'RATE_LIMIT_BUDGET', [1200])
+        for header, expected in (('60', 60), ('5', 20), ('100000', 180), ('soon', 20)):
+            with self.subTest(header=header):
+                self.sleeps.clear()
+                refusal = urllib.error.HTTPError(self.URL, 429, 'slow down', {'Retry-After': header}, None)
+                self.net.routes[self.URL] = [refusal, b'ok']
+                self.assertIsNone(F.download(self.URL, self.target))
+                self.assertEqual(self.sleeps, [expected])
+
+    def test_rate_limit_waiting_is_bounded_for_the_whole_run(self):
+        self.patch(F, 'RATE_LIMIT_BUDGET', [50])
+        self.net.routes[self.URL] = [http_error(429)]
+        self.assertIsNotNone(F.download(self.URL, self.target))
+        self.assertEqual((self.sleeps, len(self.net.calls), F.RATE_LIMIT_BUDGET), ([20], 2, [30]))
+        self.sleeps.clear()
+        self.net.calls.clear()
+        self.patch(F, 'RATE_LIMIT_BUDGET', [0])
+        self.assertIsNotNone(F.download(self.URL, self.target))
+        self.assertEqual((self.sleeps, len(self.net.calls)), ([], 1))
 
     def test_success_after_failures_returns_none(self):
         self.net.routes[self.URL] = [urllib.error.URLError('one'), http_error(502), b'payload']

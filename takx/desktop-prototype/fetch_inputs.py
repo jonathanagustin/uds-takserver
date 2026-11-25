@@ -128,11 +128,42 @@ def git_env():
     return env
 
 
+# Pauses after an HTTP 429 (Too Many Requests), in order. A server that names a
+# longer Retry-After gets it, up to RATE_LIMIT_LONGEST. All downloads of one run
+# share RATE_LIMIT_BUDGET seconds of such waiting, so a server that keeps
+# refusing ends the stage in bounded time instead of stalling every file.
+RATE_LIMIT_WAITS = (20, 45, 90)
+RATE_LIMIT_LONGEST = 180
+RATE_LIMIT_BUDGET = [1200]
+
+
+def rate_limit_pause(failure, earlier):
+    """Seconds to wait after an HTTP 429, or None when this download or the run has waited enough."""
+    if earlier >= len(RATE_LIMIT_WAITS):
+        return None
+    try:
+        asked = int(failure.headers.get('Retry-After') or 0)
+    except (AttributeError, TypeError, ValueError):
+        asked = 0
+    pause = min(max(asked, RATE_LIMIT_WAITS[earlier]), RATE_LIMIT_LONGEST)
+    with LOCK:
+        if RATE_LIMIT_BUDGET[0] < pause:
+            return None
+        RATE_LIMIT_BUDGET[0] -= pause
+    return pause
+
+
 def download(url, target, limit=None, attempts=4):
-    """Stream url into target (temporary name, then rename). Returns None or an error string."""
+    """Stream url into target (temporary name, then rename). Returns None or an error string.
+
+    An HTTP 429 is the server asking for a pause, not a failed attempt at the
+    file: it is answered with the longer waits of rate_limit_pause and does not
+    use up `attempts`.
+    """
     target.parent.mkdir(parents=True, exist_ok=True)
     error = None
-    for attempt in range(attempts):
+    attempt = limited = 0
+    while attempt < attempts:
         descriptor, name = tempfile.mkstemp(prefix='.partial-', dir=target.parent)
         try:
             request = urllib.request.Request(url, headers={'User-Agent': 'takx-desktop-prototype-fetch/1'})
@@ -149,7 +180,15 @@ def download(url, target, limit=None, attempts=4):
             error = f'{type(failure).__name__}: {failure}'
             if isinstance(failure, urllib.error.HTTPError) and failure.code in (401, 403, 404, 410):
                 break
-            time.sleep(3 * (attempt + 1))
+            if isinstance(failure, urllib.error.HTTPError) and failure.code == 429:
+                pause = rate_limit_pause(failure, limited)
+                if pause is None:
+                    break
+                limited += 1
+                time.sleep(pause)
+                continue
+            attempt += 1
+            time.sleep(3 * attempt)
         finally:
             if os.path.exists(name):
                 os.unlink(name)
