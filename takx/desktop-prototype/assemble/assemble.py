@@ -346,17 +346,14 @@ def main():
     if not loader_path.startswith(prefix):
         raise SystemExit('assemble: unexpected stock loader path %s' % loader_path)
     # The desktop android.content.res classes of the Kernel build (takx/compat)
-    # serve assets only from a JAR named on java.class.path, and read their
-    # resource catalog from META-INF of the Kernel JAR. Under JBoss Modules
-    # neither holds by default, so the launcher appends the Kernel JAR to the
-    # class path and all-libs passes the Kernel META-INF path through.
-    kernel_relative = os.path.join(module_dir(KERNEL), os.path.basename(kernel_jar))
+    # read their resource catalog from META-INF of the Kernel JAR; all-libs
+    # passes that path through, because a JBoss Modules dependency otherwise
+    # exports META-INF/services only.
     assembly.write('prototype-launch.env',
                    '# Read by takx/desktop-prototype/assemble/launch.sh.\n'
-                   'KERNEL_STOCK_LOADER_SUBDIR=%s\n'
-                   'KERNEL_ASSET_ROOT_JAR=%s\n' % (loader_path[len(prefix):], kernel_relative),
-                   'launcher facts: status/kernel-composed.json stock_loader_java_library_path '
-                   '(relative to java.io.tmpdir) and the Kernel JAR of the gov.tak.kernel module')
+                   'KERNEL_STOCK_LOADER_SUBDIR=%s\n' % loader_path[len(prefix):],
+                   'launcher fact: status/kernel-composed.json stock_loader_java_library_path, '
+                   'relative to java.io.tmpdir')
 
     # --- CommonCommo
     assembly.put(need(os.path.join(commo, 'java', 'jcommoncommo.jar')),

@@ -250,11 +250,33 @@ def derive_key(document):
     return sha256_bytes(canonical(document))
 
 
-def derive_keys(manifest, facts_of):
-    """{name: (key, document)} for every provider; facts_of(name) supplies facts."""
-    result = {}
-    for name in order(manifest['providers']):
-        deps = {dep: result[dep][0] for dep in manifest['providers'][name]['prerequisites']}
+def closure(providers, names):
+    """The named providers and everything they are built from."""
+    seen = set()
+
+    def visit(name):
+        if name not in providers:
+            raise CacheError('unknown provider ' + name)
+        if name not in seen:
+            seen.add(name)
+            for dep in providers[name]['prerequisites']:
+                visit(dep)
+
+    for name in names:
+        visit(name)
+    return seen
+
+
+def derive_keys(manifest, facts_of, names=None, known=None):
+    """{name: (key, document)} for the named providers (default: all) and their
+    prerequisites; facts_of(name) supplies the facts, `known` earlier results."""
+    providers = manifest['providers']
+    wanted = closure(providers, providers if names is None else names)
+    result = dict(known or {})
+    for name in order(providers):
+        if name not in wanted or name in result:
+            continue
+        deps = {dep: result[dep][0] for dep in providers[name]['prerequisites']}
         document = key_document(manifest, name, facts_of(name), deps)
         result[name] = (derive_key(document), document)
     return result
@@ -679,7 +701,10 @@ class DockerRegistry:
         return done.stdout.decode().strip() if done.returncode == 0 else None
 
     def probe(self, ref):
-        done = self._run('manifest', 'inspect', ref, check=False)
+        # The daemon talks plain HTTP to a loopback registry on its own; the
+        # CLI-side manifest query needs to be told. Never for any other host.
+        loopback = ref.split('/', 1)[0].rsplit(':', 1)[0] in ('localhost', '127.0.0.1', '[::1]')
+        done = self._run('manifest', 'inspect', *(['--insecure'] if loopback else []), ref, check=False)
         if done.returncode == 0:
             return 'present'
         text = done.stderr.decode('utf-8', 'replace').lower() + done.stdout.decode('utf-8', 'replace').lower()
@@ -691,11 +716,34 @@ class DockerRegistry:
         return 'error'
 
     def publish(self, ref, context, files, labels):
-        (Path(context) / 'Dockerfile').write_text('FROM scratch\nCOPY %s /\n' % ' '.join(files))
-        args = ['build', '-q', '--provenance=false']
+        """One layer holding `files` at /, streamed to `docker import`.
+
+        No `docker build`: its context and layer would stay in the build cache,
+        twice the size of every provider pushed.
+        """
+        args = [self.docker, 'import']
         for label, value in sorted(labels.items()):
-            args += ['--label', '%s=%s' % (label, value)]
-        self._run(*args, '-t', ref, str(context))
+            args += ['--change', 'LABEL %s=%s' % (json.dumps(label), json.dumps(value))]
+        with tempfile.TemporaryFile() as errors:
+            try:
+                process = subprocess.Popen(args + ['-', ref], stdin=subprocess.PIPE,
+                                           stdout=subprocess.DEVNULL, stderr=errors)
+            except OSError as error:
+                raise CacheError('docker import: %s' % error)
+            try:
+                with tarfile.open(fileobj=process.stdin, mode='w|', format=tarfile.PAX_FORMAT) as layer:
+                    for name in files:
+                        layer.add(str(Path(context) / name), arcname=name, recursive=False)
+                process.stdin.close()
+                code = process.wait(self.timeout)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                process.kill()
+                process.wait()
+                code = 'interrupted: %s' % error
+            if code != 0:
+                errors.seek(0)
+                raise CacheError('docker import failed (%s): %s'
+                                 % (code, errors.read().decode('utf-8', 'replace').strip()[-400:]))
         try:
             self._run('push', '-q', ref)
         finally:
@@ -729,35 +777,39 @@ class ProviderCache:
         self.enabled = self.prefix != 'off'
         self.override = toolchain_override
         self.log = log or (lambda message: print(message, file=sys.stderr))
-        self._keys = None
+        self._keys, self._context = {}, None
 
     # -- keys -----------------------------------------------------------------
     def toolchain(self):
         return self.override or self.tree.recorded_toolchain()
 
-    def keys(self):
-        if self._keys is None:
-            records = self.tree.fetched_records()
-            toolchain, root, repo = self.toolchain(), str(self.tree.root), str(self.tree.repo)
-            recipes = {}
+    def keys(self, names=None):
+        """{name: (key, document)}; only the named providers and their
+        prerequisites are derived, so one provider's missing input does not
+        take the cache away from the others."""
+        if self._context is None:
+            self._context = (self.tree.fetched_records(), self.toolchain(), {})
+        records, toolchain, recipes = self._context
+        root, repo = str(self.tree.root), str(self.tree.repo)
 
-            def facts(name):
-                entry = self.manifest['providers'][name]
-                recipe = entry['recipe']
-                if recipe not in recipes:  # several providers share one recipe
-                    recipes[recipe] = self.tree.recipe_files(recipe_sources(self.manifest, recipe),
-                                                             self.manifest['recipe_exclude'])
-                return {'recipe_files': recipes[recipe], 'locks': self.tree.locks(entry['locks']),
-                        'fetched': select_fetched(records, entry['fetched'], root),
-                        'toolchain': toolchain, 'root': root, 'repo': repo}
+        def facts(name):
+            entry = self.manifest['providers'][name]
+            recipe = entry['recipe']
+            if recipe not in recipes:  # several providers share one recipe
+                recipes[recipe] = self.tree.recipe_files(recipe_sources(self.manifest, recipe),
+                                                         self.manifest['recipe_exclude'])
+            return {'recipe_files': recipes[recipe], 'locks': self.tree.locks(entry['locks']),
+                    'fetched': select_fetched(records, entry['fetched'], root),
+                    'toolchain': toolchain, 'root': root, 'repo': repo}
 
-            self._keys = derive_keys(self.manifest, facts)
+        self._keys = derive_keys(self.manifest, facts, names, self._keys)
         return self._keys
 
     def key(self, name):
-        if name not in self.manifest['providers']:
-            raise CacheError('unknown provider ' + name)
-        return self.keys()[name][0]
+        return self.keys([name])[name][0]
+
+    def explain(self, name):
+        return self.keys([name])[name][1]
 
     def ref(self, name):
         return image_ref(self.prefix, name, self.key(name))
@@ -832,7 +884,7 @@ class ProviderCache:
             meta = {'schema': SCHEMA, 'provider': name, 'key': key, 'root': str(self.tree.root),
                     'repo': str(self.tree.repo), 'marker': entry['marker'], 'marker_sha256': marker,
                     'tar_sha256': tar_sha, 'files_sha256': sha256_bytes(files_text.encode()),
-                    'prerequisite_markers': markers, 'key_inputs': self.keys()[name][1]}
+                    'prerequisite_markers': markers, 'key_inputs': self.explain(name)}
             (context / 'files.json').write_text(files_text)
             (context / 'meta.json').write_text(json.dumps(meta, sort_keys=True, indent=1) + '\n')
             (context / 'status.json').write_bytes(status_bytes)
@@ -844,6 +896,8 @@ class ProviderCache:
                 'dev.uds.takx.tar-sha256': tar_sha})
         finally:
             shutil.rmtree(context, ignore_errors=True)
+        if self.registry.probe(ref) != 'present':
+            raise CacheError('%s: pushed, but the registry does not show %s' % (name, ref))
         self.tree.record_push((name, key, ref, tar_sha))
         self.log('provider-cache: pushed %s (%d entries, tar sha256 %s)' % (ref, len(entries), tar_sha))
         return ref
@@ -926,9 +980,15 @@ class ProviderCache:
         pushed = self.tree.pushed()
         result = []
         for name in order(self.manifest['providers']):
-            key = self.key(name)
-            ref = image_ref(self.prefix, name, key) if self.enabled else '-'
             local = self.tree.status_of(name) if self.tree.has_directory(name) else 'absent'
+            try:
+                key = self.key(name)
+            except CacheError as error:
+                self.log('provider-cache: %s has no key: %s' % (name, error))
+                result.append({'name': name, 'key': '-', 'ref': '-', 'local': local, 'remote': 'no-key',
+                               'tar_sha256': '-'})
+                continue
+            ref = image_ref(self.prefix, name, key) if self.enabled else '-'
             state = (self.registry.probe(ref) if remote and self.enabled
                      else 'pushed' if (name, key) in pushed else 'unknown')
             result.append({'name': name, 'key': key, 'ref': ref, 'local': local, 'remote': state,
@@ -970,7 +1030,7 @@ def main(argv=None, service=None, out=None):
             names = order(providers, args.names or None)
             for name in names:
                 if args.explain:
-                    print(json.dumps({'key': service.key(name), 'inputs': service.keys()[name][1]},
+                    print(json.dumps({'key': service.key(name), 'inputs': service.explain(name)},
                                      indent=1, sort_keys=True), file=out)
                 elif len(args.names) == 1:
                     print(service.key(name), file=out)

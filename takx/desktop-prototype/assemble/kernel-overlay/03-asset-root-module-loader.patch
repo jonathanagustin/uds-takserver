@@ -1,0 +1,43 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype Kernel Java overlay: the desktop AssetManager of this
+# Kernel build (takx/compat) serves assets only from URLClassLoader URLs or
+# java.class.path entries. TAKX runs under JBoss Modules, where the Kernel JAR
+# is neither, so every asset open failed. The JAR or directory that holds the
+# desktop classes themselves is added as a declared root. Putting the Kernel
+# JAR on java.class.path instead is wrong: JNI FindClass on native threads then
+# loads a second copy of the Kernel classes through the system class loader.
+--- a/compat/android/content/res/AssetManager.java
++++ b/compat/android/content/res/AssetManager.java
+@@ -44,10 +44,30 @@
+         }
+         if (system) for (String entry : System.getProperty("java.class.path", "").split(java.io.File.pathSeparator, -1))
+             roots.add(Path.of(entry.isEmpty() ? "." : entry).toAbsolutePath().normalize());
++        Path own = ownRoot();
++        if (own != null) roots.add(own);
+         if (roots.isEmpty() && !(loader instanceof URLClassLoader))
+             throw new IOException("ClassLoader does not expose real directory/JAR asset roots");
+         return new ArrayList<>(roots);
+     }
++    /**
++     * The JAR or directory these desktop classes were loaded from. A module
++     * class loader (TAKX runs under JBoss Modules) is not a URLClassLoader and
++     * its JARs are not on java.class.path, so the assets packaged next to
++     * these classes would otherwise have no declared root.
++     */
++    private static Path ownRoot() throws IOException {
++        java.security.CodeSource source = Resources.class.getProtectionDomain().getCodeSource();
++        if (source == null || source.getLocation() == null) return null;
++        URL url = source.getLocation();
++        if (url.getProtocol().equals("jar")) {
++            String spec = url.getFile();
++            if (!spec.endsWith("!/") || spec.indexOf("!/") != spec.length() - 2) return null;
++            url = new URL(spec.substring(0, spec.length() - 2));
++        }
++        if (!url.getProtocol().equals("file")) return null;
++        return path(url).toAbsolutePath().normalize();
++    }
+     private static Path path(URL url) throws IOException {
+         try { return Path.of(url.toURI()); }
+         catch (java.net.URISyntaxException | IllegalArgumentException error) { throw new IOException("Invalid asset root URL", error); }

@@ -748,6 +748,29 @@ class PushAndRestore(ServiceCase):
             self.service.push('top')
         self.assertEqual(self.registry.published, 0)
 
+    def test_one_provider_without_its_inputs_does_not_take_the_cache_from_the_others(self):
+        self.write_json('status/fetch.json', {'status': 'ok', 'inputs': [
+            {'kind': 'lock-entry', 'name': 'one', 'verified': True, 'expected_sha256': '5' * 64,
+             'consumers': [{'recipe': 'one'}]}]})
+        self.service = self.new_service()
+        self.make('base')
+        self.service.push('base')
+        with self.assertRaises(PC.CacheError):
+            self.service.key('top')
+        rows = {row['name']: row for row in self.service.rows()}
+        self.assertEqual((rows['top']['key'], rows['top']['remote']), ('-', 'no-key'))
+        self.assertEqual(rows['base']['remote'], 'pushed')
+        self.set_aside('base')
+        self.service.restore('base')
+
+    def test_push_that_the_registry_does_not_show_afterwards_is_an_error(self):
+        self.make('base')
+        self.registry.publish = lambda ref, context, files, labels: None
+        with self.assertRaises(PC.CacheError):
+            self.service.push('base')
+        self.assertEqual(self.service.tree.pushed(), {})
+        self.assertEqual(self.leftovers(), [])
+
     def test_stale_image_record_is_refused_unless_overridden(self):
         self.make('base')
         self.registry.toolchain = 'sha256:' + '7' * 64
@@ -968,6 +991,118 @@ class LaneHooks(unittest.TestCase):
                 self.assertEqual(code, 0, text)
                 self.assertEqual(self.calls('cache'), [])
                 self.assertEqual(self.state(self.CASES[lane][1]).get('status'), 'ok')
+
+
+DOCKER_RECORDER = r"""#!/bin/bash
+# Records every call; behaviour comes from files next to it.
+dir="$(dirname "$0")"
+printf '%s\n' "$*" >> "$dir/calls"
+case "$1" in
+  import) cat > "$dir/layer.tar";;
+  create) echo container-id;;
+  image) echo '{"dev.uds.takx.provider":"p"}';;
+  cp) echo copied > "$3";;
+esac
+if [[ -f "$dir/fail-$1" ]]; then cat "$dir/fail-$1" >&2; exit 1; fi
+exit 0
+"""
+
+
+class DockerAdapter(unittest.TestCase):
+    """DockerRegistry against a recording `docker`; no daemon involved."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        (self.dir / 'docker').write_text(DOCKER_RECORDER)
+        os.chmod(self.dir / 'docker', 0o755)
+        self.registry = PC.DockerRegistry(30, str(self.dir / 'docker'))
+
+    def calls(self):
+        path = self.dir / 'calls'
+        return path.read_text().splitlines() if path.exists() else []
+
+    def test_probe_classifies_the_answer_of_the_registry(self):
+        ref = 'ghcr.io/owner/cache/p:' + 'a' * 64
+        self.assertEqual(self.registry.probe(ref), 'present')
+        for text, expected in (('manifest unknown', 'absent'), ('no such manifest: x', 'absent'),
+                               ('unauthorized: authentication required', 'unauthorized'),
+                               ('denied: denied', 'unauthorized'), ('no basic auth credentials', 'unauthorized'),
+                               ('error pinging v2 registry: Bad Gateway', 'error'), ('', 'error')):
+            (self.dir / 'fail-manifest').write_text(text + '\n')
+            with self.subTest(text=text):
+                self.assertEqual(self.registry.probe(ref), expected)
+
+    def test_only_a_loopback_registry_is_queried_without_tls(self):
+        for host, insecure in (('ghcr.io', False), ('registry.example:5000', False), ('localhost.example', False),
+                               ('127.0.0.1:5000', True), ('localhost:5000', True), ('localhost', True)):
+            self.registry.probe(host + '/cache/p:tag')
+            with self.subTest(host=host):
+                self.assertEqual(self.calls()[-1], 'manifest inspect %s%s/cache/p:tag'
+                                 % ('--insecure ' if insecure else '', host))
+
+    def test_publish_streams_one_layer_and_never_builds(self):
+        context = self.dir / 'context'
+        context.mkdir()
+        (context / 'p.tar').write_bytes(b'archive')
+        (context / 'meta.json').write_text('{}')
+        (context / 'unlisted').write_text('stays')
+        self.registry.publish('reg/p:tag', context, ['p.tar', 'meta.json'], {'b': 'two words', 'a': '1'})
+        self.assertEqual(self.calls(), ['import --change LABEL "a"="1" --change LABEL "b"="two words" - reg/p:tag',
+                                        'push -q reg/p:tag', 'rmi reg/p:tag'])
+        with tarfile.open(self.dir / 'layer.tar') as layer:
+            self.assertEqual(layer.getnames(), ['p.tar', 'meta.json'])
+            self.assertEqual(layer.extractfile('p.tar').read(), b'archive')
+        self.assertEqual(sorted(os.listdir(context)), ['meta.json', 'p.tar', 'unlisted'])
+
+    def test_failed_import_or_push_is_an_error_and_leaves_no_image(self):
+        context = self.dir / 'context'
+        context.mkdir()
+        (context / 'p.tar').write_bytes(b'archive')
+        (self.dir / 'fail-push').write_text('denied\n')
+        with self.assertRaises(PC.CacheError):
+            self.registry.publish('reg/p:tag', context, ['p.tar'], {})
+        self.assertEqual(self.calls()[-2:], ['push -q reg/p:tag', 'rmi reg/p:tag'])
+        (self.dir / 'calls').unlink()
+        (self.dir / 'fail-import').write_text('no space\n')
+        with self.assertRaises(PC.CacheError) as caught:
+            self.registry.publish('reg/p:tag', context, ['p.tar'], {})
+        self.assertIn('no space', str(caught.exception))
+        self.assertEqual([call.split()[0] for call in self.calls()], ['import'])
+
+    def test_fetch_copies_the_named_files_and_removes_container_and_image(self):
+        target = self.dir / 'target'
+        target.mkdir()
+        labels = self.registry.fetch('reg/p:tag', target, ['p.tar', 'meta.json'])
+        self.assertEqual(labels, {'dev.uds.takx.provider': 'p'})
+        self.assertEqual(self.calls(), [
+            'pull -q reg/p:tag', 'image inspect --format {{json .Config.Labels}} reg/p:tag',
+            'create reg/p:tag /nonexistent', 'cp container-id:/p.tar %s/p.tar' % target,
+            'cp container-id:/meta.json %s/meta.json' % target, 'rm -f container-id', 'rmi reg/p:tag'])
+        (self.dir / 'calls').unlink()
+        (self.dir / 'fail-cp').write_text('no such file\n')
+        with self.assertRaises(PC.CacheError):
+            self.registry.fetch('reg/p:tag', target, ['p.tar'])
+        self.assertEqual(self.calls()[-2:], ['rm -f container-id', 'rmi reg/p:tag'])
+        (self.dir / 'calls').unlink()
+        (self.dir / 'fail-pull').write_text('manifest unknown\n')
+        with self.assertRaises(PC.CacheError):
+            self.registry.fetch('reg/p:tag', target, ['p.tar'])
+        self.assertEqual(self.calls(), ['pull -q reg/p:tag'])
+
+    def test_image_id_and_availability(self):
+        self.assertTrue(self.registry.available())
+        self.assertFalse(PC.DockerRegistry(30, str(self.dir / 'missing')).available())
+        (self.dir / 'fail-image').write_text('No such image\n')
+        self.assertIsNone(self.registry.image_id(PC.TOOLCHAIN))
+        with self.assertRaises(PC.CacheError):
+            PC.DockerRegistry(30, str(self.dir / 'missing')).probe('reg/p:tag')
+
+    def test_the_module_never_reads_docker_credentials(self):
+        text = (HERE / 'provider_cache.py').read_text()
+        for word in ('config.json', '.docker', 'DOCKER_CONFIG', 'docker login', "'login'", '--password'):
+            self.assertNotIn(word, text.replace('`docker login`', ''))
 
 
 class RepositoryManifest(unittest.TestCase):

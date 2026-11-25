@@ -10,6 +10,7 @@
 # Usage: session.sh DIST RUNDIR LOG [takx arguments...]
 #
 # TAKX_BOOT_NO_X=1 starts no X server (for the -headless switch).
+# TAKX_BOOT_DELAY_S=N waits N seconds between the X session and the JVM.
 set -uo pipefail
 
 dist="$1"; rundir="$2"; log="$3"; shift 3
@@ -45,6 +46,10 @@ fi
   java -version 2>&1
 } >>"$log" 2>&1
 
+# TAKX_BOOT_DELAY_S leaves the empty desktop up for that many seconds first,
+# so that a screen recording can start before the JVM does.
+sleep "${TAKX_BOOT_DELAY_S:-0}"
+echo "===== $(date -u +%FT%TZ) session: starting the JVM" >>"$log"
 "$here/launch.sh" "$tree" "$rundir" "$@" >>"$log" 2>&1
 rc=$?
 echo "$rc" >"$rundir/java.exit"

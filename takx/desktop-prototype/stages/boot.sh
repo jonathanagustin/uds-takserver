@@ -8,9 +8,12 @@
 # collect evidence. Every attempt gets its own number, run directory and log;
 # nothing is reused between attempts and no log is deleted.
 #
-#   start [--headless] [takx arguments...]
+#   start [--headless] [--trust-sandbox-ca] [takx arguments...]
 #            start attempt <n> detached in container takx-boot. --headless
 #            passes the client's own -headless switch and starts no X server.
+#            --trust-sandbox-ca gives the JVM the trust store that holds the
+#            JDK roots plus the sandbox proxy CA, so public map tiles can be
+#            fetched through the TLS-intercepting proxy with verification on.
 #            Default arguments: -create
 #   wait S   wait up to S seconds (at most 540) for the JVM to end; prints
 #            'running' or 'exited <code>'
@@ -52,8 +55,19 @@ running() { [[ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" =
 inside() { docker exec -e DISPLAY=:99 "$name" "$@"; }
 
 do_start() {
-  local headless=0 n=1 extra=() envs=() pair
-  if [[ "${1:-}" == --headless ]]; then headless=1; shift; fi
+  local headless=0 n=1 extra=() envs=() pair jvm="${TAKX_BOOT_JVM_OPTS:-}" store="$root/ca/java-cacerts.p12"
+  while [[ "${1:-}" == --headless || "${1:-}" == --trust-sandbox-ca ]]; do
+    if [[ "$1" == --headless ]]; then headless=1; else
+      # The sandbox reaches the network through a TLS-intercepting proxy. The
+      # trust store built by run-in-toolchain.sh holds the JDK roots plus that
+      # proxy CA; verification stays on. Without it every map tile request
+      # fails its certificate check, which is the correct default.
+      "$run" --java-truststore >/dev/null
+      [[ -s "$store" ]] || { echo "boot: no sandbox trust store at $store" >&2; exit 1; }
+      jvm="$jvm -Djavax.net.ssl.trustStore=$store -Djavax.net.ssl.trustStorePassword=changeit"
+    fi
+    shift
+  done
   (($#)) || set -- -create
   [[ -s "$dist/manifest.json" ]] || { echo "boot: no assembled tree; run assemble.sh" >&2; exit 1; }
   while [[ -e "$root/logs/boot-$n.log" || -e "$root/runs/boot-$n" ]]; do n=$((n + 1)); done
@@ -66,7 +80,7 @@ do_start() {
   extra+=(--mount "$media:$media" --docker-arg --shm-size=1g)
   echo "boot-$n" >"$root/runs/current"
   "$run" --runtime -d --name "$name" "${extra[@]}" "${envs[@]}" \
-    -e "EXTRA_JVM_OPTS=${TAKX_BOOT_JVM_OPTS:-}" -- \
+    -e "EXTRA_JVM_OPTS=$jvm" -- \
     "$repo/takx/desktop-prototype/assemble/session.sh" "$dist" "$root/runs/boot-$n" "$root/logs/boot-$n.log" "$@" >/dev/null
   echo "boot: attempt $n started; log $root/logs/boot-$n.log" >&2
 }
