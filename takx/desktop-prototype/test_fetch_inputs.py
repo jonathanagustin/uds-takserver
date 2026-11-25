@@ -91,8 +91,10 @@ def http_error(code, url='https://example.invalid/'):
 class Body(io.BytesIO):
     """A response that hands out at most `step` bytes per sized read, like a socket does."""
     step = 5
+    sizes = []
 
     def read(self, size=-1):
+        self.sizes.append(size)
         return super().read() if size is None or size < 0 else super().read(min(size, self.step))
 
 
@@ -125,7 +127,8 @@ class Case(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix='fetch-inputs-test-')).resolve()
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.records, self.sleeps, self.logs, self.net = [], [], [], Net()
+        self.records, self.sleeps, self.logs, self.net, self.run_envs = [], [], [], Net(), []
+        Body.sizes.clear()
         self.patch(F, 'RECORDS', self.records)
         self.clock = types.SimpleNamespace(sleep=self.sleeps.append, time=time.time, strftime=time.strftime)
         self.patch(F, 'time', self.clock)
@@ -155,9 +158,31 @@ class Case(unittest.TestCase):
 
         def spy(argv, **keywords):
             calls.append(([str(a) for a in argv], {k: v for k, v in keywords.items() if k not in ('env', 'stdout')}))
+            self.run_envs.append(keywords.get('env'))
             return REAL_RUN(argv, **keywords)
         self.patch(F, 'run', spy)
         return calls
+
+    def assert_hermetic_git(self, count=None):
+        """Every recorded F.run call got the environment of git_env(), not the inherited one."""
+        if count is not None:
+            self.assertEqual(len(self.run_envs), count)
+        self.assertTrue(self.run_envs)
+        for env in self.run_envs:
+            self.assertIsNotNone(env)
+            self.assertEqual((env['GIT_CONFIG_GLOBAL'], env['GIT_CONFIG_SYSTEM'], env['GIT_LFS_SKIP_SMUDGE'],
+                              env['GIT_TERMINAL_PROMPT']), ('/dev/null', '/dev/null', '1', '0'))
+
+    def spy_download(self):
+        """Record where download() is asked to write."""
+        targets = []
+        real = F.download
+
+        def spy(url, target, *arguments, **keywords):
+            targets.append(target)
+            return real(url, target, *arguments, **keywords)
+        self.patch(F, 'download', spy)
+        return targets
 
     def names(self, directory):
         return sorted(p.relative_to(directory).as_posix() for p in directory.rglob('*') if not p.is_dir())
@@ -176,11 +201,36 @@ class Primitives(Case):
         (self.tmp / 'empty').write_bytes(b'')
         self.assertEqual(F.digest(self.tmp / 'empty'), sha(b''))
 
-    def test_log_prints_timestamp_and_parts(self):
-        output = io.StringIO()
+    def test_log_prints_timestamp_and_parts_and_flushes(self):
+        class Stream(io.StringIO):
+            flushed = 0
+
+            def flush(self):
+                self.flushed += 1
+        output = Stream()
         with contextlib.redirect_stdout(output):
             REAL_LOG('alpha', 7)
         self.assertRegex(output.getvalue(), r'\A\d\d:\d\d:\d\d alpha 7\n\Z')
+        self.assertEqual(output.flushed, 1)
+
+    def test_digest_never_reads_more_than_a_mebibyte_at_once(self):
+        path = self.tmp / 'blob'
+        path.write_bytes(b'x' * ((1 << 20) + 5))
+        sizes = []
+        real = open
+
+        def spying_open(*arguments, **keywords):
+            stream = real(*arguments, **keywords)
+            read = stream.read
+            wrapper = mock.Mock(wraps=stream)
+            wrapper.read = lambda size=-1: sizes.append(size) or read(size)
+            wrapper.__enter__ = lambda inner: wrapper
+            wrapper.__exit__ = lambda inner, *a: stream.close()
+            return wrapper
+        with mock.patch('builtins.open', spying_open):
+            value = F.digest(path)
+        self.assertEqual(value, sha(b'x' * ((1 << 20) + 5)))
+        self.assertEqual(sizes, [1 << 20] * 3)
 
     def test_record_defaults_to_unverified_and_reports_it(self):
         first = F.record(name='n', note='why')
@@ -318,6 +368,7 @@ class Download(Case):
         self.assertEqual(self.net.timeouts, [60])
         self.assertEqual(self.net.requests[0].get_header('User-agent'), 'takx-desktop-prototype-fetch/1')
         self.assertEqual(self.sleeps, [])
+        self.assertEqual(Body.sizes, [1 << 20] * 4, 'the response is read in bounded blocks until it is empty')
 
     def test_limit_is_inclusive_and_counts_all_blocks(self):
         self.net.routes[self.URL] = [b'0123456789abc']
@@ -615,6 +666,7 @@ class GitFetch(Case):
 class GitArchive(Case):
     BIG = b'real bytes of the large object\n' * 3
     SPACED = b'second object'
+    LAST = b'third object, listed after everything that is skipped'
 
     @classmethod
     def setUpClass(cls):
@@ -631,6 +683,8 @@ class GitArchive(Case):
             'looks-like-pointer.txt': pointer_text(b'never fetched', pad=301),
             'small-other.txt': b'oid sha256:' + b'0' * 64 + b'\nsize 5\n',
             'headed-only.txt': POINTER_HEAD + b'oid sha256:short\n',
+            'tab\tin name.txt': b'tab\n',
+            'z-last.bin': pointer_text(cls.LAST),
         }
         cls.lfs_commit = make_repo(cls.base / 'owner/withlfs.git', cls.lfs_files, gitlink='vendored')
 
@@ -711,15 +765,19 @@ class GitArchive(Case):
     def test_include_lfs_replaces_verified_pointers_only(self):
         self.net.routes[self.media('big.bin')] = self.BIG
         self.net.routes[self.media('dir/a%20b.bin')] = self.SPACED
+        self.net.routes[self.media('z-last.bin')] = self.LAST
         calls = self.spy_run()
         self.assertEqual(F.git_archive('owner', 'withlfs', self.lfs_commit, 'w/', self.target, include_lfs=True),
-                         (self.lfs_commit, 2))
+                         (self.lfs_commit, 3))
+        self.assert_hermetic_git()
         members = self.members(self.target)
         self.assertEqual(members['w/big.bin'], self.BIG)
         self.assertEqual(members['w/dir/a b.bin'], self.SPACED)
-        for name in ('plain.txt', 'looks-like-pointer.txt', 'small-other.txt', 'headed-only.txt', '.gitattributes'):
+        self.assertEqual(members['w/z-last.bin'], self.LAST)
+        for name in ('plain.txt', 'looks-like-pointer.txt', 'small-other.txt', 'headed-only.txt', '.gitattributes',
+                     'tab\tin name.txt'):
             self.assertEqual(members['w/' + name], self.lfs_files[name])
-        self.assertEqual(sorted(self.net.calls), sorted([self.media('big.bin'), self.media('dir/a%20b.bin')]))
+        self.assertEqual(self.net.calls, [self.media('big.bin'), self.media('dir/a%20b.bin'), self.media('z-last.bin')])
         self.assertEqual(self.names(self.out), ['archive.tar.gz'])
         work = calls[0][0][-1]
         self.assertEqual(calls[3], (['git', '-C', work, 'ls-tree', '-r', '-l', '-z', self.lfs_commit], {}))
@@ -729,6 +787,7 @@ class GitArchive(Case):
 
     def test_include_lfs_refuses_object_that_differs_from_pointer(self):
         self.net.routes[self.media('dir/a%20b.bin')] = self.SPACED
+        self.net.routes[self.media('z-last.bin')] = self.LAST
         for label, body in (('wrong bytes', b'x' * len(self.BIG)), ('too long', self.BIG + b'x'),
                             ('truncated', self.BIG[:-1]), ('missing', None)):
             with self.subTest(label):
@@ -878,6 +937,9 @@ class LockWalk(Case):
         self.write('r/b.lock.json', {'x': {'url': 'https://e.example/y', 'sha256': self.A, 'bytes': '5'},
                                      'y': {'url': 'https://e.example/z', 'sha256': self.A}})
         self.assertEqual(F.collect_lock_entries()[self.A]['bytes'], 4)
+        self.write('r/a.lock.json', {'x': {'url': 'https://e.example/x', 'sha256': self.A, 'bytes': '4'}})
+        self.write('r/b.lock.json', {'y': {'url': 'https://e.example/z', 'sha256': self.A}})
+        self.assertEqual(F.collect_lock_entries()[self.A]['bytes'], '4')
 
     @unittest.skipUnless((F.TAKX / 'sources.lock.json').is_file(), 'recipe locks are not next to the script')
     def test_real_recipe_locks_parse_into_safe_entries(self):
@@ -966,6 +1028,7 @@ class LockEntry(Case):
         self.patch(F, 'git_archive', fake)
 
     def test_download_is_verified_cached_and_linked(self):
+        targets = self.spy_download()
         item = self.item(consumers=[
             {'recipe': 'native-x', 'lock': 'takx/native-x/inputs.lock.json', 'name': 'thing.tar.xz', 'prefix': None},
             {'recipe': 'compat', 'lock': 'takx/compat/a.lock.json', 'name': 'other-name.tar.xz', 'prefix': None}])
@@ -979,6 +1042,7 @@ class LockEntry(Case):
             self.assertFalse((self.root / name).is_symlink())
         self.assertEqual((self.cache / item['sha256']).read_bytes(), self.DATA)
         self.assertEqual(self.logs, [])
+        self.assertEqual(targets, [self.cache / ('.candidate-' + item['sha256'])])
 
     def test_wrong_bytes_are_rejected_not_cached(self):
         item = self.item()
@@ -1118,12 +1182,16 @@ class LockEntry(Case):
     def test_gitiles_garbage_is_refused(self):
         url = 'https://android.googlesource.com/platform/+/rev/Base64.java?format=TEXT'
         item = self.item(url=url)
-        self.net.routes[url] = b'<html>not base64</html>'
-        F.fetch_lock_entry(item, self.cache, {})
-        self.assertEqual(len(self.records), 1)
-        self.assertRegex(self.records[0].pop('note'), r'\Agitiles response is not base64: ')
-        self.assertEqual(self.records, [{k: v for k, v in self.failed(item).items() if k != 'note'}])
-        self.assertEqual(self.names(self.root), [])
+        encoded = base64.b64encode(self.DATA)
+        for body in (b'<html>not base64</html>', encoded + b'\n', encoded[:8] + b' ' + encoded[8:], encoded[:-2]):
+            with self.subTest(body=body):
+                self.records.clear()
+                self.net.routes[url] = body
+                F.fetch_lock_entry(item, self.cache, {})
+                self.assertEqual(len(self.records), 1)
+                self.assertRegex(self.records[0].pop('note'), r'\Agitiles response is not base64: ')
+                self.assertEqual(self.records, [{k: v for k, v in self.failed(item).items() if k != 'note'}])
+                self.assertEqual(self.names(self.root), [])
 
     def test_only_gitiles_text_urls_are_decoded(self):
         encoded = base64.b64encode(self.DATA)
@@ -1288,6 +1356,7 @@ class LfsPointers(Case):
             'removed.bin': pointer_text(b'six'),
             'link.bin': 'a/plain pointer.bin',
             'extra-lines.bin': POINTER_HEAD + b'ext-0 x\noid sha256:' + b'2' * 64 + b'\nsize 12345678901\nmore\n',
+            'zz-last.bin': pointer_text(b'last'),
         }
         make_repo(source, files)
         (source / 'removed.bin').unlink()
@@ -1297,8 +1366,10 @@ class LfsPointers(Case):
             'a/plain pointer.bin': {'oid': sha(b'one'), 'size': 3},
             'exactly-300.bin': {'oid': sha(b'two'), 'size': 3},
             'extra-lines.bin': {'oid': '2' * 64, 'size': 12345678901},
+            'zz-last.bin': {'oid': sha(b'last'), 'size': 4},
         })
         self.assertEqual(calls, [(['git', '-C', str(source), 'ls-files', '-z'], {})])
+        self.assert_hermetic_git(1)
 
     def test_unreadable_entries_are_skipped(self):
         source = self.tmp / 'checkout'
@@ -1340,7 +1411,9 @@ class FetchLfs(Case):
 
     def test_download_is_checked_against_pointer_and_linked(self):
         self.net.routes[self.URL] = self.DATA
+        targets = self.spy_download()
         self.fetch()
+        self.assertEqual(targets, [self.cache / ('.candidate-lfs-' + self.pointer['oid'])])
         self.assertEqual(self.records, [self.expected()])
         self.assertEqual(self.names(self.tmp / 'root'), ['cache/' + self.pointer['oid'], 'src/atak-civ-lfs/' + self.NAME])
         self.assertTrue(os.path.samefile(self.target, self.tree / self.NAME))
@@ -1611,6 +1684,9 @@ class Cesium(Case):
             'file outside the root directory': (self.tree_archive(extra=[('stray', 'file', b'x')]), 3, 0, 1),
             'symlink replacing a pinned file': (
                 self.tree_archive(files=missing, extra=[(root + '/src/a.cpp', 'symlink', 'deep/b.h')]), 2, 1, 1),
+            'two links': (self.tree_archive(extra=[(root + '/one', 'symlink', 'x'), (root + '/two', 'symlink', 'y')]), 3, 0, 2),
+            'link listed before the files': (make_tar(
+                [(root + '/evil', 'symlink', '/etc/passwd')] + [(root + '/' + k, 'file', v) for k, v in self.FILES.items()]), 3, 0, 1),
             'empty archive': (make_tar([]), 0, 3, 0),
         }
         for label, (data, files, differing, unpinned) in cases.items():
@@ -1643,10 +1719,30 @@ class Cesium(Case):
                 (self.root / 'cache-cesium/cesium.tar.gz').write_bytes(data)
                 self.archive()
                 record = self.run_port(0)
-                self.assertRegex(record.pop('note'), r'\Aarchive is not readable: \w+: ')
+                self.assertRegex(record.pop('note'), r'\Aarchive is not readable: (ReadError|EOFError|BadGzipFile|error): ')
                 expected = self.cesium_record(data, verified=False, actual_sha256=None, path=None, cached=True, commit=self.COMMIT)
                 del expected['note']
                 self.assertEqual(record, expected)
+
+    def test_read_error_after_an_unpinned_member_cannot_cancel_it(self):
+        root = 'cesium-native-' + self.COMMIT
+        noise = b''.join(hashlib.sha256(b'%d' % index).digest() for index in range(4096))
+        whole = self.tree_archive(extra=[(root + '/evil', 'symlink', '/etc/passwd'), (root + '/zz-noise.bin', 'file', noise)])
+        data = whole[:-20000]
+        (self.root / 'cache-cesium').mkdir()
+        (self.root / 'cache-cesium/cesium.tar.gz').write_bytes(data)
+        self.archive()
+        record = self.run_port(0)
+        self.assertRegex(record.pop('note'), r'\Aarchive is not readable: EOFError: ')
+        expected = self.cesium_record(data, verified=False, actual_sha256=None, path=None, cached=True, commit=self.COMMIT)
+        del expected['note']
+        self.assertEqual(record, expected)
+
+    def test_failure_without_a_message_still_gets_a_note(self):
+        self.archive(b'plain form', RuntimeError(''))
+        self.assertEqual(self.run_port(), self.port_record(
+            verified=False, actual_sha512=sha(b'plain form', 'sha512'), actual_sha256=None, path=None,
+            note='reconstructed archive differs from the SHA-512 pin'))
 
     def test_other_root_directory_name_is_accepted_like_the_recipe_does(self):
         data = self.tree_archive(root='renamed')
@@ -1681,9 +1777,10 @@ class Checkout(Case):
         direct = []
 
         def spy(argv, **keywords):
-            direct.append(argv)
+            direct.append((argv, keywords.get('stdout'), keywords.get('stderr')))
             return REAL_SUBPROCESS_RUN(argv, **keywords)
         self.patch(F.subprocess, 'run', spy)
+        self.target.mkdir(parents=True)
         F.checkout(self.target, self.repository, self.revision, 'the name')
         self.assertEqual(self.records, [self.expected()])
         target = str(self.target)
@@ -1695,7 +1792,7 @@ class Checkout(Case):
             (['git', '-C', target, 'rev-parse', 'HEAD'], {}),
             (['git', '-C', target, 'status', '--porcelain', '--untracked-files=all'], {}),
         ])
-        self.assertIn(['git', '-C', target, 'rev-parse', '-q', '--verify', 'HEAD'], direct)
+        self.assertIn((['git', '-C', target, 'rev-parse', '-q', '--verify', 'HEAD'], subprocess.PIPE, subprocess.DEVNULL), direct)
         self.assertEqual((self.target / 'a.txt').read_bytes(), b'a\n')
         self.assertEqual(git('-C', self.target, 'rev-parse', 'HEAD'), self.revision)
         self.assertFalse((self.target.parent / 'takx57.lfs-pointers.tsv').exists())
@@ -1868,6 +1965,12 @@ class ClientCompilerJars(Case):
         self.assertEqual(self.names(self.root), ['cache/' + sha(self.JAR), 'jars/client-compiler/closure/maven-public/org.a.b--lib-1.0.jar'])
         self.assertTrue(os.path.samefile(self.cache / sha(self.JAR), self.root / 'jars/client-compiler/closure/maven-public/org.a.b--lib-1.0.jar'))
         self.assertEqual(self.net.calls, [url])
+
+    def test_only_the_first_colon_separates_family_from_path(self):
+        reference = 'family:dir/with:colon/x:y.jar'
+        (self.cache / sha(self.JAR)).write_bytes(self.JAR)
+        self.assertEqual(self.one(reference), self.expected(reference))
+        self.assertEqual(self.names(self.root / 'jars'), ['client-compiler/family/dir/with:colon/x:y.jar'])
 
     def test_later_candidate_is_used_when_the_first_is_absent(self):
         reference = 'closure:maven-public/g--art-2.0-natives.jar'
@@ -2085,6 +2188,17 @@ class PomDependencies(Case):
             b'<artifactId>hidden</artifactId><version>1</version></dependency></dependencies></extension><dependencies>')
         self.publish('org.x', 'child', '2.0', body)
         self.assertEqual(self.dependencies(), [('g', 'a', '1')])
+        body = pom(dependencies=[{'groupId': 'g', 'artifactId': 'a', 'version': '1'}]).replace(
+            b'</dependency>', b'</dependency><dependency xmlns="urn:other"><groupId>h</groupId><artifactId>foreign</artifactId>'
+            b'<version>1</version></dependency>')
+        self.publish('org.x', 'second', '2.0', body)
+        self.assertEqual(self.dependencies(artifact='second'), [('g', 'a', '1')])
+
+    def test_direct_parent_version_is_known_without_grandparent(self):
+        self.publish('org.x', 'child', '2.0', pom(parent=('org.x', 'parent', '7.1'), dependencies=[
+            {'groupId': 'g', 'artifactId': 'a', 'version': '${project.parent.version}'}]))
+        self.publish('org.x', 'parent', '7.1', pom())
+        self.assertEqual(self.dependencies(), [('g', 'a', '7.1')])
 
 
 # --------------------------------------------------------------------------- runtime extras
@@ -2334,7 +2448,7 @@ class RuntimeExtras(Case):
 # --------------------------------------------------------------------------- Debian tools
 
 class CommoncommoTools(Case):
-    BASE = 'https://deb.example/debian'
+    BASE = 'https://deb.example/dists/debian'
     INRELEASE, PACKAGES, ANT, DOS2UNIX = b'signed release', b'packages index', b'ant package', b'dos2unix package'
     LOCK = 'takx/native-commoncommo/inputs.lock.json'
     DIFFERS = ('live file differs from the pin (a Debian point release replaces InRelease; '
@@ -2394,7 +2508,9 @@ class CommoncommoTools(Case):
         stale.mkdir(parents=True)
         (stale / 'left-over').write_bytes(b'x')
         calls = self.spy_run()
+        targets = self.spy_download()
         F.fetch_commoncommo_tools(self.root)
+        self.assertEqual(targets, [self.metadata / ('.candidate-' + name) for name in self.urls])
         self.assertEqual(self.records, [self.expected(name) for name in self.urls])
         self.assertEqual(self.net.calls, list(self.urls.values()))
         self.assertEqual(self.names(self.root / 'cache-commoncommo-tools'), [
@@ -2626,8 +2742,20 @@ class Main(Case):
         (self.root / 'status').mkdir()
         for stale in ('cache/.candidate-old', 'cache/.partial-old', 'cache/kept', 'status/.candidate-elsewhere'):
             (self.root / stale).write_bytes(b'stale')
+        replaced = []
+        real_replace = Path.replace
+
+        def replace(path, target):
+            replaced.append((path, target))
+            return real_replace(path, target)
+        self.patch(F.Path, 'replace', replace)
+        self.spy_run()
         self.assertEqual(self.main(), 0)
+        self.assert_hermetic_git()
         self.assertEqual(self.jobs, [((4,), {})])
+        self.assertEqual(replaced, [(self.root / 'status/.fetch.json', self.root / 'status/fetch.json')])
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), [
+            'cache', 'cache-cesium', 'cache-commoncommo-tools', 'cache-gis-java', 'inputs', 'jars', 'logs', 'src', 'status'])
         text = (self.root / 'status/fetch.json').read_text()
         status = json.loads(text)
         self.assertEqual(text, json.dumps(status, indent=1) + '\n')
@@ -2782,6 +2910,28 @@ class Main(Case):
             self.main('--only', 'jars')
         self.assertEqual(self.names(self.root / 'status'), [])
 
+    def test_worker_exception_in_any_group_of_a_full_run_is_not_swallowed(self):
+        originals = {name: getattr(F, name) for name in ('fetch_lock_entry', 'fetch_lfs', 'fetch_commoncommo_tools', 'checkout')}
+        for name in originals:
+            with self.subTest(name=name):
+                shutil.rmtree(self.root, ignore_errors=True)
+                with mock.patch.object(F, name, mock.Mock(side_effect=KeyError('unexpected'))), self.assertRaises(KeyError):
+                    self.main()
+                self.assertEqual(self.names(self.root / 'status'), [])
+        entries, one = F.fetch_cesium(self.tmp)
+        with mock.patch.object(F, 'fetch_cesium', lambda root: (entries, mock.Mock(side_effect=KeyError('unexpected')))), \
+                self.assertRaises(KeyError):
+            self.main()
+        self.assertEqual(self.names(self.root / 'status'), [])
+
+    def test_work_directory_removed_by_someone_else_does_not_break_the_end_of_the_run(self):
+        def inject(root):
+            shutil.rmtree(root / 'tmp')
+        self.patch(F, 'fetch_commoncommo_tools', inject)
+        self.assertEqual(self.main('--only', 'debian'), 0)
+        self.assertEqual(self.names(self.root / 'status'), ['fetch-partial.json'])
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ['cache', 'inputs', 'jars', 'logs', 'src', 'status'])
+
     def test_only_limits_the_groups_and_writes_the_partial_status(self):
         (self.root / 'status').mkdir(parents=True)
         (self.root / 'status/fetch.json').write_text('{"previous": "full run"}\n')
@@ -2901,8 +3051,8 @@ class Main(Case):
             self.parse_only('--help')
         self.assertEqual(caught.exception.code, 0)
         self.assertIn('cache/<sha256>                       flat cache used by native-deps `acquire`\n', output.getvalue())
-        self.assertIn('limit to some groups (default: all); the status file is only written for a full run',
-                      ' '.join(output.getvalue().split()))
+        self.assertRegex(output.getvalue(), r'\n +limit to some groups \(default: all\); the status file\n +'
+                                            r'is only written for a full run\n\Z')
         self.assertIn('--only {locks,lfs,cesium,git,jars,extras,debian}', output.getvalue())
 
 

@@ -211,6 +211,9 @@ do_kml() {
 }
 
 (($#)) || set -- all
+# One driver at a time: two concurrent runs would set aside each other's outputs.
+exec 9>"$ROOT/status/.lane1.lock"
+flock -n 9 || { echo "lane1.sh: another lane1.sh run holds $ROOT/status/.lane1.lock" >&2; exit 3; }
 rc=0
 for step in "$@"; do
   case "$step" in

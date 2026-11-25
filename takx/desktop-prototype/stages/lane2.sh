@@ -167,7 +167,7 @@ provider() {
     outputs[$item]="$out/${outputs[$item]}"
   done
   write_status "$name" ok "$seconds" \
-    "takx/$recipe/build.py exit 0; its test_build.py passed ($(tail -n 3 "$vlog" | tr '\n' ' ' | sed 's/  */ /g')); complete.json sha256 $sha" \
+    "takx/$recipe/build.py exit 0; its test_build.py passed ($(tail -n 3 "$vlog" | tr '\n' ' ' | sed 's/  */ /g')); complete.json sha256 $sha${extra_note:+; $extra_note}" \
     "${outputs[@]}"
   log "$name: ok in ${seconds}s"
 }
@@ -222,6 +222,7 @@ stage_commoncommo() {
   # native-commoncommo has no proof-replay test: its acceptance is the five
   # -Xcheck:jni smokes it runs before writing complete.json. test_build.py holds
   # its offline guards only.
+  local extra_note="test_build.py here is offline guards only; acceptance is the recipe's five -Xcheck:jni smokes recorded under 'outcomes' in complete.json (CommonCommo 1.17.2 with project JNI patch 0102, static hidden quictls)"
   provider commoncommo native-commoncommo "" \
     complete.json,install/java/jcommoncommo.jar,install/lib/libcommoncommojni.so -- \
     --cache "$root/cache-lane2/commoncommo" --source "$atak" \
@@ -230,6 +231,7 @@ stage_commoncommo() {
 }
 
 (($#)) || set -- all
+extra_note=""
 failed=0
 for target in "$@"; do
   case "$target" in
