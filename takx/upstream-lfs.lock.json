@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "repository": "TAK-Product-Center/atak-civ",
+  "revision": "9f6893dd657feacc35ec5de03dad721c2e44170e",
+  "files": {
+    "depends/tinygltf-2.4.1-mod.tar.gz": {
+      "sha256": "fa32ead8ec963f96ae6bd4a65d5b8b8361740d25e8915f3f226303d1ac2e6f85",
+      "bytes": 5758009
+    },
+    "depends/tinygltfloader-0.9.5-mod.tar.gz": {
+      "sha256": "2d9a0196d5346a955f3bbb08f890bb808e92b9980dd79d112611501500d68c43",
+      "bytes": 708667
+    },
+    "takkernel/engine/src/main/assets/loresel.sqlite.zip": {
+      "sha256": "12e71980bdeffb9bb48db5976e9e10a0af635f7fc7834915db3baab9c195aa31",
+      "bytes": 1067496
+    },
+    "takthirdparty/distfiles/libkml.tar.gz": {
+      "sha256": "39692c0184933424e35ef69e5101f1ff0d664f2b50b972887cfc15fda032d1cb",
+      "bytes": 18346890
+    }
+  },
+  "sets": {
+    "kernel-native": [
+      "depends/tinygltf-2.4.1-mod.tar.gz",
+      "depends/tinygltfloader-0.9.5-mod.tar.gz",
+      "takthirdparty/distfiles/libkml.tar.gz"
+    ],
+    "minizip": [
+      "takthirdparty/distfiles/libkml.tar.gz"
+    ],
+    "sdk-resources": [
+      "takkernel/engine/src/main/assets/loresel.sqlite.zip"
+    ]
+  }
+}
