@@ -1,0 +1,28 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype architecture override for the composed Kernel 8.30.5 native
+# layout (Linux arm64). Never applied to upstream/atak-civ or to a recipe:
+# kernel/compose.py applies it, with fuzz 0, to its own copy of the layout in
+# the 'sources' phase, on arm64 only, and records it in composed-sources.json
+# and in the package receipt as a build-flag override.
+#
+# Why: the Linux branch of the upstream engine CMakeLists.txt adds -msse3 to
+# every C++ compile command (473 of them in the amd64 build). GCC for aarch64
+# rejects that flag. The sources do not need it there: simd/simd.h selects
+# simd/sse2neon.h for __aarch64__, and math/PackedVector.cpp and math/Mesh.cpp
+# reach the _mm_* intrinsics only through that header. On x86_64 the flag is
+# kept, so the amd64 command lines do not change.
+--- a/takkernel/engine/src/main/cpp/CMakeLists.txt
++++ b/takkernel/engine/src/main/cpp/CMakeLists.txt
+@@ -81,7 +81,9 @@
+     set(takengine_SRCS ${takengine_COMMON_SRCS} ${takengine_LINUX_SRCS})
+     set(takengine_HEADERS ${takengine_COMMON_HEADERS} ${takengine_LINUX_HEADERS})
+ 
+-    set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -msse3")
++    if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
++        set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -msse3")
++    endif()
+ else()
+     message(FATAL_ERROR "Attempting to generate takengine build for unsupported target platform ${CMAKE_SYSTEM_NAME}, stopping generation.")
+ endif()

@@ -125,8 +125,9 @@ def validate_manifest(manifest):
 
 
 def _relative(path):
+    # '' and '/x' have an empty part too; anything that is not text counts as one.
     parts = path.split('/') if isinstance(path, str) else ['']
-    if not path or path.startswith('/') or any(part in ('', '.', '..') for part in parts):
+    if any(part in ('', '.', '..') for part in parts):
         raise CacheError('not a plain relative path: %r' % (path,))
     return path
 

@@ -1,0 +1,9 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+# Build context of image/Dockerfile is takx/desktop-prototype. Only the
+# launcher and the image sources are sent to the builder.
+*
+!assemble/launch.sh
+!image/**
+image/README.md
+image/**/__pycache__

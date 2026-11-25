@@ -569,7 +569,7 @@ class FakeRegistry:
         labels, content = self.images[ref]
         for name in files:
             (Path(target) / name).write_bytes(content[name])
-        return dict(labels)
+        return json.loads(json.dumps(labels))  # new objects, as when docker prints them
 
 
 class ServiceCase(unittest.TestCase):
@@ -655,6 +655,7 @@ class ServiceCase(unittest.TestCase):
         self.assertFalse(os.path.lexists(self.root / 'P' / name))
         self.assertFalse((self.root / 'status' / (name + '.json')).exists())
         self.assertEqual(self.leftovers(), [])
+        self.assertNotIn('%s', str(caught.exception))
         return str(caught.exception)
 
 
@@ -1411,6 +1412,7 @@ class Tamper(ServiceCase):
         self.assertEqual(os.listdir(self.root / 'P'), [])
         if message:
             self.assertIn(message, str(caught.exception))
+        self.assertNotIn('%s', str(caught.exception))
 
     @staticmethod
     def member(name, kind=tarfile.REGTYPE, link='', mode=0o644):
@@ -1868,7 +1870,7 @@ class Tamper(ServiceCase):
             unpack(path, target)
             (self.root / 'P/base/complete.json').write_text('{"rebuilt": true}')
         self.service.tree.unpack = rebuilt
-        with self.assertRaisesRegex(PC.CacheError, 'a prerequisite changed during the restore'):
+        with self.assertRaisesRegex(PC.CacheError, '^top: a prerequisite changed during the restore$'):
             self.service.restore('top')
         (self.root / 'P/base/complete.json').write_bytes(marker)
         self.assertEqual(snapshot(self.tmp.name), before)
@@ -3187,6 +3189,263 @@ class MoreDetails(ServiceCase):
         with mock.patch.object(PC, 'rename_noreplace', racing), self.assertRaises(PC.CacheError) as caught:
             self.service.restore('base')
         self.assertEqual(str(caught.exception), 'base: the provider directory appeared meanwhile; not overwritten')
+
+class Refusals(ServiceCase):
+    """Inputs just beside the accepted ones, on either side."""
+
+    def test_manifest_must_be_complete_and_typed(self):
+        cases = (
+            (lambda m: m.update(schema=0), '^unsupported manifest schema 0$'),
+            (lambda m: m.update(schema=2), '^unsupported manifest schema 2$'),
+            (lambda m: m.pop('schema'), '^unsupported manifest schema None$'),
+            (lambda m: m.update(schema='1'), "^unsupported manifest schema '1'$"),
+            (lambda m: m.update(recipes=[]), '^manifest needs recipes and providers$'),
+            (lambda m: m.pop('recipes'), '^manifest needs recipes and providers$'),
+            (lambda m: m.update(providers=[]), '^manifest needs recipes and providers$'),
+            (lambda m: m.update(providers={}), '^manifest needs recipes and providers$'),
+            (lambda m: m.update(providers=['base']), '^manifest needs recipes and providers$'),
+            (lambda m: m.pop('providers'), '^manifest needs recipes and providers$'),
+            (lambda m: m.update(variables=[]), '^manifest needs variables and recipe_exclude$'),
+            (lambda m: m.pop('variables'), '^manifest needs variables and recipe_exclude$'),
+            (lambda m: m.update(recipe_exclude={}), '^manifest needs variables and recipe_exclude$'),
+            (lambda m: m.pop('recipe_exclude'), '^manifest needs variables and recipe_exclude$'),
+            (lambda m: m['recipes'].update({'/abs': {}}), "^not a plain relative path: '/abs'$"),
+            (lambda m: m['recipes'].update({'a//b': {}}), "^not a plain relative path: 'a//b'$"),
+            (lambda m: m['recipes'].update({'': {}}), "^not a plain relative path: ''$"),
+            (lambda m: m['recipes'].update({'a/./b': {}}), "^not a plain relative path: 'a/./b'$"),
+            (lambda m: m['recipes']['takx/one'].update(uses=[7]), '^not a plain relative path: 7$'),
+            (lambda m: m['providers'].update({'Base': m['providers']['base']}), "^bad provider name 'Base'$"),
+            (lambda m: m['providers'].update({'-x': m['providers']['base']}), "^bad provider name '-x'$"),
+            (lambda m: m['providers'].update({'x\n': m['providers']['base']}), r"^bad provider name 'x\\n'$"),
+            (lambda m: m['providers'].update({'': m['providers']['base']}), "^bad provider name ''$"),
+            (lambda m: m['providers']['top'].update(lane=1), '^top: missing or malformed lane$'),
+            (lambda m: m['providers']['top'].pop('recipe'), '^top: missing or malformed recipe$'),
+            (lambda m: m['providers']['top'].update(prerequisites='base'), '^top: missing or malformed prerequisites$'),
+            (lambda m: m['providers']['top'].update(locks='x'), '^top: missing or malformed locks$'),
+            (lambda m: m['providers']['top'].update(fetched={}), '^top: missing or malformed fetched$'),
+            (lambda m: m['providers']['top'].update(marker=None), '^top: missing or malformed marker$'),
+            (lambda m: m['providers']['top'].update(invocation=[]), '^top: missing or malformed invocation$'),
+            (lambda m: m['providers']['top'].update(recipe='takx/ghost'), '^top: unknown recipe takx/ghost$'),
+            (lambda m: m['providers']['top'].update(marker='../x'), r"^not a plain relative path: '\.\./x'$"),
+            (lambda m: m['providers']['top'].update(locks=['ok', '/x']), "^not a plain relative path: '/x'$"),
+            (lambda m: m['providers']['top'].update(prerequisites=['ghost']), '^top: unknown prerequisite ghost$'),
+            (lambda m: m['providers']['top']['invocation'].update(argv=[]), '^top: invocation needs argv and env$'),
+            (lambda m: m['providers']['top']['invocation'].update(argv='x'), '^top: invocation needs argv and env$'),
+            (lambda m: m['providers']['top']['invocation'].pop('argv'), '^top: invocation needs argv and env$'),
+            (lambda m: m['providers']['top']['invocation'].update(env=None), '^top: invocation needs argv and env$'),
+            (lambda m: m['providers']['top']['invocation'].pop('env'), '^top: invocation needs argv and env$'),
+            (lambda m: m['providers']['top'].update(fetched=[{}]), r'^top: bad fetched selector \{\}$'),
+            (lambda m: m['providers']['top'].update(fetched=[['consumer']]), r"^top: bad fetched selector \['consumer'\]$"),
+            (lambda m: m['providers']['top'].update(fetched=['kind']), "^top: bad fetched selector 'kind'$"),
+            (lambda m: m['providers']['top'].update(fetched=[{'consumer': 'a', 'kind': 'b'}]),
+             '^top: bad fetched selector '),
+            (lambda m: m['providers']['top'].update(fetched=[{'glob': '*'}]), '^top: bad fetched selector '),
+            (lambda m: m['providers']['base'].update(prerequisites=['top']), '^prerequisite cycle at '),
+        )
+        for index, (edit, message) in enumerate(cases):
+            document = manifest()
+            edit(document)
+            with self.subTest(index=index, message=message), self.assertRaisesRegex(PC.CacheError, message):
+                PC.validate_manifest(document)
+        document = manifest()
+        self.assertIs(PC.validate_manifest(document), document)
+        for selector in ({'consumer': 'x'}, {'kind': 'x'}, {'path': 'x'}):
+            document['providers']['top']['fetched'] = [selector]
+            PC.validate_manifest(document)
+        with self.assertRaises(PC.CacheError):
+            PC.ProviderCache(dict(manifest(), schema=2), None, None, 'reg')
+
+    def test_fetched_inputs_are_selected_exactly(self):
+        records = [
+            {'kind': 'lock-entry', 'name': 'archive', 'verified': True, 'expected_sha256': '1' * 64,
+             'consumers': [{'recipe': 'one'}]},
+            {'kind': 'git-source', 'name': 'tree', 'verified': True, 'expected_revision': '2' * 40,
+             'path': '/root/inputs/tree'},
+            {'kind': 'toolchain', 'name': 'jdk', 'verified': True, 'expected_sha256': '3' * 64, 'actual_sha256': None,
+             'path': '/root/inputs/jdk', 'other_field': 'x', 'expected': 'not a digest field'},
+            {'kind': 'a-kind', 'name': 'first', 'verified': True, 'actual_sha512': '4' * 128},
+        ]
+
+        def names(selector, root='/root'):
+            return [item['name'] for item in PC.select_fetched(records, [selector], root)]
+        self.assertEqual(names({'kind': 'git-source'}), ['tree'])
+        self.assertEqual(names({'kind': 'lock-entry'}), ['archive'])
+        self.assertEqual(names({'kind': 'toolchain'}), ['jdk'])
+        self.assertEqual(names({'consumer': 'one'}), ['archive'])
+        self.assertEqual(names({'path': 'inputs/tree'}), ['tree'])
+        self.assertEqual(names({'path': 'inputs/jdk'}, '/root/'), ['jdk'])
+        self.assertEqual(PC.select_fetched(records, [{'kind': 'toolchain'}, {'path': 'inputs/jdk'}], '/root'),
+                         [{'kind': 'toolchain', 'name': 'jdk', 'digests': {'expected_sha256': '3' * 64}}])
+        self.assertEqual(PC.select_fetched(records, [{'kind': 'a-kind'}], '/root'),
+                         [{'kind': 'a-kind', 'name': 'first', 'digests': {'actual_sha512': '4' * 128}}])
+        self.assertEqual(PC.select_fetched(records, [], '/root'), [])
+        for selector in ({'path': 'inputs'}, {'path': 'inputs/tree/'}, {'path': '/root/inputs/tree'},
+                         {'consumer': 'on'}, {'kind': 'lock'}, {'kind': 'zz'}):
+            with self.subTest(selector=selector), self.assertRaisesRegex(PC.CacheError, 'no fetched input matches'):
+                names(selector)
+        with self.assertRaises(PC.CacheError):
+            names({'path': 'inputs/tree'}, '/other')
+        for verified in (1, 2, 0, None, 'true', 'True', [True]):
+            records[1]['verified'] = verified
+            with self.subTest(verified=verified), self.assertRaisesRegex(
+                    PC.CacheError, '^fetched input tree is not verified$'):
+                names({'kind': 'git-source'})
+
+    def test_members_just_outside_the_rules(self):
+        top = [('base', 'dir', '')]
+        self.assertEqual(PC.check_members('base', top + [('base/up', 'symlink', '.'), ('base/d', 'dir', ''),
+                                                         ('base/d/up', 'symlink', '..'),
+                                                         ('base/d/self', 'symlink', '../d')]), 5)
+        cases = (
+            ([('base/f/', 'file', '')], "^archive member has an empty, \".\" or \"..\" component: 'base/f/'$"),
+            ([('base/l/', 'symlink', 'x')], '^archive member has an empty'),
+            ([('base/x/', 'block', '')], '^archive member has an empty'),
+            ([('base/x', 'block', '')], "^archive member 'base/x' is a device or other special file$"),
+            ([('base/x', 'char', '')], "^archive member 'base/x' is a device or other special file$"),
+            ([('base/x', 'zzz', '')], "^archive member 'base/x' is a device or other special file$"),
+            ([('base/x', '', '')], "^archive member 'base/x' is a device or other special file$"),
+            ([('base/l', 'symlink', '-a/..')], '^symlink \'base/l\' has ".." after a name in its target$'),
+            ([('base/l', 'symlink', '!/../..')], '^symlink \'base/l\' has ".." after a name in its target$'),
+            ([('base/l', 'symlink', './..')], '^symlink \'base/l\' has ".." after a name in its target$'),
+            ([('base/l', 'symlink', '../base/..')], '^symlink \'base/l\' has ".." after a name in its target$'),
+            ([('base/l', 'symlink', '../base')], None),
+        )
+        for extra, message in cases:
+            with self.subTest(extra=extra):
+                if message is None:
+                    self.assertEqual(PC.check_members('base', top + extra), 2)
+                else:
+                    with self.assertRaisesRegex(PC.CacheError, message):
+                        PC.check_members('base', top + extra)
+
+    def test_recipe_and_record_messages(self):
+        tree = PC.WorkTree(self.root, self.repo)
+        with self.assertRaisesRegex(PC.CacheError, '^recipe path takx/missing does not exist$'):
+            tree.recipe_files(['takx/missing'], [])
+        with self.assertRaisesRegex(PC.CacheError, r'^no recipe file matches takx/\*\.nothing$'):
+            tree.recipe_files(['takx/*.nothing'], [])
+        (self.repo / 'takx/empty').mkdir()
+        with self.assertRaisesRegex(PC.CacheError, '^recipe directory takx/empty is empty$'):
+            tree.recipe_files(['takx/empty'], [])
+        for status in ('okay', 'zz', 'OK', 'failed', '', None):
+            self.write_json('status/images.json', {'status': status, 'image_ids': {PC.TOOLCHAIN: TOOLCHAIN_ID}})
+            with self.subTest(status=status), self.assertRaisesRegex(
+                    PC.CacheError, r'^status/images\.json records no toolchain image id$'):
+                tree.recorded_toolchain()
+        for status in ('okay', 'zz', 'OK', 'failed', '', None):
+            self.write_json('status/fetch.json', {'status': status, 'inputs': []})
+            with self.subTest(status=status), self.assertRaisesRegex(
+                    PC.CacheError, r'^status/fetch\.json is not an ok fetch record$'):
+                tree.fetched_records()
+        self.write_json('status/fetch.json', {'status': 'ok', 'inputs': []})
+        self.assertEqual(tree.fetched_records(), [])
+
+    def test_marker_counts_only_as_a_regular_file_in_a_real_directory(self):
+        tree = PC.WorkTree(self.root, self.repo)
+        top = self.make('base')
+        digest = hashlib.sha256((top / 'complete.json').read_bytes()).hexdigest()
+        self.assertEqual(tree.marker_sha256('base', 'complete.json'), digest)
+        self.assertIsNone(tree.marker_sha256('base', 'other.json'))
+        self.assertIsNone(tree.marker_sha256('base', 'install'))
+        self.assertIsNone(tree.marker_sha256('base', 'install/tool-1'))
+        self.assertIsNone(tree.marker_sha256('side', 'complete.json'))
+        os.symlink('base', self.root / 'P/side')
+        self.assertIsNone(tree.marker_sha256('side', 'complete.json'))
+        os.unlink(self.root / 'P/side')
+        (self.root / 'P/side').write_text('a file')
+        self.assertIsNone(tree.marker_sha256('side', 'complete.json'))
+        self.assertTrue(tree.has_directory('side'))
+        self.assertEqual((tree.status_of('base'), tree.status_of('side')), ('ok', 'missing'))
+        self.assertEqual(tree.provider_dir('base'), top)
+
+    def test_linked_provider_directory_is_neither_ok_nor_replaced(self):
+        self.make('base')
+        self.make('top')
+        self.service.push('top')
+        self.set_aside('top')
+        os.rename(self.root / 'P/base', self.root / 'P/real')
+        os.symlink('real', self.root / 'P/base')
+        before = snapshot(self.tmp.name)
+        with self.assertRaisesRegex(PC.CacheError, '^base: the provider directory already exists'):
+            self.service.restore('base')
+        with self.assertRaisesRegex(PC.Skip, '^a prerequisite provider is not ok here$'):
+            self.service.restore('top')
+        with self.assertRaisesRegex(PC.CacheError, '^base: status is ok but the completion marker is missing$'):
+            self.service.push('base')
+        self.assertEqual(snapshot(self.tmp.name), before)
+
+    def test_complete_directory_with_another_status_is_kept_and_not_called_ok(self):
+        top = self.make('base')
+        self.service.push('base')
+        for status in ('running', 'zz', 'okay', 'failed', 'OK'):
+            self.write_json('status/base.json', {'stage': 'base', 'status': status})
+            before = snapshot(self.tmp.name)
+            with self.subTest(status=status), self.assertRaisesRegex(
+                    PC.CacheError, '^base: the provider directory already exists and is never overwritten$'):
+                self.service.restore('base')
+            self.assertEqual(snapshot(self.tmp.name), before)
+        self.assertTrue((top / 'complete.json').is_file())
+
+    def test_prerequisite_with_another_status_is_not_ok(self):
+        self.make('top')
+        self.make('base')
+        self.service.push('top')
+        self.set_aside('top')
+        for status in ('running', 'zz', 'okay', 'failed', 'OK'):
+            self.write_json('status/base.json', {'stage': 'base', 'status': status})
+            with self.subTest(status=status), self.assertRaisesRegex(PC.Skip, 'a prerequisite provider is not ok here'):
+                self.service.restore('top')
+        self.assertEqual(self.registry.fetched, [])
+        self.make('top')
+        self.registry.images.clear()
+        with self.assertRaisesRegex(PC.CacheError, '^top: a prerequisite provider is not ok here, so its outputs '
+                                                   'cannot be bound$'):
+            self.service.push('top')
+        self.assertEqual(self.registry.images, {})
+
+    def test_at_most_five_differences_are_listed(self):
+        top = self.make('base')
+        for number in range(7):
+            (top / ('f%d' % number)).write_text('before')
+        write_tar = PC.WorkTree.write_tar
+
+        def racing(source, name, entries, target):
+            for number in range(7):
+                (top / ('f%d' % number)).write_text('after!')
+            write_tar(source, name, entries, target)
+        self.service.tree.write_tar = racing
+        with self.assertRaises(PC.CacheError) as caught:
+            self.service.push('base')
+        self.assertEqual(str(caught.exception), 'base changed while it was archived: changed f0, changed f1, '
+                                                'changed f2, changed f3, changed f4')
+        self.assertEqual(self.registry.published, 0)
+
+    def test_scratch_directory_is_made_inside_the_work_root(self):
+        root = Path(self.tmp.name) / 'not/yet/there'
+        scratch = PC.WorkTree(root, self.repo).scratch('.restore-x.')
+        self.assertEqual(scratch.parent, root)
+        self.assertRegex(scratch.name, r'^\.restore-x\..+')
+        self.assertTrue(scratch.is_dir())
+        self.assertEqual(stat.S_IMODE(os.stat(scratch).st_mode), 0o700)
+
+    def test_timeout_comes_from_the_environment(self):
+        self.assertEqual(PC.build_service({}).registry.timeout, 3600)
+        self.assertEqual(PC.build_service({'TAKX_PROTO_CACHE_TIMEOUT': ''}).registry.timeout, 3600)
+        self.assertEqual(PC.build_service({'TAKX_PROTO_CACHE_TIMEOUT': '7'}).registry.timeout, 7)
+        self.assertEqual(PC.build_service({}).registry.docker, 'docker')
+        service = PC.build_service({'TAKX_PROTO_ROOT': 'relative/root', 'TAKX_PROTO_CACHE': 'reg.example/x'})
+        self.assertEqual((service.tree.root, service.prefix, service.override),
+                         (Path(os.path.abspath('relative/root')), 'reg.example/x', ''))
+        self.assertEqual(set(service.manifest['providers']), EXPECTED)
+
+    def test_help_describes_the_tool(self):
+        out = io.StringIO()
+        with mock.patch.object(PC.sys, 'stdout', out), self.assertRaises(SystemExit) as caught:
+            PC.main(['--help'], service=self.service)
+        self.assertEqual(caught.exception.code, 0)
+        self.assertIn('Input-keyed cache of the desktop-prototype provider outputs.', out.getvalue())
+        self.assertIn('usage: provider_cache.py ', out.getvalue())
+        self.assertIn('{key,restore,push,status}', out.getvalue())
 
 
 RUN_STUB = r"""#!/bin/bash

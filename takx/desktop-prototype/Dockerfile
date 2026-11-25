@@ -12,6 +12,13 @@
 #     --secret id=ca,src=/root/.ccr/ca-bundle.crt takx/desktop-prototype
 #   DOCKER_BUILDKIT=1 docker build --target runtime -t takx-desktop-proto:runtime \
 #     --secret id=ca,src=/root/.ccr/ca-bundle.crt takx/desktop-prototype
+#
+# Architectures: linux/amd64 and linux/arm64, each built natively. The base
+# digest is a multi-architecture index. The JDK archive and the two Python
+# wheels are per-architecture files, so each architecture has its own pins
+# below; the arm64 ones are also recorded, with their sources, in
+# inputs.arm64.lock.json. TARGETARCH is set by BuildKit; without it the
+# architecture of the base image decides.
 ARG BASE=mirror.gcr.io/library/debian:trixie@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6
 
 FROM ${BASE} AS toolchain
@@ -38,13 +45,23 @@ RUN apt-get update \
 
 # Eclipse Temurin 17.0.21+9 at the path the plan names. Fetched by URL (this is
 # the asset api.adoptium.net redirects to) and checked against a fixed SHA-256.
+# TEMURIN_URL and TEMURIN_SHA256 are the amd64 pins; the arm64 archive has its
+# own pair. Both archives unpack to the same directory name.
+ARG TARGETARCH
 ARG TEMURIN_URL=https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jdk_x64_linux_hotspot_17.0.21_9.tar.gz
 ARG TEMURIN_SHA256=8b9b611d917e3dfd8419d3566b5949226f69b052fed7e109c1368add1dfe8711
+ARG TEMURIN_URL_ARM64=https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jdk_aarch64_linux_hotspot_17.0.21_9.tar.gz
+ARG TEMURIN_SHA256_ARM64=3e4eca7ead088f080af1476007decf010a240a1eb4e1e78c54fa32fbcc347084
 RUN --mount=type=secret,id=ca,required=false \
     if [ -s /run/secrets/ca ]; then export CURL_CA_BUNDLE=/run/secrets/ca; fi; \
+    case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
+      amd64) temurin_url="${TEMURIN_URL}"; temurin_sha256="${TEMURIN_SHA256}";; \
+      arm64) temurin_url="${TEMURIN_URL_ARM64}"; temurin_sha256="${TEMURIN_SHA256_ARM64}";; \
+      *) echo "FAIL no Temurin pin for architecture ${TARGETARCH:-$(dpkg --print-architecture)}"; exit 1;; \
+    esac; \
     mkdir -p /tools/temurin-17.0.21_9 \
- && curl -fsSL --retry 5 --retry-all-errors -o /tmp/jdk.tgz "${TEMURIN_URL}" \
- && echo "${TEMURIN_SHA256}  /tmp/jdk.tgz" | sha256sum -c - \
+ && curl -fsSL --retry 5 --retry-all-errors -o /tmp/jdk.tgz "${temurin_url}" \
+ && echo "${temurin_sha256}  /tmp/jdk.tgz" | sha256sum -c - \
  && tar -xzf /tmp/jdk.tgz -C /tools/temurin-17.0.21_9 --no-same-owner \
  && rm /tmp/jdk.tgz \
  && test -x /tools/temurin-17.0.21_9/jdk-17.0.21+9/bin/javac
@@ -71,15 +88,23 @@ RUN mkdir -p /tmp/jre-provides/DEBIAN \
 
 # CMake and Ninja at the path several recipes hard-code
 # (takx/native-cesium/build.py, native-curl, native-kml). uv is installed with
-# them for the recipes' documented `uv pip` flow. Wheels are hash-pinned.
+# them for the recipes' documented `uv pip` flow. Wheels are hash-pinned, one
+# wheel per architecture; the amd64 requirements file keeps its bytes.
 RUN --mount=type=secret,id=ca,required=false \
     if [ -s /run/secrets/ca ]; then export PIP_CERT=/run/secrets/ca; fi; \
     mkdir -p /workspace/takx-native-tools \
  && python3 -m venv /workspace/takx-native-tools/venv \
- && printf '%s\n' \
-      'cmake==3.31.6 --hash=sha256:1c8b05df0602365da91ee6a3336fe57525b137706c4ab5675498f662ae1dbcec' \
-      'ninja==1.11.1.4 --hash=sha256:096487995473320de7f65d622c3f1d16c3ad174797602218ca8c967f51ec38a0' \
-      > /workspace/takx-native-tools/requirements.txt \
+ && case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
+      amd64) printf '%s\n' \
+        'cmake==3.31.6 --hash=sha256:1c8b05df0602365da91ee6a3336fe57525b137706c4ab5675498f662ae1dbcec' \
+        'ninja==1.11.1.4 --hash=sha256:096487995473320de7f65d622c3f1d16c3ad174797602218ca8c967f51ec38a0' \
+        > /workspace/takx-native-tools/requirements.txt;; \
+      arm64) printf '%s\n' \
+        'cmake==3.31.6 --hash=sha256:42d9883b8958da285d53d5f69d40d9650c2d1bcf922d82b3ebdceb2b3a7d4521' \
+        'ninja==1.11.1.4 --hash=sha256:d3090d4488fadf6047d0d7a1db0c9643a8d391f0d94729554dbb89b5bdc769d7' \
+        > /workspace/takx-native-tools/requirements.txt;; \
+      *) echo "FAIL no wheel pins for architecture ${TARGETARCH:-$(dpkg --print-architecture)}"; exit 1;; \
+    esac \
  && /workspace/takx-native-tools/venv/bin/pip install --no-cache-dir --disable-pip-version-check \
       --only-binary=:all: --require-hashes -r /workspace/takx-native-tools/requirements.txt
 
@@ -103,8 +128,9 @@ RUN want() { local name="$1" expect="$2"; shift 2; local got; got="$("$@" 2>&1 |
       test -x "/usr/bin/$tool" || { echo "FAIL missing /usr/bin/$tool"; exit 1; }; done; \
     test -s /usr/share/keyrings/debian-archive-keyring.gpg; \
     test -s /usr/share/glvnd/egl_vendor.d/50_mesa.json; \
-    test -e /usr/lib/x86_64-linux-gnu/libEGL_mesa.so.0; \
-    test -e /usr/lib/x86_64-linux-gnu/dri/swrast_dri.so; \
+    multiarch="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"; \
+    test -e "/usr/lib/${multiarch}/libEGL_mesa.so.0"; \
+    test -e "/usr/lib/${multiarch}/dri/swrast_dri.so"; \
     for header in zlib.h zconf.h openssl/crypto.h expat.h sqlite3.h curl/curl.h geos_c.h proj.h; do \
       test ! -e "/usr/include/$header" || { echo "FAIL host header /usr/include/$header present"; exit 1; }; done; \
     git --version
