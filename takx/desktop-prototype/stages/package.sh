@@ -5,8 +5,9 @@
 # Desktop prototype, package stage: turn the image of stages/image.sh into a
 # Zarf package and a UDS bundle, and check both as far as that is possible
 # without a cluster. The work is done by ../zarf/*, ../chart and ../bundle/*;
-# this script is the record of the exact commands. Nothing is deployed,
-# nothing is pushed, and the only cluster access is `kubectl get crd`.
+# this script is the record of the exact commands. Nothing is deployed and
+# nothing is pushed. The cluster is only read, in two steps: `crds`
+# (kubectl get crd) and `lookup` (one Service).
 #
 #   tools         versions of the tools in use
 #   lint          yamllint (repository config), shellcheck (hk.pkl flags),
@@ -21,6 +22,9 @@
 #                 (kubectl get, nothing else) and turn them into JSON Schemas
 #   validate      kubeconform: every rendered object against the Kubernetes
 #                 schemas and those two CRD schemas, unknown fields rejected
+#   lookup        `helm template --dry-run=server`: the chart's lookup of the
+#                 passthrough gateway Service against the cluster. It reads
+#                 that one Service; nothing is sent to be applied
 #   test          ../zarf/test_package.py: structure, pod security, network
 #                 rules, the Secret projection, the UDS Core policies
 #   create        `zarf package create` of the staged tree into pkg/out, with
@@ -33,6 +37,8 @@
 #                 the uds schema but not created: see `bundle-full`
 #   bundle-full   create the whole bundle. Pulls about 2.7 GB and needs about
 #                 12 GB of free disk; refuses below TAKX_BUNDLE_MIN_FREE_GIB
+#                 (16). `uds inspect <uds-bundle.yaml> --list-variables` is no
+#                 cheap substitute: it pulls every package in full
 #   all           everything above except bundle-full, in order
 #
 # Layout (TAKX_PROTO_ROOT, default /var/lib/takx-proto):
@@ -321,6 +327,25 @@ do_validate() {
   [[ "$(tail -1 "${evidence}/validate.txt")" == "validate exit 0" ]]
 }
 
+do_lookup() {
+  local rc=0 want got
+  mkdir -p "${work}/render"
+  {
+    echo "== helm template --dry-run=server (one lookup: Service istio-passthrough-gateway/passthrough-ingressgateway)"
+    want="$(kubectl get service passthrough-ingressgateway -n istio-passthrough-gateway -o jsonpath='{.spec.clusterIP}')" || rc=1
+    uds zarf tools helm template takx-desktop "${proto}/chart" -n takx-desktop --dry-run=server \
+      >"${work}/render/helm-lookup.yaml" || rc=1
+    got="$(uds zarf tools yq 'select(.kind == "Deployment") | .spec.template.spec.hostAliases[0] | .ip + " " + .hostnames[0]' \
+      "${work}/render/helm-lookup.yaml")" || rc=1
+    echo "kubectl get service: ClusterIP ${want}"
+    echo "rendered hosts entry: ${got}"
+    [[ -n "${want}" && "${got}" == "${want} takserver" ]] || rc=1
+    echo "namespace takx-desktop after the render: $(kubectl get namespace takx-desktop -o name 2>/dev/null || echo absent)"
+    echo "lookup exit ${rc}"
+  } 2>&1 | tee "${evidence}/lookup.txt"
+  [[ "$(tail -1 "${evidence}/lookup.txt")" == "lookup exit 0" ]]
+}
+
 do_test() {
   (cd "${repo}" && TAKX_PACKAGE_WORK="${work}" python3 -B -m unittest -v takx/desktop-prototype/zarf/test_package.py) 2>&1 |
     tee "${evidence}/test.txt"
@@ -443,9 +468,9 @@ do_bundle() {
     rm -rf "${work}/tmp" "${work}/uds-cache"
     ls -l "${bundle}" || rc=1
     echo "== uds inspect"
-    uds inspect "${bundle}" --no-color --no-progress || rc=1
+    uds inspect "${bundle}" --no-color --no-progress --no-log-file || rc=1
     echo "== uds inspect --list-variables"
-    uds inspect "${bundle}" --list-variables --no-color --no-progress || rc=1
+    uds inspect "${bundle}" --list-variables --no-color --no-progress --no-log-file || rc=1
     echo "bundle exit ${rc}"
   } 2>&1 | tee "${evidence}/bundle.txt"
   [[ "$(tail -1 "${evidence}/bundle.txt")" == "bundle exit 0" ]]
@@ -473,6 +498,7 @@ case "${1:-}" in
   render) do_render;;
   crds) do_crds;;
   validate) do_validate;;
+  lookup) do_lookup;;
   test) do_test;;
   create) do_create;;
   inspect) do_inspect;;
@@ -480,8 +506,8 @@ case "${1:-}" in
   bundle) do_bundle;;
   bundle-full) do_bundle_full;;
   all)
-    do_tools; do_lint; do_stage; do_zarf_lint; do_helm; do_render; do_crds; do_validate; do_test
+    do_tools; do_lint; do_stage; do_zarf_lint; do_helm; do_render; do_crds; do_validate; do_lookup; do_test
     do_create; do_inspect; do_upstream; do_bundle;;
-  -h|--help|"") sed -n '5,56p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
+  -h|--help|"") sed -n '5,67p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
   *) echo "package.sh: unknown step '$1'" >&2; exit 2;;
 esac

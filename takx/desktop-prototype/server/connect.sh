@@ -32,7 +32,9 @@
 # certificate check behind the sandbox proxy; the built-in base map shows.
 #
 # Environment: TAKX_PROTO_ROOT (default /var/lib/takx-proto), TAKX_CONNECT_DIST
-# (default $TAKX_PROTO_ROOT/dist/takx57), TAKX_BOOT_JVM_OPTS, TAKX_BOOT_ENV.
+# (default $TAKX_PROTO_ROOT/dist/takx57), TAKX_BOOT_JVM_OPTS, TAKX_BOOT_ENV,
+# TAKX_CONNECT_SERVER_IP (default: the passthrough gateway; an experiment
+# may point the certificate name at a relay on the workstation instead).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -56,7 +58,7 @@ launch() { # attempt [takx arguments...]
   mkdir -p "$root/connect/$attempt"
   echo "$attempt" >"$root/connect/current"
   "$run" --runtime -d --name "$name" --docker-arg --shm-size=1g \
-    --docker-arg "--add-host=$TAK_CERT_NAME:$PASSTHROUGH_GATEWAY_IP" "${envs[@]}" \
+    --docker-arg "--add-host=$TAK_CERT_NAME:${TAKX_CONNECT_SERVER_IP:-$PASSTHROUGH_GATEWAY_IP}" "${envs[@]}" \
     -e "EXTRA_JVM_OPTS=${TAKX_BOOT_JVM_OPTS:-}" -- \
     "$repo/takx/desktop-prototype/assemble/session.sh" "$dist" "$root/runs/$attempt" "$root/logs/$attempt.log" "$@" >/dev/null
   echo "connect: $attempt started; log $root/logs/$attempt.log" >&2
@@ -80,6 +82,6 @@ case "${1:-}" in
     echo "$out/$2.png";;
   evidence) shift; exec python3 -I "$here/connect_evidence.py" "$root" "$(current)" "$@";;
   stop) docker rm -f "$name" >/dev/null 2>&1 || true;;
-  -h|--help|"") sed -n '5,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
+  -h|--help|"") sed -n '5,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
   *) echo "connect.sh: unknown target '$1'" >&2; exit 2;;
 esac

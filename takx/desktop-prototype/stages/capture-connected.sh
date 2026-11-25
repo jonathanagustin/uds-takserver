@@ -271,7 +271,7 @@ do_finish() {
     enc takx57-connected-cloudtak-raw-take-1080p30.mp4 0 100000
     enc takx57-connected-cloudtak-clip-1-peer-marker-created.mp4 "$(browser "CloudTAK: Geometry Editing" 1.5)" 10
     enc takx57-connected-cloudtak-clip-2-peer-marker-broadcast.mp4 "$(browser "CloudTAK: Share > Broadcast" -6.5)" 9
-    enc takx57-connected-cloudtak-clip-3-takx-marker-arrives.mp4 "$(browser "TAKX: Send As Cot: Broadcast" -1.5)" 9
+    enc takx57-connected-cloudtak-clip-3-takx-marker-arrives.mp4 "$(browser "TAKX: Send As Cot: Broadcast" -1)" 10
     enc takx57-connected-cloudtak-clip-4-takx-marker-found.mp4 "$(browser "CloudTAK: search box" 1)" 10
     mkdir -p "$OUT/frames"; rm -f "$OUT"/frames/takx57-connected-*
     for f in "$OUT"/takx57-connected-*.mp4; do

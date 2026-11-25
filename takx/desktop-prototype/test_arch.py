@@ -622,6 +622,50 @@ class PipelineRun(Fixture):
         with mock.patch.object(PIPELINE, 'groups', lambda: self.groups), self.assertRaisesRegex(PIPELINE.Refusal, 'unknown group'):
             PIPELINE.run_group('nope', self.root, self.proto)
 
+    def test_group_records_the_machine_of_the_elf_objects_it_built(self):
+        self.groups['groups']['first']['audit'] = ['extra', 'absent']
+        (self.root / 'P/base/lib').mkdir(parents=True)
+        (self.root / 'P/extra').mkdir()
+        (self.root / 'P/base/lib/libone.so').write_bytes(elf(183))
+        (self.root / 'P/base/lib/libtwo.a').write_bytes(archive([b'/ symbols', elf(183), elf(183) + b'x']))
+        (self.root / 'P/base/notes.txt').write_text('not an object')
+        (self.root / 'P/extra/tool').write_bytes(elf(62))
+        code, record = self.run_group('first', 'arm64')
+        self.assertEqual(code, 0)
+        self.assertEqual(record['elf'], {
+            'base': {'expected': 'aarch64', 'objects': {'aarch64': 3}, 'not_expected': []},
+            'extra': {'expected': 'aarch64', 'objects': {'x86_64': 1}, 'not_expected': ['tool']}})
+
+
+def elf(machine, order=1):
+    """The first bytes of an ELF64 file of one machine number."""
+    return b'\x7fELF\x02' + bytes([order]) + b'\x01' + bytes(9) + b'\x03\x00' + \
+        machine.to_bytes(2, 'little' if order == 1 else 'big') + bytes(44)
+
+
+def archive(members):
+    data = b'!<arch>\n'
+    for number, member in enumerate(members):
+        data += ('m%-15d0           0     0     644     %-10d`\n' % (number, len(member))).encode() + member
+        data += b'\n' * (len(member) & 1)
+    return data
+
+
+class ElfAudit(unittest.TestCase):
+    def test_machine_names(self):
+        self.assertEqual(PIPELINE.elf_machine(elf(183)[:20]), 'aarch64')
+        self.assertEqual(PIPELINE.elf_machine(elf(62)[:20]), 'x86_64')
+        self.assertEqual(PIPELINE.elf_machine(elf(183, order=2)[:20]), 'aarch64')
+        self.assertEqual(PIPELINE.elf_machine(elf(243)[:20]), 'machine-243')
+        for other in (b'', b'\x7fELF', b'#!/bin/sh\n' + bytes(20), b'PK\x03\x04' + bytes(20)):
+            self.assertIsNone(PIPELINE.elf_machine(other[:20]))
+
+    def test_archive_members_are_counted_and_a_truncated_archive_ends_quietly(self):
+        whole = archive([elf(183), b'odd', elf(62), elf(183)])
+        self.assertEqual(PIPELINE.archive_machines(io.BytesIO(whole[8:])), ['aarch64', 'x86_64', 'aarch64'])
+        self.assertEqual(PIPELINE.archive_machines(io.BytesIO(whole[8:8 + 60 + 64 + 30])), ['aarch64'])
+        self.assertEqual(PIPELINE.archive_machines(io.BytesIO(b'not a member header' * 5)), [])
+
 
 class Workflow(unittest.TestCase):
     TEXT = WORKFLOW.read_text()

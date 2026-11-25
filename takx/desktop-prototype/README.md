@@ -98,6 +98,18 @@ Network behaviour to know about:
 
 `stages/capture.sh all` boots a fresh attempt, records the X display losslessly with `ffmpeg x11grab` while `xdotool` drives the real UI, encodes H.264 `yuv420p` 1920x1080 30 fps files into the git-ignored `demo/out/takx/`, verifies them (`ffprobe`, `signalstats`, `freezedetect`, `blackdetect`) and extracts review frames. Media is never committed. `demo/out/takx/PROVENANCE.md` states what the footage shows and does not show.
 
+## Deploy as a package
+
+`stages/image.sh` puts the assembled tree into one self-contained image ([image/README.md](image/README.md)), and `stages/package.sh` turns that image into a Zarf v1beta1 package, `takx-desktop`, and a UDS bundle, `takx-desktop-proto`. The package runs the client in one pod and serves it to a browser at `https://takx.<domain>/` behind the UDS tenant gateway and Keycloak; a `TakClient` supplies its TAK identity. Both are opt-in and separate from the TAK Server package.
+
+```bash
+takx/desktop-prototype/stages/package.sh all      # lint, render, validate, test, build, inspect; deploys nothing
+uds zarf package deploy /var/lib/takx-proto/pkg/out/zarf-package-takx-desktop-amd64-<TAG>.tar.zst \
+  --components takx-desktop-takclient,takx-desktop-identity --confirm
+```
+
+The package and a bundle with only this package were built and checked without a cluster. **Neither has been deployed**, and the bundle with Zarf init, UDS Core and TAK Server was written and checked against its upstream packages but not created. [zarf/README.md](zarf/README.md) has the components, the values, the deploy commands, what was checked and what a deploy still has to prove.
+
 ## Files in this stage
 
 | File | Purpose |

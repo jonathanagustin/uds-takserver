@@ -6,6 +6,7 @@ Nothing here starts docker or reaches a registry: the registry port is an
 in-memory fake, and every work root and repository is a temporary directory.
 """
 import copy
+import fcntl
 import gzip
 import hashlib
 import importlib.util
@@ -20,6 +21,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -3479,6 +3481,126 @@ class Refusals(ServiceCase):
         self.assertIn('Input-keyed cache of the desktop-prototype provider outputs.', out.getvalue())
         self.assertIn('usage: provider_cache.py ', out.getvalue())
         self.assertIn('{key,restore,push,status}', out.getvalue())
+
+class Archiving(ServiceCase):
+    def test_archive_listing_names_every_kind_of_member(self):
+        tar = Path(self.tmp.name) / 'p.tar'
+        with tarfile.open(tar, 'w', format=tarfile.PAX_FORMAT) as archive:
+            def add(name, kind=tarfile.REGTYPE, data=None, link='', mode=0o644):
+                info = tarfile.TarInfo(name)
+                info.type, info.linkname, info.mode = kind, link, mode
+                info.size = len(data) if data is not None else 0
+                archive.addfile(info, io.BytesIO(data) if data is not None else None)
+            add('p', tarfile.DIRTYPE, mode=0o755)
+            add('p/dir', tarfile.DIRTYPE, mode=0o2750)
+            add('p/dir/file', data=b'content', mode=0o4755)
+            add('p/empty', data=b'')
+            add('p/link', tarfile.SYMTYPE, link='dir/file')
+            add('p/hard', tarfile.LNKTYPE, link='p/dir/file')
+            add('p/pipe', tarfile.FIFOTYPE, mode=0o600)
+            add('p/device', tarfile.CHRTYPE, mode=0o660)
+        self.assertEqual(PC.WorkTree.tar_entries(tar, 'p'), [
+            {'path': 'dir', 'type': 'dir', 'mode': '2750'},
+            {'path': 'dir/file', 'type': 'file', 'mode': '4755', 'size': 7,
+             'sha256': hashlib.sha256(b'content').hexdigest()},
+            {'path': 'empty', 'type': 'file', 'mode': '0644', 'size': 0, 'sha256': hashlib.sha256(b'').hexdigest()},
+            {'path': 'link', 'type': 'link', 'target': 'dir/file'},
+            {'path': 'hard', 'type': 'special', 'mode': '0644'},
+            {'path': 'pipe', 'type': 'special', 'mode': '0600'},
+            {'path': 'device', 'type': 'special', 'mode': '0660'}])
+        self.assertEqual(PC.WorkTree.tar_members(tar), [
+            ('p', 'dir', ''), ('p/dir', 'dir', ''), ('p/dir/file', 'file', ''), ('p/empty', 'file', ''),
+            ('p/link', 'symlink', 'dir/file'), ('p/hard', 'hardlink', 'p/dir/file'), ('p/pipe', 'other', ''),
+            ('p/device', 'other', '')])
+
+    def test_tree_listing_names_every_kind_of_entry(self):
+        top = Path(self.tmp.name) / 'tree'
+        (top / 'dir').mkdir(parents=True)
+        os.chmod(top / 'dir', 0o2750)
+        (top / 'dir/file').write_bytes(b'content')
+        os.chmod(top / 'dir/file', 0o4755)
+        os.symlink('dir/file', top / 'link')
+        os.symlink('dir', top / 'dirlink')
+        os.mkfifo(top / 'pipe', 0o600)
+        os.chmod(top / 'pipe', 0o600)
+        self.assertEqual(PC.WorkTree.entries(top), [
+            {'path': 'dir', 'type': 'dir', 'mode': '2750'},
+            {'path': 'dir/file', 'type': 'file', 'mode': '4755', 'size': 7,
+             'sha256': hashlib.sha256(b'content').hexdigest()},
+            {'path': 'dirlink', 'type': 'link', 'target': 'dir'},
+            {'path': 'link', 'type': 'link', 'target': 'dir/file'},
+            {'path': 'pipe', 'type': 'special', 'mode': '0600'}])
+        self.assertEqual(PC.WorkTree.entries(top / 'dir' / '..' / 'dir'), [
+            {'path': 'file', 'type': 'file', 'mode': '4755', 'size': 7,
+             'sha256': hashlib.sha256(b'content').hexdigest()}])
+
+    def test_unsafe_tree_is_refused_before_anything_is_archived(self):
+        for what, plant, message in (
+                ('absolute link', lambda top: os.symlink('/etc', top / 'install/etc'), 'absolute or empty target'),
+                ('escaping link', lambda top: os.symlink('../../side', top / 'install/out'),
+                 'leaves the provider directory'),
+                ('fifo', lambda top: os.mkfifo(top / 'pipe'), 'device or other special file')):
+            self.doCleanups()
+            self.setUp()
+            plant(self.make('base'))
+            self.service.tree.write_tar = lambda *args: self.fail('archived an unsafe tree')
+            with self.subTest(what=what), self.assertRaisesRegex(PC.CacheError, message):
+                self.service.push('base')
+            self.assertEqual((self.registry.published, self.leftovers()), (0, []))
+
+    def test_file_that_turns_unsafe_while_archiving_is_refused_as_unsafe(self):
+        write_tar = PC.WorkTree.write_tar
+        for what, swap, message in (
+                ('fifo', lambda path: os.mkfifo(path), "^archive member 'base/install/tool' is a device or other "
+                                                       "special file$"),
+                ('escaping link', lambda path: os.symlink('../../../etc/passwd', path),
+                 "^symlink 'base/install/tool' leaves the provider directory$"),
+                ('absolute link', lambda path: os.symlink('/etc/passwd', path),
+                 "^symlink 'base/install/tool' has an absolute or empty target$")):
+            self.doCleanups()
+            self.setUp()
+            top = self.make('base')
+
+            def racing(source, name, entries, target):
+                os.unlink(top / 'install/tool')
+                swap(top / 'install/tool')
+                write_tar(source, name, entries, target)
+            self.service.tree.write_tar = racing
+            with self.subTest(what=what), self.assertRaisesRegex(PC.CacheError, message):
+                self.service.push('base')
+            self.assertEqual((self.registry.published, self.leftovers()), (0, []))
+
+    def test_push_record_is_written_under_a_lock(self):
+        tree = PC.WorkTree(self.root, self.repo)
+        tree.record_push(('base', 'k1', 'r1', 't1'))
+        with open(self.root / 'cache-state/pushed.tsv') as holder:
+            fcntl.flock(holder, fcntl.LOCK_EX)
+            writer = threading.Thread(target=tree.record_push, args=(('side', 'k2', 'r2', 't2'),))
+            writer.start()
+            writer.join(0.3)
+            waiting = writer.is_alive()
+            written = (self.root / 'cache-state/pushed.tsv').read_text()
+            fcntl.flock(holder, fcntl.LOCK_UN)
+            writer.join(30)
+        self.assertTrue(waiting, 'the record was written without waiting for the lock')
+        self.assertEqual(written, 'base\tk1\tr1\tt1\n')
+        self.assertFalse(writer.is_alive())
+        self.assertEqual((self.root / 'cache-state/pushed.tsv').read_text(), 'base\tk1\tr1\tt1\nside\tk2\tr2\tt2\n')
+        tree.record_push(('base', 'k1', 'r1', 't1'))
+        self.assertEqual(tree.pushed(), {('base', 'k1'): 't1', ('side', 'k2'): 't2'})
+        self.assertEqual(len((self.root / 'cache-state/pushed.tsv').read_text().splitlines()), 2)
+
+    def test_provider_without_a_key_is_listed_and_the_reason_logged(self):
+        self.write_json('status/fetch.json', {'status': 'ok', 'inputs': [
+            {'kind': 'lock-entry', 'name': 'one', 'verified': True, 'expected_sha256': '5' * 64,
+             'consumers': [{'recipe': 'one'}]}]})
+        service = self.new_service()
+        rows = {row['name']: row for row in service.rows()}
+        self.assertEqual(rows['top'], {'name': 'top', 'key': '-', 'ref': '-', 'local': 'absent', 'remote': 'no-key',
+                                       'tar_sha256': '-'})
+        self.assertEqual(rows['base'], {'name': 'base', 'key': service.key('base'), 'ref': service.ref('base'),
+                                        'local': 'absent', 'remote': 'unknown', 'tar_sha256': '-'})
+        self.assertEqual(self.messages, ['provider-cache: top has no key: no fetched input matches consumer=two'])
 
 
 RUN_STUB = r"""#!/bin/bash

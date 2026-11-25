@@ -40,10 +40,12 @@ import copy
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -751,6 +753,99 @@ class IdentityAction(unittest.TestCase):
         self.assertEqual(result["metadata"]["annotations"]["tak.uds.dev/fingerprint"], "")
         self.assertEqual(result["metadata"]["annotations"]["tak.uds.dev/takclient"], "takx-browser")
 
+    def render(self, cmd, name):
+        """The action command after Go templating, through the Helm that uds vendors.
+
+        Zarf renders `enableTemplating` commands with Go's text/template too;
+        this shows that the parser takes the text (the braces of the yq
+        expression are not template actions) and what comes out. It is not
+        Zarf's own renderer.
+        """
+        with tempfile.TemporaryDirectory() as chart:
+            os.mkdir(os.path.join(chart, "templates"))
+            with open(os.path.join(chart, "Chart.yaml"), "w", encoding="utf-8") as stream:
+                stream.write("apiVersion: v2\nname: action\nversion: 0.0.0\n")
+            # Helm only renders manifests, so the command travels as a block scalar.
+            with open(os.path.join(chart, "templates", "cmd.yaml"), "w", encoding="utf-8") as stream:
+                stream.write("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cmd\ndata:\n  cmd: |\n")
+                stream.write("".join(f"    {line}\n" for line in cmd.rstrip("\n").split("\n")))
+            out = run_uds("zarf", "tools", "helm", "template", "action", chart, "--set", f"identity.name={name}")
+        return one(load_yaml_text(out), "ConfigMap")["data"]["cmd"]
+
+    def run_copy(self, secret_json, get_status=0):
+        """Run the rendered copy command with stand-ins for the two kubectl calls; yq is the real one."""
+        rendered = self.render(self.actions[1][2], "takx-browser")
+        self.assertNotIn("{{", rendered)
+        self.assertIn('get secret "takx-browser" -n takclients -o json', rendered)
+        with tempfile.TemporaryDirectory() as work:
+            with open(os.path.join(work, "secret.json"), "w", encoding="utf-8") as stream:
+                stream.write(secret_json)
+            shim = os.path.join(work, "zarf")
+            with open(shim, "w", encoding="utf-8") as stream:
+                stream.write(f"""#!/usr/bin/env bash
+# Stand-in for the Zarf binary an action calls as ./zarf.
+set -euo pipefail
+[[ "$1" == tools ]]
+case "$2 $3" in
+  "kubectl get") echo "$*" >>calls.txt; cat secret.json; exit {get_status};;
+  "kubectl apply")
+    echo "$*" >>calls.txt
+    cat >applied.json
+    # kubectl: "error: no objects passed to apply"
+    [[ -s applied.json ]] || {{ echo "error: no objects passed to apply" >&2; exit 1; }}
+    echo "secret/takx-desktop-identity serverside-applied";;
+  "yq -p") shift 2; exec {shlex.quote(UDS)} zarf tools yq "$@";;
+  *) echo "unexpected: $*" >&2; exit 97;;
+esac
+""")
+            os.chmod(shim, 0o755)
+            done = subprocess.run(("bash", "-c", rendered), cwd=work, capture_output=True, check=False,
+                                  env={"PATH": os.environ["PATH"], "HOME": work, "KUBECONFIG": "/dev/null"})
+            applied = None
+            if os.path.exists(os.path.join(work, "applied.json")):
+                with open(os.path.join(work, "applied.json"), encoding="utf-8") as stream:
+                    applied = stream.read()
+            with open(os.path.join(work, "calls.txt"), encoding="utf-8") as stream:
+                calls = stream.read().splitlines()
+        return done, applied, calls
+
+    def test_rendered_command_runs_as_a_pipeline(self):
+        done, applied, calls = self.run_copy(json.dumps(self.synthetic()))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        # Nothing on the terminal, not even kubectl's confirmation.
+        self.assertEqual(done.stdout, b"")
+        self.assertEqual(done.stderr, b"")
+        # The stages of a pipeline start together, so the order of the two lines is not fixed.
+        self.assertEqual(sorted(calls), [
+            "tools kubectl apply --server-side --force-conflicts --field-manager=takx-desktop-identity -f -",
+            "tools kubectl get secret takx-browser -n takclients -o json"])
+        result = json.loads(applied)
+        self.assertEqual(sorted(result["data"]), ["package.zip", "password"])
+        self.assertEqual((result["metadata"]["namespace"], result["metadata"]["name"]),
+                         ("takx-desktop", "takx-desktop-identity"))
+
+    def test_rendered_command_fails_closed(self):
+        # kubectl get fails after writing output: only pipefail makes the action fail,
+        # because the two later stages succeed.
+        done, applied, _calls = self.run_copy(json.dumps(self.synthetic()), get_status=1)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertTrue(applied)
+        # kubectl get fails with no output.
+        done, _applied, _calls = self.run_copy("", get_status=1)
+        self.assertNotEqual(done.returncode, 0)
+        # A Secret without one of the two keys: nothing is passed on.
+        secret = self.synthetic()
+        del secret["data"]["password"]
+        done, applied, _calls = self.run_copy(json.dumps(secret))
+        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(applied, "")
+        self.assertNotIn(b"WklQ", done.stdout + done.stderr)
+
+    def test_wait_command_renders(self):
+        rendered = self.render(self.actions[0][2], "takx-browser")
+        self.assertEqual(rendered.strip(), './zarf tools kubectl wait "takclient/takx-browser" -n takclients '
+                                           "--for=condition=Ready --timeout=300s")
+
     def test_names_match_the_chart(self):
         (values,) = load_yaml(os.path.join(CHART, "values.yaml"))
         self.assertEqual(values["identity"]["secretName"], "takx-desktop-identity")
@@ -1054,7 +1149,7 @@ class Bundle(unittest.TestCase):
             self.assertTrue(package["repository"].startswith("ghcr.io/"))
             self.assertNotIn("path", package)
             self.assertNotIn("latest", package["ref"])
-        for name in ("core-base", "core-identity-authorization", "takserver"):
+        for name in ("init", "core-base", "core-identity-authorization", "takserver"):
             package = next(p for p in self.bundle["packages"] if p["name"] == name)
             self.assertEqual(set(package["keylessVerification"]), {"certificateIdentityRegexp", "certificateOIDCIssuer"})
         core = next(p for p in self.bundle["packages"] if p["name"] == "core-base")
@@ -1134,8 +1229,8 @@ class Text(unittest.TestCase):
             self.assertIn("Kernel 8.30.5 + project patches", flat, path)
             self.assertIn("CommonCommo 1.17.2 patched", flat, path)
             self.assertIn("not the official takx", flat.lower(), path)
-        # The Kernel and WorldWind builds upstream TAKX 5.7 was made with are not what is inside.
-        private = ("9.12.6", "2.2.1-" + "TAKX")
+        # What TAKX 5.7 declares (../README.md) is not what is inside, and no file here may say so.
+        private = ("8.57.11", "1.20.0", "2.2.1-" + "TAKX", "9.12.6")
         for path, text in self.text.items():
             if os.path.basename(path) == "test_package.py":
                 continue

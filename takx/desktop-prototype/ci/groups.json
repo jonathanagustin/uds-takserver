@@ -9,8 +9,10 @@
   "never waits for another job. 'run' lists stage scripts of ../stages/ with",
   "their arguments, in order. 'wave' orders the jobs: every prerequisite of a",
   "group is built in an earlier wave. 'restore': 'all' restores every provider.",
-  "'runtime' pulls the runtime image as well. pipeline.py check verifies all of",
-  "this against ../providers.json."
+  "'runtime' pulls the runtime image as well. 'audit' names further directories",
+  "below P/ whose ELF objects are counted by machine type after the run (the",
+  "group's own providers always are). pipeline.py check verifies all of this",
+  "against ../providers.json."
  ],
  "schema": 1,
  "waves": ["a", "b", "c", "d"],
@@ -57,6 +59,7 @@
    "builds": [],
    "restore": "all",
    "runtime": true,
+   "audit": ["kernel-composed-native", "kernel-composed", "takx57"],
    "run": [["lane4.sh", "java-classpath"], ["kernel.sh", "all"], ["client.sh", "all"]]
   },
   "boot": {

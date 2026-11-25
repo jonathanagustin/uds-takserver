@@ -18,6 +18,11 @@
       stage scripts in order and write status/ci-<group>.json. A provider that
       is already ok locally is left alone, so a rerun does not rebuild; the
       stage scripts restore and push their own providers themselves.
+      Afterwards it records, in the same file under 'elf', the machine type
+      of every ELF object in the directories the group built ('builds', plus
+      'audit' of groups.json), including the members of static archives. This
+      is a record, not a gate: it shows that an arm64 job produced aarch64
+      objects, and lists any object of another machine.
   pipeline.py summary [ROOT]
       Print a Markdown summary of status/*.json for the job summary.
 
@@ -169,6 +174,61 @@ def check(data=None, providers=None, stages=None):
     return problems
 
 
+# ------------------------------------------------------------------ ELF audit
+ELF_MACHINES = {3: 'i386', 40: 'arm', 62: 'x86_64', 183: 'aarch64'}
+MACHINE_OF = {'amd64': 'x86_64', 'arm64': 'aarch64'}
+
+
+def elf_machine(head):
+    """Machine name of an ELF header (its first 20 bytes), None for anything else."""
+    if len(head) < 20 or head[:4] != b'\x7fELF' or head[5] not in (1, 2):
+        return None
+    number = int.from_bytes(head[18:20], 'little' if head[5] == 1 else 'big')
+    return ELF_MACHINES.get(number, 'machine-%d' % number)
+
+
+def archive_machines(stream):
+    """Machine names of the ELF members of an ar archive whose magic was already read."""
+    found = []
+    while True:
+        header = stream.read(60)
+        if len(header) < 60 or header[58:60] != b'`\n':
+            return found
+        try:
+            size = int(header[48:58].decode('ascii').strip())
+        except ValueError:
+            return found
+        machine = elf_machine(stream.read(min(size, 20)))
+        if machine:
+            found.append(machine)
+        stream.seek(size - min(size, 20) + (size & 1), 1)
+
+
+def elf_audit(directory, expected):
+    """Count the ELF objects below directory by machine; name up to five that are not `expected`."""
+    counts, foreign = {}, []
+    for base, _, files in os.walk(directory):
+        for name in files:
+            path = os.path.join(base, name)
+            if os.path.islink(path) or not os.path.isfile(path):
+                continue
+            try:
+                with open(path, 'rb') as stream:
+                    head = stream.read(20)
+                    if head[:8] == b'!<arch>\n':
+                        stream.seek(8)
+                        machines = archive_machines(stream)
+                    else:
+                        machines = [m for m in (elf_machine(head),) if m]
+            except OSError:
+                continue
+            for machine in machines:
+                counts[machine] = counts.get(machine, 0) + 1
+            if any(m != expected for m in machines) and len(foreign) < 5:
+                foreign.append(os.path.relpath(path, directory))
+    return {'expected': expected, 'objects': dict(sorted(counts.items())), 'not_expected': foreign}
+
+
 # ------------------------------------------------------------------------ run
 def arch_name(proto):
     return subprocess.check_output(['bash', str(Path(proto) / 'arch.sh'), 'get', 'arch'], text=True, timeout=30).strip()
@@ -256,6 +316,12 @@ def run_group(name, root, proto):
         failed = [' '.join(c['command']) for c in record['commands'] if c['exit']]
         record['notes'] = ('every stage script exited 0' if not failed else
                            'failed: %s; see status/<stage>.json and logs/' % '; '.join(failed))
+    record['elf'] = {}
+    for directory in list(config['builds']) + list(config.get('audit', [])):
+        if (root / 'P' / directory).is_dir():
+            record['elf'][directory] = elf_audit(root / 'P' / directory, MACHINE_OF[arch])
+            print('ci: ELF objects in P/%-22s %s%s' % (directory, record['elf'][directory]['objects'] or 'none', ''.join(
+                '; not %s: %s' % (MACHINE_OF[arch], item) for item in record['elf'][directory]['not_expected'])), flush=True)
     record['seconds'] = round(time.time() - started)
     target = root / 'status' / ('ci-%s.json' % name)
     target.write_text(json.dumps(record, indent=1) + '\n')
