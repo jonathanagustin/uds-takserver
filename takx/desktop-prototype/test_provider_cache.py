@@ -6,16 +6,22 @@ Nothing here starts docker or reaches a registry: the registry port is an
 in-memory fake, and every work root and repository is a temporary directory.
 """
 import copy
+import gzip
+import hashlib
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
 import re
+import shutil
+import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
@@ -285,20 +291,267 @@ class Core(unittest.TestCase):
         self.assertEqual(text, '# one\n# name\tkey\tref\ttar sha256\na\tk\tr\tt\n')
 
 
+def reordered(value):
+    """The same JSON value with every dict built in the opposite order."""
+    if isinstance(value, dict):
+        return {key: reordered(value[key]) for key in reversed(list(value))}
+    if isinstance(value, list):
+        return [reordered(item) for item in value]
+    return value
+
+
+def snapshot(top):
+    """Everything below `top`, read without the module under test."""
+    result = {}
+    for directory, names, files in os.walk(top):
+        for name in names + files:
+            path = os.path.join(directory, name)
+            info = os.lstat(path)
+            rel = os.path.relpath(path, top)
+            if stat.S_ISLNK(info.st_mode):
+                result[rel] = ('link', os.readlink(path))
+            elif stat.S_ISDIR(info.st_mode):
+                result[rel] = ('dir', stat.S_IMODE(info.st_mode))
+            elif stat.S_ISREG(info.st_mode):
+                with open(path, 'rb') as stream:
+                    result[rel] = ('file', stat.S_IMODE(info.st_mode), hashlib.sha256(stream.read()).hexdigest())
+            else:
+                result[rel] = ('special', info.st_mode)
+    return result
+
+
+def chain():
+    """a <- b <- c <- d, a diamond a <- (b, e) <- f, and an unrelated z."""
+    def provider(deps):
+        return {'lane': 'lane1.sh', 'recipe': 'takx/one', 'prerequisites': deps, 'locks': [], 'fetched': [],
+                'marker': 'complete.json', 'invocation': {'env': [], 'argv': ['build']}}
+    return {'schema': 1, 'variables': {}, 'recipe_exclude': [], 'recipes': {'takx/one': {'uses': []}},
+            'providers': {'d': provider(['c']), 'c': provider(['b']), 'b': provider(['a']), 'a': provider([]),
+                          'e': provider(['a']), 'f': provider(['e', 'b']), 'z': provider([])}}
+
+
+# Keys of manifest() with facts() for every provider. They pin the canonical
+# form: a change here gives every cached provider a new name, so it must be
+# deliberate (and then SCHEMA should change with it).
+GOLDEN = {
+    'base': '88363aae55cf1f04d0eb168957fce37cc727309e135028a7c01e31a537d4d2cf',
+    'side': '5af48161ea0a6a1473491230f46d097b0587e88f36706b76bdaa2a8b2ba6c804',
+    'top': 'f1a6ae3ab289a0b5645771283d29dcb2cc6f38ee830af92bb68ced94536ec36d',
+}
+KEY_SNIPPET = r"""
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location('provider_cache_child', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+manifest, facts = json.loads(sys.stdin.read())
+derived = module.derive_keys(manifest, lambda name: facts)
+print(json.dumps({name: key for name, (key, _) in derived.items()}))
+"""
+
+
+class KeyProperties(unittest.TestCase):
+    """The key as a pure function of its inputs."""
+
+    def keys(self, document=None, names=None, **per_provider):
+        derived = PC.derive_keys(document or manifest(), lambda name: per_provider.get(name, facts()), names)
+        return {name: key for name, (key, _) in derived.items()}
+
+    def test_keys_have_the_pinned_values(self):
+        self.assertEqual(self.keys(), GOLDEN)
+
+    def test_canonical_form_is_compact_sorted_ascii_json(self):
+        self.assertEqual(PC.canonical({'b': [1, 'é'], 'a': {'d': None, 'c': True}}),
+                         b'{"a":{"c":true,"d":null},"b":[1,"\\u00e9"]}')
+        self.assertEqual(PC.sha256_bytes(b'abc'),
+                         'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
+        document = PC.key_document(manifest(), 'base', facts(), {})
+        self.assertEqual(PC.derive_key(document), hashlib.sha256(
+            json.dumps(document, sort_keys=True, separators=(',', ':')).encode()).hexdigest())
+
+    def test_key_does_not_depend_on_dict_ordering(self):
+        self.assertEqual(self.keys(reordered(manifest())), GOLDEN)
+        backwards = reordered(facts())
+        self.assertEqual(self.keys(base=backwards, side=backwards, top=backwards), GOLDEN)
+        document = PC.key_document(manifest(), 'top', facts(), {'base': GOLDEN['base']})
+        self.assertEqual(PC.derive_key(reordered(document)), GOLDEN['top'])
+        self.assertEqual(list(reordered(document)), list(document)[::-1])
+
+    def test_key_does_not_depend_on_which_providers_are_asked_for_or_in_which_order(self):
+        for names in (['top'], ['top', 'base'], ['base', 'top'], ['side', 'top', 'base'], ['top', 'top']):
+            with self.subTest(names=names):
+                wanted = set(names) | ({'base'} if 'top' in names else set())
+                self.assertEqual(self.keys(names=names), {name: GOLDEN[name] for name in wanted})
+        self.assertEqual(self.keys(names=['side']), {'side': GOLDEN['side']})
+        self.assertEqual(self.keys(names=[]), {})
+
+    def test_key_does_not_depend_on_the_order_of_prerequisites(self):
+        document = chain()
+        reference = self.keys(document)
+        document['providers']['f']['prerequisites'] = ['b', 'e']
+        self.assertEqual(self.keys(document), reference)
+        self.assertEqual(len(set(reference.values())), len(reference))
+
+    def test_key_is_the_same_in_another_process_with_another_hash_seed(self):
+        payload = json.dumps([manifest(), facts()]).encode()
+        for seed in ('0', '1', '4242'):
+            done = subprocess.run([sys.executable, '-B', '-c', KEY_SNIPPET, str(HERE / 'provider_cache.py')],
+                                  input=payload, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
+                                  env={'PYTHONHASHSEED': seed, 'PATH': '/nonexistent'})
+            with self.subTest(seed=seed):
+                self.assertEqual(done.returncode, 0, done.stderr.decode())
+                self.assertEqual(json.loads(done.stdout), GOLDEN)
+
+    def test_known_keys_are_reused_and_not_derived_again(self):
+        asked = []
+
+        def facts_of(name):
+            asked.append(name)
+            return facts()
+        first = PC.derive_keys(manifest(), facts_of, ['base'])
+        self.assertEqual(asked, ['base'])
+        second = PC.derive_keys(manifest(), facts_of, ['top'], first)
+        self.assertEqual(asked, ['base', 'top'])
+        self.assertEqual({name: key for name, (key, _) in second.items()},
+                         {name: GOLDEN[name] for name in ('base', 'top')})
+        self.assertEqual(first, {'base': second['base']})  # the earlier result is not modified
+
+    def test_each_single_change_gives_another_key(self):
+        changes = {
+            'one recipe byte': facts(recipe_files={'takx/one/build.py': 'a' * 63 + 'b'}),
+            'added recipe file': facts(recipe_files={'takx/one/build.py': 'a' * 64, 'takx/one/new.c': 'a' * 64}),
+            'renamed recipe file': facts(recipe_files={'takx/one/built.py': 'a' * 64}),
+            'lock file': facts(locks={'l': {'sha256': 'b' * 63 + 'c', 'digests': []}}),
+            'lock digest': facts(locks={'l': {'sha256': 'b' * 64, 'digests': ['f' * 64]}}),
+            'lock name': facts(locks={'m': {'sha256': 'b' * 64, 'digests': []}}),
+            'no lock': facts(locks={}),
+            'fetched digest': facts(fetched=[{'kind': 'lock-entry', 'name': 'n',
+                                              'digests': {'expected_sha256': 'c' * 63 + 'd'}}]),
+            'fetched name': facts(fetched=[{'kind': 'lock-entry', 'name': 'm',
+                                            'digests': {'expected_sha256': 'c' * 64}}]),
+            'no fetched input': facts(fetched=[]),
+            'toolchain': facts(toolchain='sha256:' + '1' * 63 + '2'),
+            'work root': facts(root='/var/lib/takx-proto2'),
+            'repository': facts(repo='/repo2'),
+        }
+        seen = {GOLDEN['base']}
+        for what, changed in changes.items():
+            with self.subTest(what=what):
+                key = self.keys(base=changed)['base']
+                self.assertNotIn(key, seen)
+                seen.add(key)
+        removed = facts(recipe_files={'takx/one/build.py': 'a' * 64, 'takx/one/new.c': 'a' * 64})
+        self.assertNotEqual(self.keys(base=removed)['base'], GOLDEN['base'])  # read backwards: a removed file
+
+    def test_each_single_manifest_change_gives_another_key(self):
+        edits = {
+            'argv value': lambda m: m['providers']['base']['invocation']['argv'].__setitem__(3, '{root}/P/y'),
+            'argv added': lambda m: m['providers']['base']['invocation']['argv'].append('--jobs'),
+            'argv order': lambda m: m['providers']['base']['invocation']['argv'].reverse(),
+            'env': lambda m: m['providers']['base']['invocation']['env'].append('A=1'),
+            'variable value': lambda m: m['variables'].update(jdk='/jdk2'),
+            'variable added': lambda m: m['variables'].update(cmake='/cmake'),
+            'marker': lambda m: m['providers']['base'].update(marker='done.json'),
+            'recipe': lambda m: (m['recipes'].update({'takx/three': {'uses': []}}),
+                                 m['providers']['base'].update(recipe='takx/three')),
+        }
+        seen = {GOLDEN['base']}
+        for what, edit in edits.items():
+            document = manifest()
+            edit(document)
+            with self.subTest(what=what):
+                key = self.keys(PC.validate_manifest(document))['base']
+                self.assertNotIn(key, seen)
+                seen.add(key)
+
+    def test_what_is_not_an_input_does_not_change_the_key(self):
+        document = manifest()
+        document['providers']['base']['lane'] = 'lane9.sh'
+        document['description'] = ['other words']
+        document['recipe_exclude'].append('*.orig')  # only what the files then are counts
+        self.assertEqual(self.keys(document), GOLDEN)
+
+    def test_schema_version_is_part_of_the_key(self):
+        document = dict(manifest(), schema=2)
+        self.assertEqual(PC.key_document(document, 'base', facts(), {})['schema'], 2)
+        self.assertNotEqual(PC.derive_key(PC.key_document(document, 'base', facts(), {})), GOLDEN['base'])
+
+    def test_prerequisite_key_is_part_of_the_key(self):
+        def top(key):
+            return PC.derive_key(PC.key_document(manifest(), 'top', facts(), {'base': key}))
+        self.assertEqual(top(GOLDEN['base']), GOLDEN['top'])
+        self.assertNotEqual(top(GOLDEN['base'][:-1] + '0'), GOLDEN['top'])
+        self.assertNotEqual(top(GOLDEN['side']), GOLDEN['top'])
+        for bad in ({}, {'base': GOLDEN['base'], 'side': GOLDEN['side']}, {'side': GOLDEN['side']},
+                    {'base': GOLDEN['base'].upper()}, {'base': GOLDEN['base'] + '\n'}, {'base': GOLDEN['base'][:-1]},
+                    {'base': GOLDEN['base'] + '0'}):
+            with self.subTest(bad=bad), self.assertRaises(PC.CacheError):
+                PC.key_document(manifest(), 'top', facts(), bad)
+        with self.assertRaises(PC.CacheError):
+            PC.key_document(manifest(), 'base', facts(), {'side': GOLDEN['side']})
+
+    def test_key_document_names_every_input_and_nothing_else(self):
+        document = PC.key_document(manifest(), 'top', facts(), {'base': GOLDEN['base']})
+        self.assertEqual(document, {
+            'schema': 1, 'provider': 'top', 'recipe': 'takx/two', 'recipe_files': facts()['recipe_files'],
+            'invocation_sha256': PC.sha256_bytes(PC.canonical({
+                'invocation': manifest()['providers']['top']['invocation'], 'variables': {'jdk': '/jdk'}})),
+            'marker': 'complete.json', 'locks': facts()['locks'], 'fetched': facts()['fetched'],
+            'toolchain': TOOLCHAIN_ID, 'root': '/var/lib/takx-proto', 'repo': '/repo',
+            'prerequisites': {'base': GOLDEN['base']}})
+        source = facts()
+        document = PC.key_document(manifest(), 'base', source, {})
+        document['recipe_files']['x'] = document['locks']['x'] = 1
+        document['fetched'].append(1)
+        self.assertEqual(source, facts())  # the document is a copy
+
+    def test_change_reaches_everything_downstream_and_nothing_else(self):
+        document = chain()
+        reference = self.keys(document)
+        changed = facts(recipe_files={'takx/one/build.py': 'd' * 64})
+        downstream = {'a': 'abcdef', 'b': 'bcdf', 'c': 'cd', 'd': 'd', 'e': 'ef', 'f': 'f', 'z': 'z'}
+        for name, affected in downstream.items():
+            with self.subTest(changed=name):
+                got = self.keys(document, **{name: changed})
+                self.assertEqual({other for other in got if got[other] != reference[other]}, set(affected))
+        self.assertEqual(self.keys(document, names=['c']), {name: reference[name] for name in 'abc'})
+        self.assertEqual(self.keys(document, names=['f']), {name: reference[name] for name in 'abef'})
+
+    def test_closure_and_order_follow_the_prerequisites(self):
+        providers = chain()['providers']
+        self.assertEqual(PC.closure(providers, ['d']), set('abcd'))
+        self.assertEqual(PC.closure(providers, ['f', 'z']), set('abefz'))
+        self.assertEqual(PC.closure(providers, []), set())
+        with self.assertRaises(PC.CacheError):
+            PC.closure(providers, ['nope'])
+        self.assertEqual(PC.order(providers), ['a', 'b', 'c', 'd', 'e', 'f', 'z'])
+        self.assertEqual(PC.order(reordered(providers)), ['a', 'b', 'c', 'd', 'e', 'f', 'z'])
+        self.assertEqual(PC.order(providers, ['z', 'd', 'a']), ['a', 'd', 'z'])
+        self.assertEqual(PC.order(providers, []), [])
+        providers['a']['prerequisites'] = ['a']
+        with self.assertRaisesRegex(PC.CacheError, 'cycle at a'):
+            PC.order(providers)
+        providers['a']['prerequisites'] = ['nope']
+        with self.assertRaisesRegex(PC.CacheError, 'unknown provider nope'):
+            PC.order(providers)
+
+
 class FakeRegistry:
     """In-memory registry port."""
 
     def __init__(self):
         self.images, self.logged_in, self.docker, self.published = {}, True, True, 0
         self.toolchain, self.state = TOOLCHAIN_ID, None
+        self.calls, self.fetched = [], []
 
     def available(self):
         return self.docker
 
     def image_id(self, image):
+        self.calls.append(('image_id', image))
         return self.toolchain
 
     def probe(self, ref):
+        self.calls.append(('probe', ref))
         if self.state:
             return self.state
         if not self.logged_in:
@@ -306,10 +559,13 @@ class FakeRegistry:
         return 'present' if ref in self.images else 'absent'
 
     def publish(self, ref, context, files, labels):
+        self.calls.append(('publish', ref))
         self.published += 1
         self.images[ref] = (dict(labels), {name: (Path(context) / name).read_bytes() for name in files})
 
     def fetch(self, ref, target, files):
+        self.calls.append(('fetch', ref))
+        self.fetched.append((ref, list(files)))
         labels, content = self.images[ref]
         for name in files:
             (Path(target) / name).write_bytes(content[name])
@@ -845,6 +1101,1613 @@ class CommandLine(ServiceCase):
         self.assertEqual(service.tree.repo, REPO)
         default = PC.build_service({})
         self.assertEqual((str(default.tree.root), default.prefix), (PC.DEFAULT_ROOT, PC.DEFAULT_REGISTRY))
+
+
+class KeySensitivity(ServiceCase):
+    """Single changes on disk, and which providers get another key for them."""
+
+    def setUp(self):
+        super().setUp()
+        (self.repo / 'takx/one/src/deep').mkdir(parents=True)
+        (self.repo / 'takx/one/src/deep/a.c').write_text('int a;\n')
+        (self.repo / 'takx/one/src/deep/README').write_text('notes\n')
+        os.symlink('build.py', self.repo / 'takx/one/alias.py')
+        (self.repo / 'pins').mkdir()
+        (self.repo / 'pins/base.lock.json').write_text(json.dumps({'archive': {'sha256': '6' * 64}}))
+        self.write_json('status/fetch.json', {'status': 'ok', 'inputs': self.records()})
+
+    def records(self):
+        return [{'kind': 'lock-entry', 'name': 'one', 'verified': True, 'expected_sha256': '5' * 64,
+                 'bytes': 10, 'url': 'https://example.invalid/one', 'consumers': [{'recipe': 'one'}]},
+                {'kind': 'lock-entry', 'name': 'two', 'verified': True, 'expected_sha256': '5' * 64,
+                 'consumers': [{'recipe': 'two'}]},
+                {'kind': 'git-source', 'name': 'tree', 'verified': True, 'expected_revision': '3' * 40,
+                 'path': str(self.root / 'inputs/tree')},
+                {'kind': 'toolchain', 'name': 'jdk', 'verified': True, 'expected_sha256': '4' * 64},
+                {'kind': 'lock-entry', 'name': 'unrelated', 'verified': True, 'expected_sha256': '7' * 64,
+                 'consumers': [{'recipe': 'three'}]}]
+
+    def document(self):
+        value = manifest()
+        value['providers']['base']['locks'] = ['pins/base.lock.json']
+        value['providers']['side']['fetched'] = [{'kind': 'toolchain'}]
+        value['providers']['top']['fetched'] = [{'consumer': 'two'}, {'path': 'inputs/tree'}]
+        return value
+
+    def new_service(self, prefix='reg.example/cache', override='', root=None, document=None, repo=None):
+        return PC.ProviderCache(document or self.document(), PC.WorkTree(root or self.root, repo or self.repo),
+                                self.registry, prefix, override, self.messages.append)
+
+    def changed(self, action=None, **service):
+        """The providers whose key differs after `action` (and/or with another service)."""
+        reference = {name: self.new_service().key(name) for name in ('base', 'side', 'top')}
+        if action:
+            action()
+        after = self.new_service(**service)
+        return ''.join(sorted(name[0] for name in reference if after.key(name) != reference[name]))
+
+    def records_with(self, index, **fields):
+        records = self.records()
+        records[index].update(fields)
+        return lambda: self.write_json('status/fetch.json', {'status': 'ok', 'inputs': records})
+
+    def single_changes(self):
+        repo = self.repo
+
+        def flip(path):
+            def action():
+                data = bytearray(path.read_bytes())
+                data[-2] ^= 1
+                path.write_bytes(bytes(data))
+            return action
+
+        def retarget():
+            os.unlink(repo / 'takx/one/alias.py')
+            os.symlink('other.py', repo / 'takx/one/alias.py')
+        cases = (  # what, action, initials of the providers that must get another key
+            ('one recipe byte', flip(repo / 'takx/one/build.py'), 'bst'),
+            ('one byte of the other script of the recipe', flip(repo / 'takx/one/other.py'), 'bst'),
+            ('one byte in a nested recipe file', flip(repo / 'takx/one/src/deep/a.c'), 'bst'),
+            ('one byte in the downstream recipe', flip(repo / 'takx/two/build.py'), 't'),
+            ('one byte in a helper file', flip(repo / 'takx/shared.py'), 't'),
+            ('one appended byte', lambda: (repo / 'takx/one/build.py').write_text('# one\n\n'), 'bst'),
+            ('added recipe file', lambda: (repo / 'takx/one/new.c').write_text(''), 'bst'),
+            ('added nested recipe file', lambda: (repo / 'takx/one/src/deep/b.c').write_text(''), 'bst'),
+            ('removed recipe file', lambda: os.unlink(repo / 'takx/one/other.py'), 'bst'),
+            ('removed nested recipe file', lambda: os.unlink(repo / 'takx/one/src/deep/a.c'), 'bst'),
+            ('renamed recipe file', lambda: os.rename(repo / 'takx/one/other.py', repo / 'takx/one/another.py'), 'bst'),
+            ('moved recipe file', lambda: os.rename(repo / 'takx/one/src/deep/a.c', repo / 'takx/one/src/a.c'), 'bst'),
+            ('added link', lambda: os.symlink('build.py', repo / 'takx/one/second.py'), 'bst'),
+            ('link to a directory added', lambda: os.symlink('src', repo / 'takx/one/sources'), 'bst'),
+            ('link target', retarget, 'bst'),
+            ('link replaced by a copy', lambda: (os.unlink(repo / 'takx/one/alias.py'),
+                                                 (repo / 'takx/one/alias.py').write_text('# one\n')), 'bst'),
+            ('lock digest', lambda: (repo / 'pins/base.lock.json').write_text(
+                json.dumps({'archive': {'sha256': '6' * 63 + '7'}})), 'bt'),
+            ('lock bytes without a digest change', lambda: (repo / 'pins/base.lock.json').write_text(
+                json.dumps({'archive': {'sha256': '6' * 64}}) + '\n'), 'bt'),
+            ('lock inside the recipe', flip(repo / 'takx/two/inputs.lock.json'), 't'),
+            ('fetched digest', self.records_with(0, expected_sha256='5' * 63 + '6'), 'bt'),
+            ('fetched actual digest', self.records_with(0, actual_sha256='5' * 64), 'bt'),
+            ('fetched name', self.records_with(0, name='uno'), 'bt'),
+            ('fetched revision selected by path', self.records_with(2, expected_revision='3' * 39 + '4'), 't'),
+            ('fetched input selected by kind', self.records_with(3, expected_sha256='4' * 63 + '5'), 's'),
+            ('toolchain image', lambda: self.write_json('status/images.json', {
+                'status': 'ok', 'image_ids': {PC.TOOLCHAIN: 'sha256:' + '1' * 63 + '2'}}), 'bst'),
+        )
+        return cases
+
+    def test_single_changes(self):
+        for index in range(len(self.single_changes())):
+            what, action, expected = self.single_changes()[index]  # built for this fixture
+            with self.subTest(what=what):
+                self.assertEqual(self.changed(action), expected)
+            self.doCleanups()
+            self.setUp()
+
+    def changes_that_are_not_inputs(self):
+        repo = self.repo
+        return (
+            ('readme', lambda: (repo / 'takx/one/README.md').write_text('changed\n')),
+            ('readme removed', lambda: os.unlink(repo / 'takx/one/README.md')),
+            ('nested readme', lambda: (repo / 'takx/one/src/deep/README').write_text('changed\n')),
+            ('readme added', lambda: (repo / 'takx/two/README.rst').write_text('new\n')),
+            ('test changed', lambda: (repo / 'takx/one/test_build.py').write_text('changed\n')),
+            ('test added', lambda: (repo / 'takx/one/src/test_more.py').write_text('new\n')),
+            ('test removed', lambda: os.unlink(repo / 'takx/two/test_build.py')),
+            ('bytecode', lambda: (repo / 'takx/one/__pycache__/build.pyc').write_text('changed\n')),
+            ('bytecode added', lambda: (repo / 'takx/one/__pycache__/new.cpython-313.pyc').write_text('new\n')),
+            ('bytecode outside the cache directory', lambda: (repo / 'takx/one/src/build.pyc').write_text('new\n')),
+            ('nested bytecode directory', lambda: ((repo / 'takx/one/src/deep/__pycache__').mkdir(),
+                                                   (repo / 'takx/one/src/deep/__pycache__/a.txt').write_text('x'))),
+            ('bytecode directory removed', lambda: (os.unlink(repo / 'takx/one/__pycache__/build.pyc'),
+                                                    os.rmdir(repo / 'takx/one/__pycache__'))),
+            ('empty directory added', lambda: (repo / 'takx/one/src/empty').mkdir()),
+            ('file time', lambda: os.utime(repo / 'takx/one/build.py', (1, 1))),
+            ('file outside the recipes', lambda: (repo / 'takx/unrelated.py').write_text('new\n')),
+            ('unrelated fetched input', self.records_with(4, expected_sha256='8' * 64)),
+            ('fetched size and url', self.records_with(0, bytes=11, url='https://mirror.invalid/one')),
+            ('order of the fetch record', lambda: self.write_json('status/fetch.json', {
+                'status': 'ok', 'inputs': self.records()[::-1], 'seconds': 3})),
+            ('another image in the image record', lambda: self.write_json('status/images.json', {
+                'status': 'ok', 'image_ids': {'other:image': 'sha256:' + '9' * 64, PC.TOOLCHAIN: TOOLCHAIN_ID}})),
+            ('provider outputs and status', lambda: self.make('base')),
+            ('push records', lambda: self.service.tree.record_push(('base', 'k', 'r', 't'))),
+        )
+
+    def test_changes_that_are_not_inputs(self):
+        for index in range(len(self.changes_that_are_not_inputs())):
+            what, action = self.changes_that_are_not_inputs()[index]
+            with self.subTest(what=what):
+                self.assertEqual(self.changed(action), '')
+            self.doCleanups()
+            self.setUp()
+
+    def test_identity_of_toolchain_root_and_repository(self):
+        self.assertEqual(self.changed(override=TOOLCHAIN_ID), '')  # the override names the same image
+        self.assertEqual(self.changed(override='sha256:' + '9' * 64), 'bst')
+        other = self.root.with_name('root2')
+
+        def moved():  # the same work root under another path, with its fetch record
+            os.rename(self.root, other)
+            record = other / 'status/fetch.json'
+            record.write_text(record.read_text().replace(str(self.root) + '/', str(other) + '/'))
+        self.assertEqual(self.changed(moved, root=other), 'bst')
+        shutil.rmtree(other)
+        self.doCleanups()
+        self.setUp()
+        elsewhere = self.repo.with_name('repo2')
+        self.assertEqual(self.changed(lambda: os.rename(self.repo, elsewhere), repo=elsewhere), 'bst')
+        os.rename(elsewhere, self.repo)
+        self.assertEqual(self.changed(root=str(self.root) + '/'), '')  # one work root, one spelling
+
+    def test_manifest_changes(self):
+        def edited(edit):
+            document = self.document()
+            edit(document)
+            return self.changed(document=document)
+        self.assertEqual(edited(lambda m: m['providers']['base']['invocation']['argv'].append('-j4')), 'bt')
+        self.assertEqual(edited(lambda m: m['providers']['top']['invocation']['argv'].append('-j4')), 't')
+        self.assertEqual(edited(lambda m: m['providers']['side']['invocation']['env'].append('A=1')), 's')
+        self.assertEqual(edited(lambda m: m['variables'].update(jdk='/jdk18')), 'bst')
+        self.assertEqual(edited(lambda m: m['providers']['base'].update(marker='done.json')), 'bt')
+        self.assertEqual(edited(lambda m: m['providers']['side'].update(locks=['pins/base.lock.json'])), 's')
+        self.assertEqual(edited(lambda m: m['providers']['side'].update(prerequisites=['base'])), 's')
+        self.assertEqual(edited(lambda m: m['recipes']['takx/one'].update(uses=['takx/shared.py'])), 'bst')
+        self.assertEqual(edited(lambda m: m['recipe_exclude'].remove('README*')), 'bst')
+        self.assertEqual(edited(lambda m: m['recipe_exclude'].append('*.c')), 'bst')
+        self.assertEqual(edited(lambda m: m['providers']['base'].update(lane='lane7.sh')), '')
+        self.assertEqual(edited(lambda m: m['providers']['top'].update(
+            fetched=[{'path': 'inputs/tree'}, {'consumer': 'two'}, {'consumer': 'two'}])), '')
+        self.assertEqual(edited(lambda m: m['recipes']['takx/two'].update(uses=['takx/shared.py', 'takx/one'])), '')
+
+    def test_helpers_are_followed_through_other_recipes(self):
+        document = self.document()
+        document['recipes']['takx/three'] = {'uses': ['takx/two']}
+        document['providers']['side']['recipe'] = 'takx/three'
+        (self.repo / 'takx/three').mkdir()
+        (self.repo / 'takx/three/build.py').write_text('# three\n')
+        before = self.new_service(document=document).explain('side')
+        self.assertEqual(sorted(before['recipe_files']), [
+            'takx/one/alias.py', 'takx/one/build.py', 'takx/one/inputs.lock.json', 'takx/one/other.py',
+            'takx/one/src/deep/a.c', 'takx/shared.py', 'takx/three/build.py', 'takx/two/build.py',
+            'takx/two/inputs.lock.json', 'takx/two/other.py'])
+        self.assertEqual(before['recipe_files']['takx/one/alias.py'], 'link:build.py')
+        self.assertEqual(before['recipe_files']['takx/one/build.py'], hashlib.sha256(b'# one\n').hexdigest())
+        (self.repo / 'takx/one/src/deep/a.c').write_text('int b;\n')
+        self.assertNotEqual(self.new_service(document=document).key('side'), PC.derive_key(before))
+
+    def test_explained_inputs_are_what_is_on_disk(self):
+        document = self.new_service()
+        inputs = document.explain('top')
+        self.assertEqual(inputs['locks'], {'takx/two/inputs.lock.json': {
+            'sha256': hashlib.sha256(json.dumps({'sha256': '5' * 64}).encode()).hexdigest(),
+            'digests': ['5' * 64]}})
+        self.assertEqual(inputs['fetched'], [
+            {'kind': 'git-source', 'name': 'tree', 'digests': {'expected_revision': '3' * 40}},
+            {'kind': 'lock-entry', 'name': 'two', 'digests': {'expected_sha256': '5' * 64}}])
+        self.assertEqual((inputs['toolchain'], inputs['root'], inputs['repo']),
+                         (TOOLCHAIN_ID, str(self.root), str(self.repo)))
+        self.assertEqual(inputs['prerequisites'], {'base': document.key('base')})
+        self.assertEqual(PC.derive_key(inputs), document.key('top'))
+        self.assertEqual(document.ref('top'), 'reg.example/cache/top:' + document.key('top'))
+
+    def test_recipe_paths_that_cannot_be_hashed_are_refused(self):
+        tree = PC.WorkTree(self.root, self.repo)
+        (self.repo / 'takx/empty/__pycache__').mkdir(parents=True)
+        (self.repo / 'takx/empty/README').write_text('only this\n')
+        os.mkfifo(self.repo / 'takx/pipe')
+        for spec, message in (('takx/missing', 'does not exist'), ('takx/empty', 'is empty'),
+                              ('takx/*.nothing', 'no recipe file matches'), ('takx/pipe', 'does not exist'),
+                              ('takx/pi?e', 'not a regular file'), ('takx/on[e]', 'not a regular file')):
+            with self.subTest(spec=spec), self.assertRaisesRegex(PC.CacheError, message):
+                tree.recipe_files([spec], ['__pycache__', 'README*'])
+        self.assertEqual(tree.recipe_files(['takx/sh*.py', 'takx/one/build.py', 'takx/one/alias.py'], []), {
+            'takx/one/alias.py': 'link:build.py', 'takx/one/build.py': hashlib.sha256(b'# one\n').hexdigest(),
+            'takx/shared.py': hashlib.sha256(b'# shared\n').hexdigest()})
+        with self.assertRaisesRegex(PC.CacheError, 'recipe directory takx/two is empty'):
+            tree.recipe_files(['takx/one/build.py', 'takx/two'], ['*'])
+        # An explicitly named file is an input even when its name is excluded in directories.
+        self.assertEqual(list(tree.recipe_files(['takx/one/README.md'], ['README*'])), ['takx/one/README.md'])
+        with self.assertRaisesRegex(PC.CacheError, 'cannot be read'):
+            tree.locks(['takx/missing.lock'])
+        self.assertEqual(tree.locks([]), {})
+
+    def test_fetch_and_image_records_must_be_ok(self):
+        for what, rel, value in (
+                ('failed fetch', 'status/fetch.json', {'status': 'failed', 'inputs': self.records()}),
+                ('fetch without inputs', 'status/fetch.json', {'status': 'ok', 'inputs': {}}),
+                ('fetch without status', 'status/fetch.json', {'inputs': self.records()}),
+                ('failed images', 'status/images.json', {'status': 'failed',
+                                                         'image_ids': {PC.TOOLCHAIN: TOOLCHAIN_ID}}),
+                ('other image only', 'status/images.json', {'status': 'ok', 'image_ids': {'x': TOOLCHAIN_ID}}),
+                ('empty image id', 'status/images.json', {'status': 'ok', 'image_ids': {PC.TOOLCHAIN: ''}}),
+                ('image id of another type', 'status/images.json', {'status': 'ok',
+                                                                    'image_ids': {PC.TOOLCHAIN: 7}})):
+            saved = (self.root / rel).read_bytes()
+            self.write_json(rel, value)
+            with self.subTest(what=what), self.assertRaises(PC.CacheError):
+                self.new_service().key('base')
+            (self.root / rel).write_bytes(saved)
+        (self.root / 'status/fetch.json').write_text('{not json')
+        with self.assertRaisesRegex(PC.CacheError, 'status/fetch.json cannot be read'):
+            self.new_service().key('base')
+        self.write_json('status/fetch.json', {'status': 'ok', 'inputs': self.records()})
+        os.unlink(self.root / 'status/images.json')
+        self.assertRegex(self.new_service(override='sha256:' + '9' * 64).key('base'), '^[0-9a-f]{64}$')
+
+
+class Tamper(ServiceCase):
+    """Every way a cached bundle can be wrong: refused, and nothing left behind."""
+
+    def setUp(self):
+        super().setUp()
+        self.top = self.make('base')
+        self.good = snapshot(self.top)
+        self.ref = self.service.push('base')
+        self.set_aside('base')
+        self.before = snapshot(self.tmp.name)
+        self.stored = copy.deepcopy(self.registry.images[self.ref])
+
+    def pristine(self):
+        labels, content = self.registry.images[self.ref]
+        labels.clear()
+        labels.update(self.stored[0])
+        content.clear()
+        content.update(self.stored[1])
+
+    def reseal(self, members=None, entries=None, marker=None):
+        """Edit the stored archive and/or file manifest; every digest agrees again."""
+        labels, content = self.registry.images[self.ref]
+        meta = json.loads(content['meta.json'])
+        if members:
+            source = tarfile.open(fileobj=io.BytesIO(content['base.tar']))
+            items = members([(member, source.extractfile(member).read() if member.isreg() else None)
+                             for member in source])
+            data = io.BytesIO()
+            with tarfile.open(fileobj=data, mode='w', format=tarfile.PAX_FORMAT) as target:
+                for member, payload in items:
+                    member.size = len(payload) if payload is not None else 0
+                    target.addfile(member, io.BytesIO(payload) if payload is not None else None)
+            content['base.tar'] = data.getvalue()
+        if entries:
+            listing = json.loads(content['files.json'])
+            listing['entries'] = entries(listing['entries'])
+            content['files.json'] = json.dumps(listing).encode()
+            meta['files_sha256'] = hashlib.sha256(content['files.json']).hexdigest()
+        if marker is not None:
+            meta['marker_sha256'] = hashlib.sha256(marker).hexdigest()
+        digest = hashlib.sha256(content['base.tar']).hexdigest()
+        content['tar.sha256'] = (digest + '\n').encode()
+        labels['dev.uds.takx.tar-sha256'] = meta['tar_sha256'] = digest
+        content['meta.json'] = json.dumps(meta).encode()
+
+    def assert_refused(self, message=None, errors=None):
+        with self.assertRaises(errors or PC.CacheError) as caught:
+            self.service.restore('base')
+        self.assertEqual(snapshot(self.tmp.name), self.before)  # no directory, no status, no scratch, no escape
+        self.assertFalse(os.path.lexists(self.root / 'P/base'))
+        self.assertEqual(sorted(os.listdir(self.root / 'status')), ['fetch.json', 'images.json'])
+        self.assertEqual(os.listdir(self.root / 'P'), [])
+        if message:
+            self.assertIn(message, str(caught.exception))
+
+    @staticmethod
+    def member(name, kind=tarfile.REGTYPE, link='', mode=0o644):
+        info = tarfile.TarInfo(name)
+        info.type, info.linkname, info.mode = kind, link, mode
+        return info
+
+    @staticmethod
+    def file_entry(path, data, mode='0644'):
+        return {'path': path, 'type': 'file', 'mode': mode, 'size': len(data),
+                'sha256': hashlib.sha256(data).hexdigest()}
+
+    def edit_file(self, name, change):
+        return lambda items: [(member, change(member, data) if member.name == name else data)
+                              for member, data in items]
+
+    def test_resealed_but_unchanged_bundle_is_restored(self):
+        self.reseal(members=lambda items: items, entries=lambda entries: entries)
+        self.assertEqual(self.service.restore('base'), self.ref)
+        self.assertEqual(snapshot(self.top), self.good)
+
+    def test_archive_digest_mismatch(self):
+        labels, content = self.registry.images[self.ref]
+        original = dict(content)
+        for what, position in (('first byte', 0), ('middle', len(original['base.tar']) // 2),
+                               ('last byte', len(original['base.tar']) - 1)):
+            data = bytearray(original['base.tar'])
+            data[position] ^= 0x01
+            content['base.tar'] = bytes(data)
+            with self.subTest(what=what):
+                self.assert_refused('archive digest differs from the recorded one')
+        content['base.tar'] = original['base.tar'] + b'\0' * 512
+        self.assert_refused('archive digest differs from the recorded one')
+        content['base.tar'] = original['base.tar'][:-512]
+        self.assert_refused('archive digest differs from the recorded one')
+        content['base.tar'] = b''
+        self.assert_refused('archive digest differs from the recorded one')
+        content.update(original)
+        for what, value in (('other digest', b'0' * 64 + b'\n'), ('empty', b''), ('upper case', None),
+                            ('with a name', None), ('not ascii', b'\xff\xfe' + original['tar.sha256']),
+                            ('two digests', original['tar.sha256'] * 2)):
+            digest = original['tar.sha256'].strip()
+            content['tar.sha256'] = value if value is not None else (
+                digest.upper() if what == 'upper case' else digest + b'  base.tar\n')
+            with self.subTest(what=what):
+                self.assert_refused('archive digest')
+        content.update(original)
+        self.service.restore('base')
+
+    def test_label_and_metadata_mismatch(self):
+        labels, content = self.registry.images[self.ref]
+        original = dict(labels), dict(content)
+        meta = json.loads(content['meta.json'])
+        key = self.service.key('base')
+
+        def with_meta(**fields):
+            value = dict(meta, **fields)
+            for field in [field for field in value if value[field] is ...]:
+                del value[field]
+            content['meta.json'] = json.dumps(value).encode()
+
+        def with_label(label, value):
+            if value is None:
+                del labels[label]
+            else:
+                labels[label] = value
+        cases = (
+            ('label digest', lambda: with_label('dev.uds.takx.tar-sha256', '0' * 64), 'image label'),
+            ('no label digest', lambda: with_label('dev.uds.takx.tar-sha256', None), 'image label'),
+            ('label provider', lambda: with_label('dev.uds.takx.provider', 'side'), 'another provider'),
+            ('no label provider', lambda: with_label('dev.uds.takx.provider', None), 'another provider'),
+            ('label key', lambda: with_label('dev.uds.takx.key', key[:-1] + ('0' if key[-1] != '0' else '1')),
+             'another key'),
+            ('no label key', lambda: with_label('dev.uds.takx.key', None), 'another key'),
+            ('schema', lambda: with_meta(schema=2), 'bundle schema'),
+            ('no schema', lambda: with_meta(schema=...), 'bundle schema'),
+            ('meta provider', lambda: with_meta(provider='side'), 'another provider or key'),
+            ('meta key', lambda: with_meta(key=self.service.key('side')), 'another provider or key'),
+            ('no meta key', lambda: with_meta(key=...), 'another provider or key'),
+            ('root', lambda: with_meta(root=str(self.root) + '2'), 'another work root'),
+            ('no root', lambda: with_meta(root=...), 'another work root'),
+            ('meta digest', lambda: with_meta(tar_sha256='0' * 64), 'names another archive'),
+            ('no meta digest', lambda: with_meta(tar_sha256=...), 'names another archive'),
+            ('files digest', lambda: with_meta(files_sha256='0' * 64), 'file manifest differs'),
+            ('no files digest', lambda: with_meta(files_sha256=...), 'file manifest differs'),
+            ('prerequisite markers', lambda: with_meta(prerequisite_markers={'side': '0' * 64}),
+             'other prerequisite outputs'),
+            ('no prerequisite markers', lambda: with_meta(prerequisite_markers=...), 'other prerequisite outputs'),
+            ('marker digest', lambda: with_meta(marker_sha256='0' * 64), 'completion marker differs'),
+            ('no marker digest', lambda: with_meta(marker_sha256=...), 'completion marker differs'),
+            ('meta is a list', lambda: content.update({'meta.json': b'[]'}), 'bundle schema'),
+            ('meta is not json', lambda: content.update({'meta.json': b'{'}), 'not JSON'),
+            ('meta is not text', lambda: content.update({'meta.json': b'\xff'}), 'not JSON'),
+            ('status failed', lambda: content.update(
+                {'status.json': json.dumps({'stage': 'base', 'status': 'failed'}).encode()}), 'not an ok status'),
+            ('status of another stage', lambda: content.update(
+                {'status.json': json.dumps({'stage': 'side', 'status': 'ok'}).encode()}), 'not an ok status'),
+            ('status without stage', lambda: content.update(
+                {'status.json': json.dumps({'status': 'ok'}).encode()}), 'not an ok status'),
+            ('status is a list', lambda: content.update({'status.json': b'["ok"]'}), 'not an ok status'),
+            ('status is not json', lambda: content.update({'status.json': b'ok'}), 'not JSON'),
+            ('status is not text', lambda: content.update({'status.json': b'\xff'}), 'not JSON'),
+            ('files is not json', lambda: content.update({'files.json': b'{'}), 'not JSON'),
+            ('files changed', lambda: content.update(
+                {'files.json': content['files.json'].replace(b'0755', b'0700')}), 'file manifest differs'),
+            ('files with a trailing byte', lambda: content.update(
+                {'files.json': content['files.json'] + b'\n'}), 'file manifest differs'),
+        )
+        for what, change, message in cases:
+            change()
+            with self.subTest(what=what):
+                self.assert_refused(message)
+            labels.clear()
+            labels.update(original[0])
+            content.update(original[1])
+        self.service.restore('base')
+
+    def test_missing_image_file_or_one_of_another_type(self):
+        fetch = self.registry.fetch
+        for item in ('base.tar', 'status.json', 'tar.sha256', 'files.json', 'meta.json'):
+            for what in ('missing', 'symlink', 'directory', 'fifo'):
+                def changed(ref, target, files, item=item, what=what):
+                    labels = fetch(ref, target, files)
+                    path = Path(target) / item
+                    data = path.read_bytes()
+                    os.unlink(path)
+                    if what == 'symlink':
+                        (Path(target) / 'real').write_bytes(data)
+                        os.symlink('real', path)
+                    elif what == 'directory':
+                        path.mkdir()
+                    elif what == 'fifo':
+                        os.mkfifo(path)
+                    return labels
+                self.registry.fetch = changed
+                with self.subTest(item=item, what=what):
+                    if what == 'missing':
+                        self.assert_refused(errors=OSError)
+                    else:
+                        self.assert_refused('image file %s is not a regular file' % item)
+        self.registry.fetch = fetch
+        self.assertEqual(self.registry.fetched[-1][1], ['base.tar', 'status.json', 'tar.sha256', 'files.json',
+                                                        'meta.json'])
+
+    def test_failed_pull_leaves_nothing(self):
+        def failing(ref, target, files):
+            (Path(target) / 'base.tar').write_bytes(b'partial')
+            raise PC.CacheError('docker pull failed: connection reset')
+        self.registry.fetch = failing
+        self.assert_refused('connection reset')
+
+    def test_file_content_differs_from_the_manifest(self):
+        self.reseal(members=self.edit_file('base/install/lib/lib.a', lambda member, data: bytes([data[0] ^ 1]) + data[1:]))
+        self.assert_refused('unpacked files differ from the recorded manifest: changed install/lib/lib.a (1 differences)')
+
+    def test_file_size_differs_from_the_manifest(self):
+        for what, change in (('longer', lambda member, data: data + b'\0'), ('shorter', lambda member, data: data[:-1]),
+                             ('empty', lambda member, data: b'')):
+            self.reseal(members=self.edit_file('base/install/lib/lib.a', change))
+            with self.subTest(what=what):
+                self.assert_refused('changed install/lib/lib.a (1 differences)')
+            self.pristine()
+
+    def test_file_mode_differs_from_the_manifest(self):
+        def setuid(member, data):
+            member.mode = 0o4755
+            return data
+        self.reseal(members=self.edit_file('base/install/tool', setuid))
+        self.assert_refused('changed install/tool (1 differences)')
+
+        def open_directory(items):
+            for member, data in items:
+                if member.name == 'base/empty':
+                    member.mode = 0o777
+            return items
+        self.reseal(members=open_directory)
+        self.assert_refused('changed empty, changed install/tool (2 differences)')
+
+    def test_file_missing_from_the_archive(self):
+        self.reseal(members=lambda items: [item for item in items if item[0].name != 'base/install/tool'])
+        self.assert_refused('missing install/tool (1 differences)')
+
+    def test_directory_or_link_missing_from_the_archive(self):
+        self.reseal(members=lambda items: [item for item in items if item[0].name not in (
+            'base/empty', 'base/install/tool-1')])
+        self.assert_refused('missing empty, missing install/tool-1 (2 differences)')
+
+    def test_extra_entries_in_the_archive(self):
+        for what, extra, path in (
+                ('file', (self.member('base/install/planted.so'), b'evil'), 'install/planted.so'),
+                ('empty file', (self.member('base/planted'), b''), 'planted'),
+                ('hidden file', (self.member('base/.planted'), b'evil'), '.planted'),
+                ('directory', (self.member('base/planted', tarfile.DIRTYPE, mode=0o755), None), 'planted'),
+                ('link', (self.member('base/planted', tarfile.SYMTYPE, 'install/tool'), None), 'planted'),
+                ('dangling link', (self.member('base/planted', tarfile.SYMTYPE, 'nowhere'), None), 'planted')):
+            self.reseal(members=lambda items: items + [extra])
+            with self.subTest(what=what):
+                self.assert_refused('unexpected %s (1 differences)' % path)
+            self.pristine()
+        self.service.restore('base')
+
+    def test_entry_of_another_type_or_target(self):
+        def retarget(items):
+            for member, data in items:
+                if member.name == 'base/install/tool-1':
+                    member.linkname = 'lib/lib.a'
+            return items
+        self.reseal(members=retarget)
+        self.assert_refused('changed install/tool-1 (1 differences)')
+        self.pristine()
+
+        def swap(items):
+            return [(self.member('base/install/tool-1'), b'#!/bin/sh\n') if member.name == 'base/install/tool-1'
+                    else (member, data) for member, data in items]
+        self.reseal(members=swap)
+        self.assert_refused('changed install/tool-1 (1 differences)')
+        self.pristine()
+
+        def link_for_file(items):
+            return [(self.member('base/install/tool', tarfile.SYMTYPE, 'lib/lib.a'), None)
+                    if member.name == 'base/install/tool' else (member, data) for member, data in items]
+        self.reseal(members=link_for_file)
+        self.assert_refused('changed install/tool (1 differences)')
+
+    def test_hard_link_to_another_file_in_the_archive(self):
+        def linked(items):
+            return [(self.member('base/install/tool', tarfile.LNKTYPE, 'base/complete.json'), None)
+                    if member.name == 'base/install/tool' else (member, data) for member, data in items]
+        self.reseal(members=linked)
+        self.assert_refused('changed install/tool (1 differences)')
+
+    def test_manifest_differs_from_the_archive(self):
+        def edit(path, **fields):
+            def change(entries):
+                (entry,) = [entry for entry in entries if entry['path'] == path]
+                entry.update(fields)
+                return entries
+            return change
+        for what, change, message in (
+                ('content', edit('install/tool', sha256='0' * 64), 'changed install/tool (1 differences)'),
+                ('size', edit('install/tool', size=11), 'changed install/tool (1 differences)'),
+                ('mode', edit('install/tool', mode='0644'), 'changed install/tool (1 differences)'),
+                ('target', edit('install/tool-1', target='lib/lib.a'), 'changed install/tool-1 (1 differences)'),
+                ('type', edit('empty', type='file'), 'changed empty (1 differences)'),
+                ('additional field', edit('empty', owner='root'), 'changed empty (1 differences)'),
+                ('entry removed', lambda entries: [e for e in entries if e['path'] != 'install/tool'],
+                 'unexpected install/tool (1 differences)'),
+                ('entry added', lambda entries: entries + [self.file_entry('install/more', b'more')],
+                 'missing install/more (1 differences)'),
+                ('entry twice', lambda entries: entries + [dict(entries[-1])], 'twice'),
+                ('no entries', lambda entries: [], 'unexpected complete.json, unexpected empty, unexpected install, '
+                                                   'unexpected install/lib, unexpected install/lib/.libs (9 differences)'),
+                ('escaping link', lambda entries: entries + [{'path': 'out', 'type': 'link', 'target': '../x'}],
+                 'leaves the provider directory'),
+                ('absolute link', lambda entries: entries + [{'path': 'out', 'type': 'link', 'target': '/etc'}],
+                 'absolute or empty target'),
+                ('link without target', lambda entries: entries + [{'path': 'out', 'type': 'link'}],
+                 'absolute or empty target'),
+                ('special file', lambda entries: entries + [{'path': 'dev', 'type': 'special', 'mode': '0600'}],
+                 'device or other special file'),
+                ('unknown type', lambda entries: entries + [{'path': 'dev', 'type': 'socket'}],
+                 'device or other special file'),
+                ('no type', lambda entries: entries + [{'path': 'dev'}], 'device or other special file'),
+                ('dot-dot path', lambda entries: entries + [self.file_entry('../x', b'')], '".."'),
+                ('absolute path', lambda entries: entries + [self.file_entry('/x', b'')], 'empty, "." or ".."'),
+                ('entry that is no object', lambda entries: entries + ['install/more'], 'malformed file manifest entry'),
+                ('entry without path', lambda entries: entries + [{'type': 'file'}], 'malformed file manifest entry'),
+                ('path that is no text', lambda entries: entries + [{'path': 7, 'type': 'file'}],
+                 'malformed file manifest entry'),
+                ('target that is no text', lambda entries: entries + [{'path': 'l', 'type': 'link', 'target': ['x']}],
+                 'malformed file manifest entry')):
+            self.reseal(entries=change)
+            with self.subTest(what=what):
+                self.assert_refused(message)
+            self.pristine()
+        self.service.restore('base')
+
+    def test_malformed_manifest_document(self):
+        labels, content = self.registry.images[self.ref]
+        entries = json.loads(content['files.json'])['entries']
+        for what, listing in (('another provider', {'schema': 1, 'provider': 'side', 'entries': entries}),
+                              ('no provider', {'schema': 1, 'entries': entries}),
+                              ('entries is an object', {'schema': 1, 'provider': 'base', 'entries': {}}),
+                              ('no entries', {'schema': 1, 'provider': 'base'}),
+                              ('a list', entries), ('null', None)):
+            content['files.json'] = json.dumps(listing).encode()
+            self.reseal()
+            meta = json.loads(content['meta.json'])
+            meta['files_sha256'] = hashlib.sha256(content['files.json']).hexdigest()
+            content['meta.json'] = json.dumps(meta).encode()
+            with self.subTest(what=what):
+                self.assert_refused('malformed file manifest')
+
+    def without_marker(self, items):
+        return [item for item in items if item[0].name != 'base/complete.json']
+
+    def test_missing_completion_marker(self):
+        self.reseal(members=self.without_marker,
+                    entries=lambda entries: [e for e in entries if e['path'] != 'complete.json'])
+        self.assert_refused('completion marker complete.json is missing')
+
+    def test_empty_completion_marker(self):
+        self.reseal(members=self.edit_file('base/complete.json', lambda member, data: b''),
+                    entries=lambda entries: [self.file_entry('complete.json', b'') if e['path'] == 'complete.json'
+                                             else e for e in entries], marker=b'')
+        self.assert_refused('completion marker complete.json is missing')
+
+    def test_completion_marker_that_is_a_link_or_a_directory(self):
+        marker = [data for member, data in self.archive() if member.name == 'base/complete.json'][0]
+        for what, member, entry in (
+                ('link', self.member('base/complete.json', tarfile.SYMTYPE, 'real.json'),
+                 {'path': 'complete.json', 'type': 'link', 'target': 'real.json'}),
+                ('directory', self.member('base/complete.json', tarfile.DIRTYPE, mode=0o755),
+                 {'path': 'complete.json', 'type': 'dir', 'mode': '0755'})):
+            self.reseal(
+                members=lambda items: self.without_marker(items) + [(member, None), (self.member('base/real.json'), marker)],
+                entries=lambda entries: [e for e in entries if e['path'] != 'complete.json'] + [
+                    entry, self.file_entry('real.json', marker)])
+            with self.subTest(what=what):
+                self.assert_refused('completion marker complete.json is missing')
+            self.pristine()
+
+    def test_changed_completion_marker(self):
+        changed = b'{"provider": "base", "nonce": "other"}'
+        self.reseal(members=self.edit_file('base/complete.json', lambda member, data: changed),
+                    entries=lambda entries: [self.file_entry('complete.json', changed) if e['path'] == 'complete.json'
+                                             else e for e in entries])
+        self.assert_refused('completion marker differs from the recorded one')
+
+    def archive(self):
+        source = tarfile.open(fileobj=io.BytesIO(self.registry.images[self.ref][1]['base.tar']))
+        return [(member, source.extractfile(member).read() if member.isreg() else None) for member in source]
+
+    def test_members_that_would_be_written_outside(self):
+        outside = Path(self.tmp.name) / 'escaped'
+        cases = (
+            ('path traversal', [(self.member('base/../../escaped'), b'evil')], '".."'),
+            ('path traversal at the start', [(self.member('../escaped'), b'evil')], '".."'),
+            ('path traversal into the work root', [(self.member('base/../../status/fetch.json'), b'{}')], '".."'),
+            ('dot component', [(self.member('base/./escaped'), b'evil')], '"."'),
+            ('absolute member', [(self.member(str(outside)), b'evil')], 'not a plain relative path'),
+            ('absolute directory', [(self.member(str(outside), tarfile.DIRTYPE), None)], 'not a plain relative path'),
+            ('another top-level name', [(self.member('escaped'), b'evil')], 'outside base/'),
+            ('another top-level directory', [(self.member('other', tarfile.DIRTYPE), None),
+                                             (self.member('other/escaped'), b'evil')], 'outside base/'),
+            ('name with the provider as prefix', [(self.member('base2/escaped'), b'evil')], 'outside base/'),
+            ('backslash', [(self.member('base\\..\\escaped'), b'evil')], 'not a plain relative path'),
+            ('absolute symlink', [(self.member('base/evil', tarfile.SYMTYPE, str(outside)), None)],
+             'absolute or empty target'),
+            ('escaping symlink', [(self.member('base/evil', tarfile.SYMTYPE, '../escaped'), None)],
+             'leaves the provider directory'),
+            ('escaping symlink from below', [(self.member('base/install/evil', tarfile.SYMTYPE, '../../../etc'), None)],
+             'leaves the provider directory'),
+            ('symlink to the parent', [(self.member('base/evil', tarfile.SYMTYPE, '..'), None)],
+             'leaves the provider directory'),
+            ('symlink that climbs after a name', [(self.member('base/evil', tarfile.SYMTYPE, 'install/../..'), None)],
+             '".." after a name'),
+            ('file through a symlink', [(self.member('base/evil', tarfile.SYMTYPE, 'install'), None),
+                                        (self.member('base/evil/planted'), b'evil')], 'below a link or file'),
+            ('file below a file', [(self.member('base/install/tool/planted'), b'evil')], 'below a link or file'),
+            ('hard link to the outside', [(self.member('base/evil', tarfile.LNKTYPE, '../escaped'), None)], '".."'),
+            ('hard link to an absolute path', [(self.member('base/evil', tarfile.LNKTYPE, '/etc/hostname'), None)],
+             'not a plain relative path'),
+            ('hard link to a later member', [(self.member('base/evil', tarfile.LNKTYPE, 'base/later'), None),
+                                             (self.member('base/later'), b'x')], 'does not name an earlier file'),
+            ('hard link to a directory', [(self.member('base/evil', tarfile.LNKTYPE, 'base/install'), None)],
+             'does not name an earlier file'),
+            ('character device', [(self.member('base/evil', tarfile.CHRTYPE), None)], 'device or other special file'),
+            ('block device', [(self.member('base/evil', tarfile.BLKTYPE), None)], 'device or other special file'),
+            ('fifo', [(self.member('base/evil', tarfile.FIFOTYPE), None)], 'device or other special file'),
+            ('member named twice', [(self.member('base/install/tool'), b'evil')], 'twice'),
+            ('directory named twice', [(self.member('base/install/', tarfile.DIRTYPE), None)], 'twice'),
+            ('top level named twice', [(self.member('base', tarfile.DIRTYPE), None)], 'twice'),
+        )
+        for what, extra, message in cases:
+            self.reseal(members=lambda items: items + extra)
+            with self.subTest(what=what):
+                self.assert_refused(message)
+                self.assertFalse(os.path.lexists(outside))
+            self.pristine()
+        self.service.restore('base')
+
+    def test_members_are_checked_before_anything_is_unpacked(self):
+        self.reseal(members=lambda items: items + [(self.member('base/evil', tarfile.SYMTYPE, '../escaped'), None)])
+        self.service.tree.unpack = lambda path, target: self.fail('unpacked a refused archive')
+        self.assert_refused('leaves the provider directory')
+
+    def test_top_level_entry_must_be_the_provider_directory(self):
+        for what, members, message in (
+                ('a file', lambda items: [(self.member('base'), b'evil')], 'top-level entry is not a directory'),
+                ('a link', lambda items: [(self.member('base', tarfile.SYMTYPE, 'elsewhere'), None)],
+                 'top-level entry is not a directory'),
+                ('absent', lambda items: items[1:], 'no top-level base directory'),
+                ('empty archive', lambda items: [], 'no top-level base directory'),
+                ('another provider', lambda items: [(self.member('side', tarfile.DIRTYPE), None)], 'outside base/')):
+            self.reseal(members=members)
+            with self.subTest(what=what):
+                self.assert_refused(message)
+            self.pristine()
+
+    def test_link_that_leaves_through_another_link_is_refused(self):
+        # 'self' is the provider directory itself, so each 'self' cancels a '..'
+        # only on paper: self/self/../.. is really two levels above.
+        links = [('self', '.'), ('out', 'self/self/../..')]
+        self.reseal(
+            members=lambda items: items + [(self.member('base/' + path, tarfile.SYMTYPE, target), None)
+                                           for path, target in links],
+            entries=lambda entries: entries + [{'path': path, 'type': 'link', 'target': target}
+                                               for path, target in links])
+        self.assert_refused('".." after a name')
+        with self.assertRaises(PC.CacheError):
+            PC.check_members('p', [('p', 'dir', ''), ('p/...', 'symlink', '.'), ('p/out', 'symlink', '.../..')])
+        self.assertEqual(PC.check_members('p', [('p', 'dir', ''), ('p/a', 'dir', ''), ('p/a/b', 'dir', ''),
+                                                ('p/a/b/up', 'symlink', '../../a/b'), ('p/a/b/top', 'symlink', '../..'),
+                                                ('p/a/dots', 'symlink', '..x/x..')]), 6)
+
+    def test_archive_that_is_not_a_plain_tar(self):
+        labels, content = self.registry.images[self.ref]
+        original = content['base.tar']
+        for what, data in (('garbage', b'not a tar archive' * 100), ('truncated', original[:700]),
+                           ('compressed', gzip.compress(original)), ('empty', b'')):
+            content['base.tar'] = data
+            self.reseal()
+            with self.subTest(what=what):
+                self.assert_refused(errors=(PC.CacheError, tarfile.TarError))
+
+    def test_interrupted_restore_leaves_nothing(self):
+        for step in ('unpack', 'entries', 'install'):
+            service = self.new_service()
+
+            def interrupted(*args, **kwargs):
+                raise KeyboardInterrupt
+            setattr(service.tree, step, interrupted)
+            with self.subTest(step=step), self.assertRaises(KeyboardInterrupt):
+                service.restore('base')
+            self.assertEqual(snapshot(self.tmp.name), self.before)
+
+    def test_prerequisite_that_changes_during_the_restore(self):
+        aside = self.root.parent / 'aside-top'
+        self.make('top')
+        self.make('base')
+        ref = self.service.push('top')
+        os.rename(self.root / 'P/top', aside)
+        os.unlink(self.root / 'status/top.json')
+        before = snapshot(self.tmp.name)
+        marker = (self.root / 'P/base/complete.json').read_bytes()
+        unpack = self.service.tree.unpack
+
+        def rebuilt(path, target):
+            unpack(path, target)
+            (self.root / 'P/base/complete.json').write_text('{"rebuilt": true}')
+        self.service.tree.unpack = rebuilt
+        with self.assertRaisesRegex(PC.CacheError, 'a prerequisite changed during the restore'):
+            self.service.restore('top')
+        (self.root / 'P/base/complete.json').write_bytes(marker)
+        self.assertEqual(snapshot(self.tmp.name), before)
+        self.assertIn(ref, self.registry.images)
+
+
+class Promotion(ServiceCase):
+    """A restored provider appears in one step, complete, and only then its status."""
+
+    def setUp(self):
+        super().setUp()
+        self.top = self.make('base')
+        self.good = snapshot(self.top)
+        self.ref = self.service.push('base')
+        self.set_aside('base')
+        self.status = self.root / 'status/base.json'
+
+    def test_nothing_is_visible_until_one_rename_publishes_the_verified_tree(self):
+        events = []
+        rename, replace = PC.rename_noreplace, os.replace
+        tree = self.service.tree
+        for step in ('unpack', 'entries', 'tar_members'):
+            def watched(*args, step=step, call=getattr(tree, step)):
+                events.append(step)
+                self.assertFalse(os.path.lexists(self.top))
+                self.assertFalse(self.status.exists())
+                return call(*args)
+            setattr(tree, step, watched)
+
+        def renamed(source, target):
+            events.append('rename')
+            self.assertEqual(Path(target), self.top)
+            self.assertFalse(os.path.lexists(self.top))
+            self.assertFalse(self.status.exists())
+            self.assertEqual(snapshot(source), self.good)
+            self.assertEqual(Path(source).parent.parent.parent, self.root)
+            self.assertRegex(Path(source).parent.parent.name, r'^\.restore-base\.')
+            self.assertEqual(os.stat(source).st_dev, os.stat(self.root / 'P').st_dev)
+            rename(source, target)
+            self.assertFalse(os.path.lexists(source))
+            self.assertEqual(snapshot(self.top), self.good)
+
+        def replaced(source, target):
+            if Path(target) == self.status:
+                events.append('status')
+                self.assertEqual(snapshot(self.top), self.good)
+                self.assertEqual(Path(source).parent, self.status.parent)
+                self.assertEqual(json.loads(Path(source).read_text())['restored_from'], self.ref)
+                self.assertFalse(self.status.exists())
+            replace(source, target)
+        with mock.patch.object(PC, 'rename_noreplace', renamed), mock.patch.object(PC.os, 'replace', replaced):
+            self.assertEqual(self.service.restore('base'), self.ref)
+        self.assertEqual(events, ['tar_members', 'unpack', 'entries', 'rename', 'status'])
+        self.assertEqual(sorted(os.listdir(self.root / 'status')), ['base.json', 'fetch.json', 'images.json'])
+        self.assertEqual(os.listdir(self.root / 'P'), ['base'])
+        self.assertEqual(self.leftovers(), [])
+        self.assertEqual(self.messages[-1], 'provider-cache: restored base from %s (9 entries verified)' % self.ref)
+
+    def test_status_is_written_whole_or_not_at_all(self):
+        for error in (OSError(28, 'No space left on device'), KeyboardInterrupt()):
+            def failing(source, target, error=error):
+                self.assertTrue(Path(source).is_file())
+                raise error
+            with self.subTest(error=error), mock.patch.object(PC.os, 'replace', failing), \
+                    self.assertRaises(type(error)):
+                self.service.restore('base')
+            self.assertFalse(os.path.lexists(self.top))
+            self.assertEqual(sorted(os.listdir(self.root / 'status')), ['fetch.json', 'images.json'])
+            self.assertEqual(os.listdir(self.root / 'P'), [])
+            self.assertEqual(self.leftovers(), [])
+        self.service.restore('base')
+        self.assertEqual(snapshot(self.top), self.good)
+
+    def test_status_of_an_earlier_failed_build_is_replaced_only_on_success(self):
+        failed = json.dumps({'stage': 'base', 'status': 'failed', 'notes': 'earlier'})
+        self.status.write_text(failed)
+        with mock.patch.object(PC.os, 'replace', side_effect=OSError(5, 'Input/output error')), \
+                self.assertRaises(OSError):
+            self.service.restore('base')
+        self.assertEqual(self.status.read_text(), failed)
+        self.assertFalse(os.path.lexists(self.top))
+        labels, content = self.registry.images[self.ref]
+        saved = content['base.tar']
+        content['base.tar'] = saved + b'\0'
+        with self.assertRaises(PC.CacheError):
+            self.service.restore('base')
+        self.assertEqual(self.status.read_text(), failed)
+        content['base.tar'] = saved
+        self.service.restore('base')
+        self.assertEqual(json.loads(self.status.read_text())['status'], 'ok')
+
+    def test_work_root_without_p_and_status_is_created(self):
+        service = self.new_service(override=TOOLCHAIN_ID)
+        self.assertEqual(service.ref('base'), self.ref)  # the inputs are read before the directory goes
+        os.rmdir(self.root / 'P')
+        shutil.rmtree(self.root / 'status')
+        service.restore('base')
+        self.assertEqual(snapshot(self.top), self.good)
+        self.assertEqual(os.listdir(self.root / 'status'), ['base.json'])
+
+    def test_existing_destination_of_any_kind_is_kept(self):
+        cases = {
+            'empty directory': lambda: self.top.mkdir(),
+            'directory with files': lambda: (self.top.mkdir(), (self.top / 'keep').write_text('mine')),
+            'file': lambda: self.top.write_text('mine'),
+            'dangling link': lambda: os.symlink('/nonexistent', self.top),
+            'link to a directory': lambda: os.symlink(self.tmp.name, self.top),
+            'fifo': lambda: os.mkfifo(self.top),
+        }
+        for what, create in cases.items():
+            create()
+            before = snapshot(self.tmp.name)
+            for state in (None, 'failed', 'ok'):
+                if state:
+                    self.status.write_text(json.dumps({'stage': 'base', 'status': state}))
+                    before = snapshot(self.tmp.name)
+                with self.subTest(what=what, state=state):
+                    with self.assertRaisesRegex(PC.CacheError, 'already exists and is never overwritten'):
+                        self.service.restore('base')
+                    self.assertEqual(snapshot(self.tmp.name), before)
+                    self.assertEqual(self.registry.fetched, [])
+            os.unlink(self.status)
+            if self.top.is_dir() and not self.top.is_symlink():
+                shutil.rmtree(self.top)
+            else:
+                os.unlink(self.top)
+
+    def test_destination_that_appears_at_the_last_moment_is_kept(self):
+        cases = {
+            'empty directory': lambda: self.top.mkdir(),
+            'directory with files': lambda: (self.top.mkdir(), (self.top / 'keep').write_text('mine')),
+            'file': lambda: self.top.write_text('mine'),
+            'dangling link': lambda: os.symlink('/nonexistent', self.top),
+        }
+        rename = PC.rename_noreplace
+        for what, create in cases.items():
+            def racing(source, target, create=create):
+                create()
+                self.racing = snapshot(self.root / 'P')
+                rename(source, target)
+            with self.subTest(what=what):
+                with mock.patch.object(PC, 'rename_noreplace', racing), \
+                        self.assertRaisesRegex(PC.CacheError, 'appeared meanwhile; not overwritten'):
+                    self.service.restore('base')
+                self.assertEqual(snapshot(self.root / 'P'), self.racing)
+                self.assertFalse(self.status.exists())
+                self.assertEqual(self.leftovers(), [])
+            if self.top.is_dir() and not self.top.is_symlink():
+                shutil.rmtree(self.top)
+            else:
+                os.unlink(self.top)
+
+    def test_rename_refuses_any_existing_target_with_and_without_renameat2(self):
+        class NoLibc:
+            def __getattr__(self, name):
+                raise AttributeError(name)
+
+        def libc(code):
+            class Libc:
+                @staticmethod
+                def renameat2(*args):
+                    return -1
+            return mock.patch.multiple(PC.ctypes, CDLL=lambda *args, **kwargs: Libc(), get_errno=lambda: code)
+        variants = {
+            'renameat2': mock.patch.object(PC.ctypes, 'get_errno', PC.ctypes.get_errno),
+            'no libc': mock.patch.object(PC.ctypes, 'CDLL', side_effect=OSError('no libc')),
+            'no renameat2': mock.patch.object(PC.ctypes, 'CDLL', return_value=NoLibc()),
+            'ENOSYS': libc(38), 'EINVAL': libc(22), 'EOPNOTSUPP': libc(95),
+        }
+        base = Path(self.tmp.name)
+        for how, patch in variants.items():
+            for what in ('empty directory', 'full directory', 'file', 'dangling link'):
+                source, target = base / 'source', base / 'target'
+                source.mkdir()
+                (source / 'data').write_text('new')
+                if what == 'file':
+                    target.write_text('old')
+                elif what == 'dangling link':
+                    os.symlink('/nonexistent', target)
+                else:
+                    target.mkdir()
+                    if what == 'full directory':
+                        (target / 'old').write_text('old')
+                before = snapshot(base)
+                with self.subTest(how=how, what=what), patch:
+                    with self.assertRaises(FileExistsError):
+                        PC.rename_noreplace(source, target)
+                    self.assertEqual(snapshot(base), before)
+                shutil.rmtree(source)
+                shutil.rmtree(target) if target.is_dir() and not target.is_symlink() else os.unlink(target)
+            source, target = base / 'source', base / 'target'
+            source.mkdir()
+            (source / 'data').write_text('new')
+            with self.subTest(how=how, what='free'), patch:
+                PC.rename_noreplace(source, target)
+                self.assertEqual((target / 'data').read_text(), 'new')
+                self.assertFalse(os.path.lexists(source))
+            shutil.rmtree(target)
+
+    def test_rename_reports_other_errors_and_does_not_fall_back(self):
+        base = Path(self.tmp.name)
+        with self.assertRaises(FileNotFoundError):
+            PC.rename_noreplace(base / 'missing', base / 'target')
+        self.assertFalse(os.path.lexists(base / 'target'))
+
+        class Libc:
+            @staticmethod
+            def renameat2(*args):
+                self.arguments = args
+                return -1
+        (base / 'source').mkdir()
+        for code, error in ((13, PermissionError), (17, FileExistsError), (18, OSError), (30, OSError)):
+            with self.subTest(code=code), mock.patch.multiple(
+                    PC.ctypes, CDLL=lambda *args, **kwargs: Libc(), get_errno=lambda: code), \
+                    self.assertRaises(error) as caught:
+                PC.rename_noreplace(base / 'source', base / 'target')
+            self.assertEqual(caught.exception.errno, code)
+            self.assertTrue((base / 'source').is_dir())
+            self.assertFalse(os.path.lexists(base / 'target'))
+        self.assertEqual(self.arguments, (-100, os.fsencode(base / 'source'), -100, os.fsencode(base / 'target'), 1))
+
+
+class Push(ServiceCase):
+    def assert_nothing_pushed(self):
+        self.assertEqual((self.registry.published, self.registry.images, self.leftovers()), (0, {}, []))
+        self.assertEqual(self.service.tree.pushed(), {})
+        self.assertFalse((self.root / 'cache-state').exists())
+
+    def test_provider_that_is_not_ok_is_skipped_without_asking_the_registry(self):
+        top = self.make('base')
+        before = snapshot(top)
+        for what, text in (('failed', '{"stage": "base", "status": "failed"}'),
+                           ('running', '{"stage": "base", "status": "running"}'),
+                           ('ok in another case', '{"stage": "base", "status": "OK"}'),
+                           ('ok with a space', '{"stage": "base", "status": "ok "}'),
+                           ('no status field', '{"stage": "base"}'), ('status true', '{"status": true}'),
+                           ('not json', 'ok'), ('empty', ''), ('a list', '["ok"]'), ('not text', None)):
+            if text is None:
+                (self.root / 'status/base.json').write_bytes(b'\xff\xfe')
+            else:
+                (self.root / 'status/base.json').write_text(text)
+            with self.subTest(what=what), self.assertRaisesRegex(PC.Skip, 'status is .*, not ok'):
+                self.service.push('base')
+        os.unlink(self.root / 'status/base.json')
+        with self.assertRaisesRegex(PC.Skip, 'status is missing, not ok'):
+            self.service.push('base')
+        with self.assertRaisesRegex(PC.Skip, 'status is missing, not ok'):
+            self.service.push('side')  # never built
+        self.assertEqual(self.registry.calls, [])
+        self.assert_nothing_pushed()
+        self.assertEqual(snapshot(top), before)
+
+    def test_ok_provider_without_a_usable_marker_is_refused(self):
+        cases = {
+            'missing': lambda marker: os.unlink(marker),
+            'empty': lambda marker: marker.write_text(''),
+            'directory': lambda marker: (os.unlink(marker), marker.mkdir()),
+            'link': lambda marker: (os.rename(marker, marker.with_name('real.json')),
+                                    os.symlink('real.json', marker)),
+            'dangling link': lambda marker: (os.unlink(marker), os.symlink('nowhere', marker)),
+            'fifo': lambda marker: (os.unlink(marker), os.mkfifo(marker)),
+        }
+        for index, (what, change) in enumerate(cases.items()):
+            self.doCleanups()
+            self.setUp()
+            change(self.make('base') / 'complete.json')
+            with self.subTest(what=what), self.assertRaisesRegex(
+                    PC.CacheError, 'base: status is ok but the completion marker is missing'):
+                self.service.push('base')
+            self.assertEqual(self.registry.calls, [])
+            self.assert_nothing_pushed()
+        self.doCleanups()
+        self.setUp()
+        (self.root / 'P/base').mkdir()
+        self.write_json('status/base.json', {'stage': 'base', 'status': 'ok'})
+        with self.assertRaises(PC.CacheError):
+            self.service.push('base')
+        os.rmdir(self.root / 'P/base')
+        with self.assertRaises(PC.CacheError):  # ok on paper, no directory at all
+            self.service.push('base')
+        self.assert_nothing_pushed()
+
+    def test_pushed_bundle_holds_the_archive_and_everything_needed_to_check_it(self):
+        top = self.make('base')
+        self.make('top')
+        status_bytes = (self.root / 'status/top.json').read_bytes()
+        ref = self.service.push('top')
+        key = self.service.key('top')
+        self.assertEqual(ref, 'reg.example/cache/top:' + key)
+        self.assertEqual(self.registry.calls, [('image_id', PC.TOOLCHAIN), ('probe', ref), ('publish', ref),
+                                               ('probe', ref)])
+        labels, content = self.registry.images[ref]
+        self.assertEqual(list(content), ['top.tar', 'status.json', 'tar.sha256', 'files.json', 'meta.json'])
+        tar_sha = hashlib.sha256(content['top.tar']).hexdigest()
+        self.assertEqual(labels, {
+            'org.opencontainers.image.source': 'https://github.com/jonathanagustin/uds-takserver',
+            'org.opencontainers.image.licenses': 'GPL-3.0-only', 'dev.uds.takx.provider': 'top',
+            'dev.uds.takx.key': key, 'dev.uds.takx.tar-sha256': tar_sha})
+        self.assertEqual(content['tar.sha256'], (tar_sha + '\n').encode())
+        self.assertEqual(content['status.json'], status_bytes)
+        marker_sha = hashlib.sha256((self.root / 'P/top/complete.json').read_bytes()).hexdigest()
+        self.assertEqual(json.loads(content['meta.json']), {
+            'schema': 1, 'provider': 'top', 'key': key, 'root': str(self.root), 'repo': str(self.repo),
+            'marker': 'complete.json', 'marker_sha256': marker_sha, 'tar_sha256': tar_sha,
+            'files_sha256': hashlib.sha256(content['files.json']).hexdigest(),
+            'prerequisite_markers': {'base': hashlib.sha256((top / 'complete.json').read_bytes()).hexdigest()},
+            'key_inputs': self.service.explain('top')})
+        self.assertTrue(content['meta.json'].endswith(b'\n') and content['files.json'].endswith(b'\n'))
+        listing = json.loads(content['files.json'])
+        self.assertEqual((listing['schema'], listing['provider']), (1, 'top'))
+        on_disk = snapshot(self.root / 'P/top')
+        self.assertEqual({entry['path'] for entry in listing['entries']}, set(on_disk))
+        for entry in listing['entries']:
+            kind = on_disk[entry['path']]
+            if entry['type'] == 'link':
+                self.assertEqual(entry, {'path': entry['path'], 'type': 'link', 'target': kind[1]})
+            elif entry['type'] == 'dir':
+                self.assertEqual(entry, {'path': entry['path'], 'type': 'dir', 'mode': '%04o' % kind[1]})
+            else:
+                size = os.path.getsize(self.root / 'P/top' / entry['path'])
+                self.assertEqual(entry, {'path': entry['path'], 'type': 'file', 'mode': '%04o' % kind[1],
+                                         'size': size, 'sha256': kind[2]})
+        self.assertEqual([entry['path'] for entry in listing['entries']], [
+            'complete.json', 'empty', 'install', 'install/lib', 'install/lib/.libs', 'install/lib/.libs/lib.a',
+            'install/lib/lib.a', 'install/tool', 'install/tool-1'])
+        with tarfile.open(fileobj=io.BytesIO(content['top.tar'])) as archive:
+            self.assertEqual(archive.getnames(), ['top'] + ['top/' + entry['path'] for entry in listing['entries']])
+            self.assertEqual({member.type for member in archive},
+                             {tarfile.DIRTYPE, tarfile.REGTYPE, tarfile.SYMTYPE})
+            self.assertEqual(archive.extractfile('top/install/tool').read(), b'#!/bin/sh\n')
+        self.assertEqual(self.messages, ['provider-cache: pushed %s (9 entries, tar sha256 %s)' % (ref, tar_sha)])
+        self.assertEqual((self.root / 'cache-state/pushed.tsv').read_text(),
+                         '\t'.join(('top', key, ref, tar_sha)) + '\n')
+        self.assertEqual(self.leftovers(), [])
+
+    def test_hard_linked_files_are_stored_in_full(self):
+        top = self.make('base')
+        os.link(top / 'install/lib/lib.a', top / 'install/lib/copy.a')
+        ref = self.service.push('base')
+        with tarfile.open(fileobj=io.BytesIO(self.registry.images[ref][1]['base.tar'])) as archive:
+            self.assertEqual([member.name for member in archive if member.islnk()], [])
+            self.assertEqual(archive.extractfile('base/install/lib/copy.a').read(),
+                             (top / 'install/lib/lib.a').read_bytes())
+        good = snapshot(top)
+        self.set_aside('base')
+        self.service.restore('base')
+        self.assertEqual(snapshot(top), good)
+
+    def test_second_push_does_nothing(self):
+        top = self.make('base')
+        first = self.service.push('base')
+        stored = copy.deepcopy(self.registry.images)
+        record = (self.root / 'cache-state/pushed.tsv').read_text()
+        del self.registry.calls[:]
+        for service in (self.service, self.new_service()):
+            del self.messages[:]
+            self.assertEqual(service.push('base'), first)
+            self.assertEqual(self.messages, ['provider-cache: base is already cached under this key: ' + first])
+        self.assertEqual(self.registry.calls, [('image_id', PC.TOOLCHAIN), ('probe', first)] * 2)
+        self.assertEqual((self.registry.published, self.registry.images), (1, stored))
+        self.assertEqual((self.root / 'cache-state/pushed.tsv').read_text(), record)
+        self.assertEqual(self.leftovers(), [])
+        # An identical rebuild (other bytes, same inputs) is recognised too and does not replace the image.
+        (top / 'install/lib/lib.a').write_bytes(b'rebuilt')
+        self.assertEqual(self.service.push('base'), first)
+        self.assertEqual((self.registry.published, self.registry.images), (1, stored))
+
+    def test_push_after_the_image_was_lost_is_recorded_once(self):
+        self.make('base')
+        service = self.service
+        first = service.push('base')
+        record = (self.root / 'cache-state/pushed.tsv').read_text()
+        self.registry.images.clear()
+        self.assertEqual(service.push('base'), first)
+        self.assertEqual(self.registry.published, 2)
+        self.assertEqual((self.root / 'cache-state/pushed.tsv').read_text(), record)
+        self.assertEqual(len(record.splitlines()), 1)
+        service.tree.record_push(('base', 'k' * 64, 'ref2', 't' * 64))
+        with open(self.root / 'cache-state/pushed.tsv', 'a') as stream:
+            stream.write('short\trow\n\none\ttwo\tthree\tfour\tfive\n')
+        self.assertEqual(service.tree.pushed(), {('base', service.key('base')): record.split('\t')[3].strip(),
+                                                 ('base', 'k' * 64): 't' * 64})
+
+    def test_provider_that_changes_while_it_is_archived_is_not_pushed(self):
+        top = self.make('base')
+        write_tar = PC.WorkTree.write_tar
+        changes = (  # what, before or after the archive is written, the change, the refusal
+            ('file content', 'before', lambda top: (top / 'install/tool').write_text('#!/bin/sh\nexit 1\n'),
+             'base changed while it was archived: changed install/tool'),
+            ('file size', 'before', lambda top: (top / 'install/lib/lib.a').write_bytes(b''),
+             'base changed while it was archived: changed install/lib/lib.a'),
+            ('file removed', 'before', lambda top: os.unlink(top / 'install/tool'), None),
+            ('marker rewritten', 'before', lambda top: (top / 'complete.json').write_text('{"rebuilt": true}'),
+             'base changed while it was archived: changed complete.json'),
+            ('status', 'after', lambda top: self.write_json('status/base.json', {'stage': 'base', 'status': 'ok',
+                                                                                  'run': 2}),
+             'base: status or marker changed while it was archived'),
+            ('status gone', 'after', lambda top: os.unlink(self.root / 'status/base.json'),
+             'base: status or marker changed while it was archived'),
+            ('marker afterwards', 'after', lambda top: (top / 'complete.json').write_text('{"rebuilt": true}'),
+             'base: status or marker changed while it was archived'),
+            ('marker gone afterwards', 'after', lambda top: os.unlink(top / 'complete.json'),
+             'base: status or marker changed while it was archived'),
+        )
+        for what, when, change, message in changes:
+            self.doCleanups()
+            self.setUp()
+            top = self.make('base')
+
+            def racing(source, name, entries, target):
+                if when == 'before':
+                    change(top)
+                write_tar(source, name, entries, target)
+                if when == 'after':
+                    change(top)
+            self.service.tree.write_tar = racing
+            with self.subTest(what=what), self.assertRaises((PC.CacheError, OSError)) as caught:
+                self.service.push('base')
+            if message:
+                self.assertIn(message, str(caught.exception))
+            self.assert_nothing_pushed()
+
+    def test_file_added_after_the_listing_is_not_published(self):
+        # The archive is written from the listing, so a later file is simply not in it;
+        # what is published is exactly what was listed and verified.
+        top = self.make('base')
+        write_tar = PC.WorkTree.write_tar
+
+        def racing(source, name, entries, target):
+            write_tar(source, name, entries, target)
+            (top / 'late').write_text('late')
+        self.service.tree.write_tar = racing
+        ref = self.service.push('base')
+        with tarfile.open(fileobj=io.BytesIO(self.registry.images[ref][1]['base.tar'])) as archive:
+            self.assertNotIn('base/late', archive.getnames())
+        self.assertNotIn('"late"', self.registry.images[ref][1]['files.json'].decode())
+
+    def test_failed_publish_is_an_error_and_is_not_recorded(self):
+        self.make('base')
+
+        def failing(ref, context, files, labels):
+            self.context = Path(context)
+            self.assertEqual(sorted(os.listdir(context)), sorted(files))
+            self.assertEqual(self.context.parent, self.root)
+            raise PC.CacheError('docker push failed: denied')
+        self.registry.publish = failing
+        with self.assertRaisesRegex(PC.CacheError, 'denied'):
+            self.service.push('base')
+        self.assertFalse(self.context.exists())
+        self.assertRegex(self.context.name, r'^\.push-base\.')
+        self.assert_nothing_pushed()
+
+    def test_registry_states_after_publishing(self):
+        for state in ('absent', 'error', 'unauthorized'):
+            self.doCleanups()
+            self.setUp()
+            self.make('base')
+            publish = self.registry.publish
+
+            def published(ref, context, files, labels, state=state):
+                publish(ref, context, files, labels)
+                self.registry.state = state
+            self.registry.publish = published
+            with self.subTest(state=state), self.assertRaisesRegex(
+                    PC.CacheError, 'base: pushed, but the registry does not show reg.example/cache/base:'):
+                self.service.push('base')
+            self.assertEqual(self.service.tree.pushed(), {})
+            self.assertEqual(self.leftovers(), [])
+
+    def test_prerequisites_must_be_ok_with_their_markers(self):
+        cases = {
+            'never built': lambda: None,
+            'failed': lambda: self.make('base', status='failed'),
+            'no marker': lambda: self.make('base', marker=False),
+            'no status': lambda: (self.make('base'), os.unlink(self.root / 'status/base.json')),
+        }
+        for what, prepare in cases.items():
+            self.doCleanups()
+            self.setUp()
+            self.make('top')
+            prepare()
+            with self.subTest(what=what), self.assertRaisesRegex(
+                    PC.CacheError, 'top: a prerequisite provider is not ok here'):
+                self.service.push('top')
+            self.assert_nothing_pushed()
+
+    def test_toolchain_image_must_be_the_recorded_one(self):
+        self.make('base')
+        for actual, shown in (('sha256:' + '7' * 64, 'sha256:' + '7' * 64), (None, 'absent'), ('', 'absent')):
+            self.registry.toolchain = actual
+            with self.subTest(actual=actual), self.assertRaisesRegex(
+                    PC.CacheError, r'the local takx-desktop-proto:toolchain image \(%s\) is not the one recorded'
+                    % shown):
+                self.service.push('base')
+            self.set_aside('base')
+            with self.subTest(actual=actual, action='restore'), self.assertRaisesRegex(PC.CacheError, 'recorded'):
+                self.service.restore('base')
+            self.make('base')
+        self.assertEqual(self.registry.calls, [('image_id', PC.TOOLCHAIN)] * 6)
+        self.assert_nothing_pushed()
+        override = self.new_service(override='sha256:' + '7' * 64)
+        del self.registry.calls[:]
+        ref = override.push('base')
+        self.assertEqual([call[0] for call in self.registry.calls], ['probe', 'publish', 'probe'])
+        self.assertNotEqual(ref.rsplit(':', 1)[1], self.service.key('base'))
+
+
+class OffAndLogin(ServiceCase):
+    """The cache switched off, docker absent, docker not logged in: clean skips."""
+
+    def setUp(self):
+        super().setUp()
+        self.make('base')
+        self.service.push('base')
+        self.make('side')
+        os.rename(self.root / 'P/base', self.root.parent / 'aside')
+        os.unlink(self.root / 'status/base.json')
+        del self.registry.calls[:]
+        del self.messages[:]
+        self.before = snapshot(self.tmp.name)
+        self.stored = copy.deepcopy(self.registry.images)
+
+    def assert_untouched(self, calls):
+        self.assertEqual(self.registry.calls, calls)
+        self.assertEqual(snapshot(self.tmp.name), self.before)
+        self.assertEqual((self.registry.published, self.registry.images), (1, self.stored))
+        self.assertEqual(self.messages, [])
+
+    def test_cache_off_never_touches_registry_or_disk(self):
+        class Untouchable:
+            def __getattr__(self, name):
+                raise AssertionError('registry used while the cache is off: ' + name)
+        off = PC.ProviderCache(manifest(), PC.WorkTree(self.root, self.repo), Untouchable(), 'off', '',
+                               self.messages.append)
+        self.assertFalse(off.enabled)
+        for action, name in ((off.restore, 'base'), (off.push, 'side'), (off.restore, 'side'), (off.push, 'base')):
+            with self.subTest(action=action.__name__, name=name), self.assertRaisesRegex(PC.Skip, '^cache is off$'):
+                action(name)
+        with self.assertRaises(PC.CacheError):
+            off.ref('base')
+        self.assertEqual([(row['name'], row['ref'], row['remote']) for row in off.rows(remote=True)],
+                         [('base', '-', 'pushed'), ('side', '-', 'unknown'), ('top', '-', 'unknown')])
+        for action in (off.restore, off.push):
+            with self.assertRaisesRegex(PC.CacheError, 'unknown provider ghost'):
+                action('ghost')
+        self.assert_untouched([])
+
+    def test_only_the_word_off_switches_the_cache_off(self):
+        for prefix, enabled in (('off', False), ('OFF', True), ('off/', True), ('reg/off', True), ('', True)):
+            service = self.new_service(prefix=prefix)
+            self.assertEqual(service.enabled, enabled, prefix)
+        self.assertEqual(self.new_service(prefix='').prefix, PC.DEFAULT_REGISTRY)
+        self.assertEqual(self.new_service(prefix='').ref('base'),
+                         PC.DEFAULT_REGISTRY + '/base:' + self.service.key('base'))
+
+    def test_without_docker_nothing_is_asked(self):
+        self.registry.docker = False
+        with self.assertRaisesRegex(PC.Skip, '^docker is not available$'):
+            self.service.restore('base')
+        with self.assertRaisesRegex(PC.Skip, '^docker is not available$'):
+            self.service.push('side')
+        self.assert_untouched([])
+
+    def test_not_logged_in_is_a_skip(self):
+        self.registry.logged_in = False
+        ref = 'reg.example/cache/base:' + self.service.key('base')
+        with self.assertRaisesRegex(PC.Skip, r'^docker is not logged in to the cache registry \(%s\)$' % re.escape(ref)):
+            self.service.restore('base')
+        with self.assertRaisesRegex(PC.Skip, '^docker is not logged in to the cache registry$'):
+            self.service.push('side')
+        self.assert_untouched([('image_id', PC.TOOLCHAIN), ('probe', ref), ('image_id', PC.TOOLCHAIN),
+                               ('probe', 'reg.example/cache/side:' + self.service.key('side'))])
+
+    def test_nothing_cached_is_a_skip_and_an_unreachable_registry_an_error(self):
+        self.registry.images.clear()
+        self.stored = {}
+        with self.assertRaisesRegex(PC.Skip, r'^nothing cached under this key \(reg.example/cache/base:'):
+            self.service.restore('base')
+        self.registry.state = 'error'
+        with self.assertRaisesRegex(PC.CacheError, '^base: the registry could not be queried$'):
+            self.service.restore('base')
+        with self.assertRaisesRegex(PC.CacheError, '^side: the registry could not be queried$'):
+            self.service.push('side')
+        self.registry.state = 'something new'
+        with self.assertRaises(PC.CacheError):
+            self.service.restore('base')
+        with self.assertRaises(PC.CacheError):
+            self.service.push('side')
+        self.assertEqual(snapshot(self.tmp.name), self.before)
+        self.assertEqual((self.registry.published, self.registry.fetched), (1, []))
+
+    def test_provider_that_is_ok_here_is_not_fetched(self):
+        with self.assertRaisesRegex(PC.Skip, '^already present and ok here$'):
+            self.service.restore('side')
+        self.assert_untouched([])
+
+    def test_restore_waits_for_its_prerequisites(self):
+        with self.assertRaisesRegex(PC.Skip, '^a prerequisite provider is not ok here$'):
+            self.service.restore('top')
+        self.assert_untouched([])
+
+
+class ExitCodes(ServiceCase):
+    """0 done, 3 cleanly skipped, 1 anything else; 1 wins over 3."""
+
+    def run_cli(self, *argv, service=None):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(PC.sys, 'stderr', err):
+            code = PC.main(list(argv), service=service or self.service, out=out)
+        return code, out.getvalue(), err.getvalue()
+
+    def cached(self, *names):
+        for name in names:
+            self.make(name)
+            self.service.push(name)
+            self.set_aside(name)
+
+    def test_codes_are_the_documented_ones(self):
+        self.assertEqual((PC.DONE, PC.FAILED, PC.SKIPPED), (0, 1, 3))
+
+    def test_restore(self):
+        self.cached('base')
+        self.assertEqual(self.run_cli('restore', 'base'), (0, '', ''))
+        self.assertEqual(self.run_cli('restore', 'base'),
+                         (3, '', 'provider-cache: restore base skipped: already present and ok here\n'))
+        code, out, err = self.run_cli('restore', 'side')
+        self.assertEqual((code, out), (3, ''))
+        self.assertRegex(err, r'^provider-cache: restore side skipped: nothing cached under this key \(.*\)\n$')
+        self.write_json('status/base.json', {'stage': 'base', 'status': 'failed'})
+        self.assertEqual(self.run_cli('restore', 'base'), (
+            1, '', 'provider-cache: restore base failed: base: the provider directory already exists and is '
+                   'never overwritten\n'))
+        self.assertEqual(self.run_cli('restore', 'ghost'), (1, '', 'provider-cache: unknown provider ghost\n'))
+        self.assertEqual(self.run_cli('restore', 'side', 'ghost')[0], 1)
+        self.assertFalse(os.path.lexists(self.root / 'P/side'))
+
+    def test_restore_of_a_tampered_bundle_fails(self):
+        self.cached('base')
+        labels, content = self.bundle('base')
+        saved = content['base.tar']
+        content['base.tar'] = saved + b'\0'
+        code, out, err = self.run_cli('restore', 'base')
+        self.assertEqual((code, out), (1, ''))
+        self.assertIn('restore base failed: base: archive digest differs', err)
+        content['base.tar'] = b'junk'
+        digest = hashlib.sha256(b'junk').hexdigest()
+        content['tar.sha256'] = digest.encode()
+        labels['dev.uds.takx.tar-sha256'] = digest
+        meta = json.loads(content['meta.json'])
+        content['meta.json'] = json.dumps(dict(meta, tar_sha256=digest)).encode()
+        code, out, err = self.run_cli('restore', 'base')  # tarfile's own error is reported, not raised
+        self.assertEqual((code, out), (1, ''))
+        self.assertIn('restore base failed: ', err)
+        self.registry.fetch = mock.Mock(side_effect=OSError(28, 'No space left on device'))
+        code, out, err = self.run_cli('restore', 'base')
+        self.assertEqual((code, out), (1, ''))
+        self.assertIn('No space left on device', err)
+        self.assertEqual(self.leftovers(), [])
+        self.assertFalse(os.path.lexists(self.root / 'P/base'))
+
+    def test_push(self):
+        self.assertEqual(self.run_cli('push', 'base'),
+                         (3, '', 'provider-cache: push base skipped: status is missing, not ok\n'))
+        self.make('base')
+        self.assertEqual(self.run_cli('push', 'base'), (0, '', ''))
+        self.assertEqual(self.run_cli('push', 'base'), (0, '', ''))  # idempotent, still done
+        self.make('side', status='failed')
+        self.assertEqual(self.run_cli('push', 'side'),
+                         (3, '', 'provider-cache: push side skipped: status is failed, not ok\n'))
+        self.make('top', marker=False)
+        self.assertEqual(self.run_cli('push', 'top'), (
+            1, '', 'provider-cache: push top failed: top: status is ok but the completion marker is missing\n'))
+        self.assertEqual(self.run_cli('push', 'ghost'), (1, '', 'provider-cache: unknown provider ghost\n'))
+        self.assertEqual(self.registry.published, 1)
+
+    def test_failure_wins_over_skip_and_done_in_any_order(self):
+        self.make('base')                  # push: done
+        self.make('top', marker=False)     # push: failed
+        # side was never built            # push: skipped
+        for names, expected in ((['base'], 0), (['side'], 3), (['top'], 1), (['base', 'side'], 3),
+                                (['side', 'top'], 1), (['base', 'top'], 1), (['base', 'side', 'top'], 1), ([], 1)):
+            with self.subTest(names=names):
+                self.assertEqual(self.run_cli('push', *names)[0], expected)
+        # The providers are handled in prerequisite order, whatever the order of the arguments:
+        # with top (failed) last, a skip after a failure would otherwise never be seen.
+        document = manifest()
+        document['providers']['zz'] = copy.deepcopy(document['providers']['side'])
+        service = PC.ProviderCache(document, PC.WorkTree(self.root, self.repo), self.registry, 'reg.example/cache',
+                                   '', self.messages.append)
+        code, out, err = self.run_cli('push', 'top', 'zz', service=service)
+        self.assertEqual(code, 1)
+        self.assertEqual([line.split()[2] for line in err.splitlines()], ['top', 'zz'])
+        code, out, err = self.run_cli('push', service=service)
+        self.assertEqual(code, 1)
+        self.assertEqual([line.split()[2:4] for line in err.splitlines()],
+                         [['side', 'skipped:'], ['top', 'failed:'], ['zz', 'skipped:']])
+
+    def test_every_name_is_attempted_after_a_failure(self):
+        self.cached('base', 'side')
+        self.registry.images[self.service.ref('base')][1]['base.tar'] += b'\0'
+        code, out, err = self.run_cli('restore', 'base', 'side')
+        self.assertEqual(code, 1)
+        self.assertFalse(os.path.lexists(self.root / 'P/base'))
+        self.assertTrue((self.root / 'P/side/complete.json').is_file())
+
+    def test_cache_off_no_docker_and_no_login_exit_3(self):
+        self.cached('base')
+        self.make('side')
+        off = self.new_service(prefix='off')
+        self.assertEqual(self.run_cli('restore', 'base', service=off),
+                         (3, '', 'provider-cache: restore base skipped: cache is off\n'))
+        self.assertEqual(self.run_cli('push', 'side', service=off),
+                         (3, '', 'provider-cache: push side skipped: cache is off\n'))
+        self.assertEqual(self.run_cli('restore', service=off)[0], 3)
+        self.assertEqual(self.run_cli('push', service=off)[0], 3)
+        self.registry.logged_in = False
+        self.assertEqual(self.run_cli('restore', 'base')[0], 3)
+        self.assertEqual(self.run_cli('push', 'side'),
+                         (3, '', 'provider-cache: push side skipped: docker is not logged in to the cache registry\n'))
+        self.registry.logged_in, self.registry.docker = True, False
+        self.assertEqual(self.run_cli('restore', 'base'),
+                         (3, '', 'provider-cache: restore base skipped: docker is not available\n'))
+        self.assertEqual(self.run_cli('push', 'side')[0], 3)
+        self.registry.docker, self.registry.state = True, 'error'
+        self.assertEqual(self.run_cli('restore', 'base')[0], 1)
+        self.assertEqual(self.run_cli('push', 'side')[0], 1)
+        self.assertEqual(self.registry.published, 1)
+        self.assertFalse(os.path.lexists(self.root / 'P/base'))
+
+    def test_key(self):
+        key = {name: self.service.key(name) for name in ('base', 'side', 'top')}
+        self.assertEqual(self.run_cli('key', 'top'), (0, key['top'] + '\n', ''))
+        self.assertEqual(self.run_cli('key'), (0, ''.join('%s\t%s\n' % (name, key[name])
+                                                          for name in ('base', 'side', 'top')), ''))
+        self.assertEqual(self.run_cli('key', 'top', 'base'),
+                         (0, 'base\t%s\ntop\t%s\n' % (key['base'], key['top']), ''))
+        code, out, err = self.run_cli('key', '--explain', 'top', 'base')
+        self.assertEqual((code, err), (0, ''))
+        decoder, documents, position = json.JSONDecoder(), [], 0
+        while position < len(out):
+            document, position = decoder.raw_decode(out, position)
+            documents.append(document)
+            position += 1
+        self.assertEqual([(d['inputs']['provider'], d['key']) for d in documents],
+                         [('base', key['base']), ('top', key['top'])])
+        self.assertEqual(documents[1], {'key': key['top'], 'inputs': self.service.explain('top')})
+        self.assertEqual(out, ''.join(json.dumps(d, indent=1, sort_keys=True) + '\n' for d in documents))
+        self.assertEqual(self.run_cli('key', 'ghost'), (1, '', 'provider-cache: unknown provider ghost\n'))
+        self.assertEqual(self.run_cli('key', 'base', 'ghost'), (1, '', 'provider-cache: unknown provider ghost\n'))
+        os.unlink(self.root / 'status/fetch.json')
+        code, out, err = self.run_cli('key', 'base', service=self.new_service())
+        self.assertEqual((code, out), (1, ''))
+        self.assertRegex(err, '^provider-cache: status/fetch.json cannot be read: ')
+
+    def test_status(self):
+        self.make('base')
+        self.service.push('base')
+        self.make('side', status='failed')
+        (self.root / 'P/top').mkdir()
+        key = {name: self.service.key(name) for name in ('base', 'side', 'top')}
+        tar_sha = self.service.tree.pushed()[('base', key['base'])]
+        code, out, err = self.run_cli('status')
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(out, 'base\t%s\tok\tpushed\t%s\nside\t%s\tfailed\tunknown\t-\ntop\t%s\tmissing\tunknown\t-\n'
+                         % (key['base'], tar_sha, key['side'], key['top']))
+        del self.registry.calls[:]
+        self.assertEqual(self.run_cli('status')[0], 0)
+        self.assertEqual(self.registry.calls, [])  # no registry query unless asked for
+        code, out, err = self.run_cli('status', '--remote')
+        self.assertEqual(code, 0)
+        self.assertEqual([line.split('\t')[3] for line in out.splitlines()], ['present', 'absent', 'absent'])
+        self.assertEqual([call[0] for call in self.registry.calls], ['probe'] * 3)
+
+    def test_status_writes_the_index_of_what_is_cached(self):
+        self.make('base')
+        self.service.push('base')
+        self.make('side')
+        key = self.service.key('base')
+        tar_sha = self.service.tree.pushed()[('base', key)]
+        index = Path(self.tmp.name) / 'index.tsv'
+        header = ('# Copyright 2026 uds-takserver authors\n# SPDX-License-Identifier: GPL-3.0-only\n'
+                  '# Generated by provider_cache.py status --write-index; do not edit.\n'
+                  '# Providers cached under their input keys. Restore needs no index: it\n'
+                  '# derives the key and pulls <ref>. Keys are specific to:\n'
+                  '# work root %s\n# repository %s\n# toolchain %s\n# name\tkey\tref\ttar sha256\n'
+                  % (self.root, self.repo, TOOLCHAIN_ID))
+        row = 'base\t%s\treg.example/cache/base:%s\t%s\n' % (key, key, tar_sha)
+        self.assertEqual(self.run_cli('status', '--write-index', str(index))[0], 0)
+        self.assertEqual(index.read_text(), header + row)
+        self.registry.images.clear()
+        self.assertEqual(self.run_cli('status', '--remote', '--write-index', str(index))[0], 0)
+        self.assertEqual(index.read_text(), header)  # the registry is asked, and it has nothing
+        self.registry.state = 'present'
+        self.assertEqual(self.run_cli('status', '--write-index', str(index), '--remote')[0], 0)
+        self.assertEqual(len(index.read_text().splitlines()), 9 + 3)
+        os.unlink(self.root / 'status/images.json')
+        index.write_text('kept')
+        code, out, err = self.run_cli('status', '--write-index', str(index), service=self.new_service())
+        self.assertEqual(code, 1)
+        self.assertEqual(index.read_text(), 'kept')
+
+    def test_default_index_is_next_to_the_module(self):
+        written = {}
+        with mock.patch.object(PC.Path, 'write_text', lambda path, text: written.update({path: text})):
+            self.assertEqual(self.run_cli('status', '--write-index')[0], 0)
+        self.assertEqual(list(written), [HERE / 'cache-index.tsv'])
+
+    def test_usage_errors_exit_2(self):
+        for argv in ([], ['frobnicate'], ['key', '--nope'], ['restore', '--explain'], ['status', 'base']):
+            with self.subTest(argv=argv), mock.patch.object(PC.sys, 'stderr', io.StringIO()), \
+                    self.assertRaises(SystemExit) as caught:
+                PC.main(argv, service=self.service)
+            self.assertEqual(caught.exception.code, 2)
+
+    def run_script(self, *argv, **environment):
+        empty = Path(self.tmp.name) / 'empty-bin'
+        empty.mkdir(exist_ok=True)
+        env = {'PATH': str(empty), 'HOME': self.tmp.name, 'TAKX_PROTO_ROOT': str(self.root)}
+        env.update(environment)
+        done = subprocess.run([sys.executable, '-B', str(HERE / 'provider_cache.py'), *argv], env=env,
+                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        return done.returncode, done.stdout.decode(), done.stderr.decode()
+
+    def test_the_script_exits_with_the_code(self):
+        # The real manifest against a temporary work root; docker is not on PATH.
+        self.assertEqual(self.run_script('push', 'sqlcipher', TAKX_PROTO_CACHE='off'),
+                         (3, '', 'provider-cache: push sqlcipher skipped: cache is off\n'))
+        self.assertEqual(self.run_script('restore', 'sqlcipher', TAKX_PROTO_CACHE='off'),
+                         (3, '', 'provider-cache: restore sqlcipher skipped: cache is off\n'))
+        self.assertEqual(self.run_script('restore', 'sqlcipher'),
+                         (3, '', 'provider-cache: restore sqlcipher skipped: docker is not available\n'))
+        self.assertEqual(self.run_script('push', 'sqlcipher'),
+                         (3, '', 'provider-cache: push sqlcipher skipped: status is missing, not ok\n'))
+        self.assertEqual(self.run_script('restore', 'ghost'), (1, '', 'provider-cache: unknown provider ghost\n'))
+        code, out, err = self.run_script('key', 'sqlcipher')
+        self.assertEqual((code, out), (1, ''))
+        self.assertIn('no fetched input matches', err)
+        self.assertEqual(self.run_script()[0], 2)
+        code, out, err = self.run_script('status', TAKX_PROTO_CACHE='off')
+        self.assertEqual(code, 0)
+        self.assertEqual({line.split('\t')[0] for line in out.splitlines()}, EXPECTED)
+        self.assertEqual({tuple(line.split('\t')[1:]) for line in out.splitlines()},
+                         {('-', 'absent', 'no-key', '-')})
+        self.assertEqual(sorted(os.listdir(self.root)), ['P', 'status'])
 
 
 RUN_STUB = r"""#!/bin/bash

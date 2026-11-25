@@ -61,8 +61,8 @@ TOOLCHAIN = 'takx-desktop-proto:toolchain'
 SCHEMA = 1
 DONE, FAILED, SKIPPED = 0, 1, 3
 HEX = re.compile(r'\b(?:[0-9a-f]{128}|[0-9a-f]{64}|[0-9a-f]{40})\b')
-NAME = re.compile(r'^[a-z0-9][a-z0-9-]*$')
-KEY = re.compile(r'^[0-9a-f]{64}$')
+NAME = re.compile(r'^[a-z0-9][a-z0-9-]*\Z')
+KEY = re.compile(r'^[0-9a-f]{64}\Z')
 IMAGE_FILES = ('status.json', 'tar.sha256', 'files.json', 'meta.json')
 
 

@@ -16,8 +16,8 @@ It runs on Kernel 8.30.5 plus project patches (not the private 8.57.11), CommonC
 | assemble | ok | `status/assemble.json`, `dist/takx57/manifest.json` (547 files, 270 MB) |
 | kernel-overlay | ok | `status/kernel-overlay.json`, `P/kernel-overlay/receipt.json` (3 patches, 7 classes) |
 | compat-system-clock | ok | `status/compat-system-clock.json` |
-| boot | ok | `status/boot.json`, `logs/boot-10.log` |
-| capture | see `status/capture.json` | `demo/out/takx/capture.json` (git-ignored) |
+| boot | ok | `status/boot.json`, `logs/boot-11.log`, `runs/boot-11/` |
+| capture | ok | `status/capture.json`, `capture/boot-11/master.mkv`, `demo/out/takx/capture.json` and `PROVENANCE.md` (git-ignored, never committed) |
 
 Paths are relative to the work root `/var/lib/takx-proto` unless they start with `demo/`.
 
@@ -25,7 +25,7 @@ Paths are relative to the work root `/var/lib/takx-proto` unless they start with
 
 | Criterion | Result |
 | --- | --- |
-| JVM up for more than 120 s with no fatal exception | Yes. Attempts 5, 8 and 10 were checked at 123 s, 133 s and 131 s with the window still mapped; attempt 6 ran for about 3 minutes of manual probing. No JVM crash, `SIGSEGV` or `OutOfMemoryError` in any log. Non-fatal errors remain (below). |
+| JVM up for more than 120 s with no fatal exception | Yes. Attempts 5, 8, 10 and 11 were checked at 123 s, 133 s, 131 s and 124 s with the window still mapped; attempt 6 ran for about 3 minutes of manual probing. Nothing ran longer than that. No JVM crash, `SIGSEGV` or `OutOfMemoryError` in any log. Non-fatal errors remain (below). |
 | Real TAKX top-level window | Yes. `xdotool` reports a visible 1920x1080 window titled `TAKX 5.7 SNAPSHOT : <project> (Developer's Edition)`. |
 | Non-blank screenshots, looked at | Yes. `signalstats` luma range 16 to 235. I viewed the frames; the description is below. |
 | First-run dialogs | None appeared. `-create` makes a new project with the default database (hsqldb). No credential or server dialog was opened. |
@@ -34,7 +34,7 @@ Paths are relative to the work root `/var/lib/takx-proto` unless they start with
 
 - Title bar `TAKX 5.7 SNAPSHOT : 2026_11_25_... (Developer's Edition)`; "Developer's Edition" because the bootstrap JAR is signed with the developer key in the official tree.
 - Ribbon tabs Home, Maps, Data, Draw, View, Plugins, Range & Bearing, Help, and the Home toolbar (Navigation Lock, New Globe, Overlays, Maps & Favorites, Elevation Tools, Select, ALERT, Point Dropper, Drawing Tools, Routes, Go to Location, City Search, Chats, Contacts, Playback, Devices, Files, Properties, Sensor Feeds, Media, TAK Server, Data Packages).
-- Ten toolbar buttons show a "?" placeholder instead of their icon: the private `tak-assets` `png/` directory is absent.
+- Eight of the visible Home toolbar buttons show a "?" placeholder instead of their icon: the private `tak-assets` `png/` directory is absent.
 - The docked "Primary Globe" tab with the Kernel globe rendered: Earth imagery, star field, compass, zoom buttons, tilt and scale widgets, the red "NO GPS" self-location notice, and a status line with eye altitude, heading, MGRS position and elevation.
 - Side docks (Overlays, Maps, MultiSelector Tool, TAK Server, Contacts) and the status bar with MGRS, a System Messages counter, the UTC clock and "TAK Network Status" (disconnected).
 
@@ -44,6 +44,20 @@ Paths are relative to the work root `/var/lib/takx-proto` unless they start with
 - Maps & Favorites opens the Maps panel; switching the imagery layer to USGS Imagery loads live tiles.
 - Point Dropper places a CoT 2525C marker, by clicking the globe or by a typed location; the marker and its label render on the globe and appear under Recently Added.
 - The ribbon tabs switch.
+
+## Footage
+
+`stages/capture.sh all` recorded attempt 11 and produced, in the git-ignored `demo/out/takx/`:
+
+| File | Length | Content |
+| --- | --- | --- |
+| `takx57-raw-take-1080p30.mp4` | 30.27 s | one uncut take: empty desktop, main window, project load, globe, pan, heading rotation, zoom |
+| `takx57-clip-1-globe-pan-zoom-rotate.mp4` | 9.50 s | pan, rotation and zoom |
+| `takx57-clip-2-maps-imagery-layer.mp4` | 10.00 s | Maps panel, imagery layer switched to USGS Imagery |
+| `takx57-clip-3-point-dropper-synthetic-marker.mp4` | 9.50 s | Point Dropper placing `SYNTHETIC-DEMO 1` at 30 S 15 W |
+| `takx57-session-full-1080p30.mp4` | 93.63 s | the whole recording, including the ribbon tabs |
+
+All five are H.264 High, `yuv420p`, 1920x1080, 30 fps, and passed the `ffprobe`, `signalstats` and `freezedetect` checks in `capture.json`. I viewed the extracted frames. The footage has long still stretches (14.5 s of the raw take, mostly the project loading), so it needs trimming before any public use. It shows a standalone client: no TAK Server, no CloudTAK, no credentials. `PROVENANCE.md` next to the files has the digests, commands, renderer string and caveats. The files are unpublished; this session has no way to upload release assets.
 
 ## Fixes made to boot
 
@@ -84,7 +98,7 @@ Not tested at all:
 - 124 native method names in five Kernel classes have no exported symbol (`GLES10` 107, `GLLabelManager` 6, `NativeRenderSurface` 6, `RenderContextInterop` 4, `SystemClock` 1 before the clock library was added). None was hit in these runs; any code path that calls one would throw `UnsatisfiedLinkError`.
 - GL context destruction and recreation (closing and reopening the globe, a second globe), which is what the render-context patch is for.
 - A hardware GPU, a real X server, another distribution, or a run longer than a few minutes.
-- The recipe tests of the overlay patches' owners; the existing desktop-prototype tests were not rerun after this stage.
+- The recipe tests of the overlay patches' owners (`takx/compat`, `takx/kernel-render-context`) and `takx/compat/test-system-clock.py`. Of the desktop-prototype tests only `test_scripts.py` was rerun after this stage (62 run, 2 skipped, all passed).
 
 ## Deviations from the official layout and launch
 
