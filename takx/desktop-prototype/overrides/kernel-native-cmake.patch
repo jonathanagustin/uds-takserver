@@ -1,0 +1,28 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype override for takx/kernel-native/CMakeLists.txt (never applied
+# to the tracked file; kernel/compose.py applies it to a copy under
+# <work root>/overrides/kernel-native).
+#
+# Why: jni/jlibcurlhttpclientbuilder.cpp includes <curl/curl.h> and
+# <openssl/ssl.h> and calls OPENSSL_init_ssl, but the tracked parent gives the
+# takenginejni target neither the verified curl/OpenSSL include roots nor a
+# provider for that symbol (libtakengine.so hides OpenSSL). In a clean Debian
+# trixie toolchain image without host libcurl/libssl development packages the
+# unit fails with "curl/curl.h: No such file or directory". The same three
+# settings are what takx/kernel-native/hosted_CMakeLists.txt uses on main.
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -137,8 +137,9 @@
+ set_property(TARGET takengine PROPERTY LINK_DIRECTORIES "")
+ set_property(TARGET takengine PROPERTY LINK_LIBRARIES "${real_dependencies}")
+ set_property(TARGET takenginejni PROPERTY LINK_DIRECTORIES "")
+-set_property(TARGET takenginejni PROPERTY LINK_LIBRARIES "takengine;UDS::GLES;UDS::GDAL;UDS::Spatialite;SQLCipher::SQLCipher;draco::draco;Cesium3DTilesSelection")
+-target_include_directories(takenginejni PRIVATE "${JNI_HEADERS}")
++set_property(TARGET takenginejni PROPERTY LINK_LIBRARIES "takengine;UDS::GLES;UDS::GDAL;UDS::Spatialite;SQLCipher::SQLCipher;draco::draco;$<LINK_ONLY:CURL::libcurl_static>;Cesium3DTilesSelection")
++target_include_directories(takenginejni PRIVATE "${JNI_HEADERS}" "${CURL_ROOT}/install/include" "${SQLCIPHER}/openssl-install/include")
++target_compile_definitions(takenginejni PRIVATE CURL_STATICLIB)
+ foreach(target takengine takenginejni)
+   target_link_options(${target} PRIVATE "-Wl,--no-undefined" "-Wl,--exclude-libs,libssl.a:libcrypto.a:libexpat.a")
+ endforeach()
