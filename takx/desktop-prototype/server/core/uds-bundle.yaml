@@ -1,0 +1,110 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# yaml-language-server: $schema=https://raw.githubusercontent.com/defenseunicorns/uds-cli/refs/heads/main/uds.schema.json
+# UDS Core for the TAKX desktop prototype on native k3s, in a Claude Code
+# sandbox. It replaces the k3d-core-slim-dev checkpoint, which is one k3d
+# cluster image and cannot be layered onto an existing k3s.
+#
+# Two functional layers, the same two the checkpoint deploys: core-base
+# (Istio, gateways, Pepr) and core-identity-authorization (Keycloak,
+# Authservice). Monitoring, logging, runtime security and backup are separate
+# layers and are not listed, so nothing has to be trimmed.
+#
+# The core-base block follows bundle/uds-bundle.yaml. Differences:
+#   - envoy-gateway and envoy-default-gateway are not selected. They exist for
+#     the QUIC (UDP) listener, which this prototype does not use.
+#   - ztunnel env IPV6_ENABLED=false and cni ambient.ipv6=false: this kernel
+#     boots with ipv6.disable=1 and ztunnel otherwise fails to bind.
+#   - Keycloak generates the dev admin password Secret, as the checkpoint
+#     does, so the shared setup:keycloak-user task can create test users.
+kind: UDSBundle
+metadata:
+  name: takx-proto-core
+  description: UDS Core base and identity layers for the TAKX desktop prototype sandbox
+  version: 1.16.0
+
+packages:
+  - name: core-base
+    repository: ghcr.io/defenseunicorns/packages/uds/core-base
+    ref: 1.16.0-upstream
+    optionalComponents:
+      - istio-passthrough-gateway
+    keylessVerification:
+      certificateIdentityRegexp: "^https://github\\.com/defenseunicorns/uds-core/\\.github/workflows/publish\\.yaml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$"
+      certificateOIDCIssuer: https://token.actions.githubusercontent.com
+    overrides:
+      pepr-uds-core:
+        module:
+          values:
+            - path: watcher.resources.requests.cpu
+              value: 100m
+            - path: watcher.resources.requests.memory
+              value: 64Mi
+            - path: admission.resources.requests.cpu
+              value: 100m
+            - path: admission.resources.requests.memory
+              value: 64Mi
+      istio-controlplane:
+        istiod:
+          values:
+            - path: resources.requests.cpu
+              value: 100m
+            - path: resources.requests.memory
+              value: 1024Mi
+            - path: rollingMaxSurge
+              value: "0%"
+            - path: rollingMaxUnavailable
+              value: "100%"
+        cni:
+          values:
+            - path: ambient.ipv6
+              value: false
+        ztunnel:
+          values:
+            - path: env.IPV6_ENABLED
+              value: "false"
+      istio-passthrough-gateway:
+        gateway:
+          values:
+            - path: resources.requests.cpu
+              value: 50m
+            # Upstream defaults plus the standard TAK ports, as in
+            # bundle/uds-bundle.yaml.
+            - path: service.ports
+              value:
+                - name: status-port
+                  port: 15021
+                  protocol: TCP
+                  targetPort: 15021
+                - name: http2
+                  port: 80
+                  protocol: TCP
+                  targetPort: 80
+                - name: https
+                  port: 443
+                  protocol: TCP
+                  targetPort: 443
+                - name: tls-tak-cert
+                  port: 8446
+                  protocol: TCP
+                  targetPort: 8446
+                - name: tls-tak-stream
+                  port: 8089
+                  protocol: TCP
+                  targetPort: 8089
+            - path: autoscaling.enabled
+              value: false
+
+  - name: core-identity-authorization
+    repository: ghcr.io/defenseunicorns/packages/uds/core-identity-authorization
+    ref: 1.16.0-upstream
+    keylessVerification:
+      certificateIdentityRegexp: "^https://github\\.com/defenseunicorns/uds-core/\\.github/workflows/publish\\.yaml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$"
+      certificateOIDCIssuer: https://token.actions.githubusercontent.com
+    overrides:
+      keycloak:
+        keycloak:
+          values:
+            - path: insecureAdminPasswordGeneration.enabled
+              value: true
