@@ -297,7 +297,7 @@ So TAKX's HTTPS API needs two things this deployment does not give it: port 8443
 | `takx57-connected-cloudtak-clip-1-peer-marker-created.mp4` | 10.0 s | CloudTAK Coordinate Input: name and position typed, point created |
 | `takx57-connected-cloudtak-clip-2-peer-marker-broadcast.mp4` | 9.0 s | details panel, Share Features, Broadcast To All Users |
 | `takx57-connected-cloudtak-clip-3-takx-marker-arrives.mp4` | 10.0 s | the TAKX marker appears on the CloudTAK map |
-| `takx57-connected-cloudtak-clip-4-takx-marker-found.mp4` | 10.0 s | search lists `SYNTHETIC-TAKX-7`; the map flies to it; details panel |
+| `takx57-connected-cloudtak-clip-4-takx-marker-found.mp4` | 10.0 s | the search box opens, `SYNTHETIC-TAKX-7` is typed and listed under MAP FEATURES (about second 7), the map flies to the marker, its radial menu opens |
 
 All are H.264 High, `yuv420p`, 1920x1080, 30 fps and passed the checks in `capture-connected.json`. I viewed contact sheets of the extracted frames. About 94 s of each raw take are still. `PROVENANCE.md` there has versions, trust, digests and caveats. Unpublished.
 
@@ -321,7 +321,7 @@ Nothing secret is in the repository or in `demo/out`. `secrets/cloudtak-user/` h
 ### Not verified
 
 - `stages/capture-connected.sh record` as it stands now: the take was recorded before three later edits (the result-anchored cut of browser clip 4, the "listed" event line, and an external restyle of the file). The "listed" line of `connect-7` was added to `events.tsv` afterwards from `cloudtak-find.json`; `events.as-recorded.tsv` is the original. `finish` ran on the final file.
-- The first take's lead times were set by hand for the rehearsal only; `connect-7` used the script's own measurement.
+- The rehearsal `connect-5` was cut with lead times estimated by hand; `connect-7` used the script's own measurement.
 - A positive result for missions, data packages, contacts or chat from TAKX.
 - CloudTAK with a basemap, a real GPU, or a user's own browser.
 - The fixed render-context tree `dist/takx57-rcfix` was not used.
