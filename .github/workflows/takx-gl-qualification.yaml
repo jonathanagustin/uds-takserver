@@ -33,11 +33,21 @@ on:
       - "takx/ui-java/**"
       - "takx/worldwind-java/**"
       - "takx/worldwind-consumers/**"
+      - "takx/upstream_inputs.py"
+      - "takx/upstream-lfs.lock.json"
       - ".github/workflows/takx-gl-qualification.yaml"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# The pinned upstream checkouts keep their Git LFS pointers: no job reads an
+# LFS payload from a checkout, and smudging all 152 of them (818 MB) through
+# the LFS batch API in every job is what timed out. A job that needs a payload
+# names its set in takx/upstream-lfs.lock.json; takx/upstream_inputs.py
+# verifies it against the pointer and keeps it in the Actions cache.
+env:
+  GIT_LFS_SKIP_SMUDGE: "1"
 
 concurrency:
   group: takx-gl-qual-${{ github.event_name }}-${{ github.ref }}
@@ -583,6 +593,24 @@ jobs:
           python3 -B takx/kernel-scene/run_hosted_controls.py --phase verify
           python3 -B -m unittest discover -s takx/kernel-scene -p 'test_run_hosted_controls.py' -v
 
+      - name: Resolve the upstream LFS payload cache key
+        id: upstream-lfs
+        timeout-minutes: 2
+        run: |
+          key="$(python3 -B takx/upstream_inputs.py key --set minizip)"
+          echo "key=${key}" >> "${GITHUB_OUTPUT}"
+
+      # The cache only saves a download. Its content is verified again below,
+      # and a failed or slow restore is a cache miss, not a job failure.
+      - name: Restore upstream LFS payloads
+        id: upstream-lfs-cache
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/upstream-lfs
+          key: ${{ steps.upstream-lfs.outputs.key }}
+
       - name: Fetch pinned upstream ATAK Kernel C++ sources, minizip headers, and prebuilt OCI caches
         timeout-minutes: 5
         run: |
@@ -618,12 +646,20 @@ jobs:
             fi
           done
 
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-            https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/takthirdparty/distfiles/libkml.tar.gz \
-            -o "${RUNNER_TEMP}/libkml.tar.gz"
-          printf '%s  %s\n' "39692c0184933424e35ef69e5101f1ff0d664f2b50b972887cfc15fda032d1cb" "${RUNNER_TEMP}/libkml.tar.gz" | sha256sum -c -
-          tar -xzf "${RUNNER_TEMP}/libkml.tar.gz" -C "${RUNNER_TEMP}" libkml-1.3/third_party/zlib-1.2.3/contrib/minizip
+          python3 -B takx/upstream_inputs.py materialize --set minizip \
+            --store "${RUNNER_TEMP}/upstream-lfs" --source "${RUNNER_TEMP}/pinned-atak"
+          libkml="$(python3 -B takx/upstream_inputs.py path --store "${RUNNER_TEMP}/upstream-lfs" takthirdparty/distfiles/libkml.tar.gz)"
+          tar -xzf "${libkml}" -C "${RUNNER_TEMP}" libkml-1.3/third_party/zlib-1.2.3/contrib/minizip
           cp "${RUNNER_TEMP}"/libkml-1.3/third_party/zlib-1.2.3/contrib/minizip/*.h "${RUNNER_TEMP}/scene-deps/include/minizip/"
+
+      - name: Save verified upstream LFS payloads
+        if: steps.upstream-lfs-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/upstream-lfs
+          key: ${{ steps.upstream-lfs.outputs.key }}
 
       - name: Run TAK Kernel 8.30.5 ASSIMPSceneSpi controls live on Linux GCC 14
         timeout-minutes: 8
@@ -1136,6 +1172,24 @@ jobs:
           name: takx-kernel-java-build-output
           path: ${{ runner.temp }}/kernel-java
 
+      - name: Resolve the upstream LFS payload cache key
+        id: upstream-lfs
+        timeout-minutes: 2
+        run: |
+          key="$(python3 -B takx/upstream_inputs.py key --set kernel-native)"
+          echo "key=${key}" >> "${GITHUB_OUTPUT}"
+
+      # The cache only saves a download. Its content is verified again below,
+      # and a failed or slow restore is a cache miss, not a job failure.
+      - name: Restore upstream LFS payloads
+        id: upstream-lfs-cache
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/upstream-lfs
+          key: ${{ steps.upstream-lfs.outputs.key }}
+
       - name: Fetch pinned atak-civ 8.30.5 sources, tinygltf archives, and minizip headers
         timeout-minutes: 6
         run: |
@@ -1147,26 +1201,30 @@ jobs:
           git -C "${RUNNER_TEMP}/pinned-atak" fetch --depth 1 origin 9f6893dd657feacc35ec5de03dad721c2e44170e
           git -C "${RUNNER_TEMP}/pinned-atak" checkout -q FETCH_HEAD
 
-          for entry in \
-            "fa32ead8ec963f96ae6bd4a65d5b8b8361740d25e8915f3f226303d1ac2e6f85|https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/depends/tinygltf-2.4.1-mod.tar.gz" \
-            "2d9a0196d5346a955f3bbb08f890bb808e92b9980dd79d112611501500d68c43|https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/depends/tinygltfloader-0.9.5-mod.tar.gz"; do
-            sha="${entry%%|*}"
-            url="${entry#*|}"
-            curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "${url}" -o "${RUNNER_TEMP}/gltf-cache/${sha}"
-            printf '%s  %s\n' "${sha}" "${RUNNER_TEMP}/gltf-cache/${sha}" | sha256sum -c -
+          python3 -B takx/upstream_inputs.py materialize --set kernel-native \
+            --store "${RUNNER_TEMP}/upstream-lfs" --source "${RUNNER_TEMP}/pinned-atak"
+          for archive in depends/tinygltf-2.4.1-mod.tar.gz depends/tinygltfloader-0.9.5-mod.tar.gz; do
+            payload="$(python3 -B takx/upstream_inputs.py path --store "${RUNNER_TEMP}/upstream-lfs" "${archive}")"
+            cp "${payload}" "${RUNNER_TEMP}/gltf-cache/${payload##*/}"
           done
 
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-            "https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/takthirdparty/distfiles/libkml.tar.gz" \
-            -o "${RUNNER_TEMP}/libkml.tar.gz"
-          printf '%s  %s\n' "39692c0184933424e35ef69e5101f1ff0d664f2b50b972887cfc15fda032d1cb" "${RUNNER_TEMP}/libkml.tar.gz" | sha256sum -c -
+          libkml="$(python3 -B takx/upstream_inputs.py path --store "${RUNNER_TEMP}/upstream-lfs" takthirdparty/distfiles/libkml.tar.gz)"
           mkdir -p "${RUNNER_TEMP}/libkml-extract"
-          tar -xzf "${RUNNER_TEMP}/libkml.tar.gz" -C "${RUNNER_TEMP}/libkml-extract"
+          tar -xzf "${libkml}" -C "${RUNNER_TEMP}/libkml-extract"
           patch --batch --fuzz=0 -p1 \
             -d "${RUNNER_TEMP}/libkml-extract/libkml-1.3/third_party/zlib-1.2.3/contrib/minizip" \
             -i "${GITHUB_WORKSPACE}/takx/native-caches/libkml/patches/minizip-zlib-crc-type.patch"
           cp -a "${RUNNER_TEMP}/libkml-extract/libkml-1.3/third_party/zlib-1.2.3/contrib/minizip"/*.h \
             "${RUNNER_TEMP}/minizip-include/minizip/"
+
+      - name: Save verified upstream LFS payloads
+        if: steps.upstream-lfs-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/upstream-lfs
+          key: ${{ steps.upstream-lfs.outputs.key }}
 
       - name: Extract published GHCR Layer-0/1/2 native OCI caches
         timeout-minutes: 8
@@ -1312,6 +1370,24 @@ jobs:
           name: takx-kernel-native-build-output
           path: ${{ runner.temp }}/kernel-native
 
+      - name: Resolve the upstream LFS payload cache key
+        id: upstream-lfs
+        timeout-minutes: 2
+        run: |
+          key="$(python3 -B takx/upstream_inputs.py key --set sdk-resources)"
+          echo "key=${key}" >> "${GITHUB_OUTPUT}"
+
+      # The cache only saves a download. Its content is verified again below,
+      # and a failed or slow restore is a cache miss, not a job failure.
+      - name: Restore upstream LFS payloads
+        id: upstream-lfs-cache
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/resource-payloads
+          key: ${{ steps.upstream-lfs.outputs.key }}
+
       - name: Fetch pinned atak-civ 8.30.5 sources, verified LFS payload, and GHCR OCI caches
         timeout-minutes: 6
         run: |
@@ -1323,11 +1399,8 @@ jobs:
           git -C "${RUNNER_TEMP}/pinned-atak" fetch --depth 1 origin 9f6893dd657feacc35ec5de03dad721c2e44170e
           git -C "${RUNNER_TEMP}/pinned-atak" checkout -q FETCH_HEAD
 
-          lfs_sha="12e71980bdeffb9bb48db5976e9e10a0af635f7fc7834915db3baab9c195aa31"
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-            "https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/takkernel/engine/src/main/assets/loresel.sqlite.zip" \
-            -o "${RUNNER_TEMP}/resource-payloads/${lfs_sha}"
-          printf '%s  %s\n' "${lfs_sha}" "${RUNNER_TEMP}/resource-payloads/${lfs_sha}" | sha256sum -c -
+          python3 -B takx/upstream_inputs.py materialize --set sdk-resources \
+            --store "${RUNNER_TEMP}/resource-payloads" --source "${RUNNER_TEMP}/pinned-atak"
 
           mkdir -p "${RUNNER_TEMP}/sdk-caches/gles"
           gles_cid="$(docker create ghcr.io/jonathanagustin/uds-takserver/takx-native-gles:1.7.0-amd64 /nonexistent)"
@@ -1345,6 +1418,15 @@ jobs:
             docker cp "${cid}:/${name}/." "${RUNNER_TEMP}/sdk-caches/${name}/"
             docker rm "${cid}"
           done
+
+      - name: Save verified upstream LFS payloads
+        if: steps.upstream-lfs-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/resource-payloads
+          key: ${{ steps.upstream-lfs.outputs.key }}
 
       - name: Assemble SDK JAR and qualify stock EngineLibrary resource loader under JDK 17 -Xcheck:jni
         timeout-minutes: 10
@@ -1581,6 +1663,24 @@ jobs:
           name: takx-kernel-native-build-output
           path: ${{ runner.temp }}/kernel-native
 
+      - name: Resolve the upstream LFS payload cache key
+        id: upstream-lfs
+        timeout-minutes: 2
+        run: |
+          key="$(python3 -B takx/upstream_inputs.py key --set kernel-native)"
+          echo "key=${key}" >> "${GITHUB_OUTPUT}"
+
+      # The cache only saves a download. Its content is verified again below,
+      # and a failed or slow restore is a cache miss, not a job failure.
+      - name: Restore upstream LFS payloads
+        id: upstream-lfs-cache
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/upstream-lfs
+          key: ${{ steps.upstream-lfs.outputs.key }}
+
       - name: Fetch pinned atak-civ 8.30.5 sources, tinygltf archives, and minizip headers
         timeout-minutes: 6
         run: |
@@ -1592,26 +1692,30 @@ jobs:
           git -C "${RUNNER_TEMP}/pinned-atak" fetch --depth 1 origin 9f6893dd657feacc35ec5de03dad721c2e44170e
           git -C "${RUNNER_TEMP}/pinned-atak" checkout -q FETCH_HEAD
 
-          for entry in \
-            "fa32ead8ec963f96ae6bd4a65d5b8b8361740d25e8915f3f226303d1ac2e6f85|https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/depends/tinygltf-2.4.1-mod.tar.gz" \
-            "2d9a0196d5346a955f3bbb08f890bb808e92b9980dd79d112611501500d68c43|https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/depends/tinygltfloader-0.9.5-mod.tar.gz"; do
-            sha="${entry%%|*}"
-            url="${entry#*|}"
-            curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "${url}" -o "${RUNNER_TEMP}/gltf-cache/${sha}"
-            printf '%s  %s\n' "${sha}" "${RUNNER_TEMP}/gltf-cache/${sha}" | sha256sum -c -
+          python3 -B takx/upstream_inputs.py materialize --set kernel-native \
+            --store "${RUNNER_TEMP}/upstream-lfs" --source "${RUNNER_TEMP}/pinned-atak"
+          for archive in depends/tinygltf-2.4.1-mod.tar.gz depends/tinygltfloader-0.9.5-mod.tar.gz; do
+            payload="$(python3 -B takx/upstream_inputs.py path --store "${RUNNER_TEMP}/upstream-lfs" "${archive}")"
+            cp "${payload}" "${RUNNER_TEMP}/gltf-cache/${payload##*/}"
           done
 
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-            "https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/takthirdparty/distfiles/libkml.tar.gz" \
-            -o "${RUNNER_TEMP}/libkml.tar.gz"
-          printf '%s  %s\n' "39692c0184933424e35ef69e5101f1ff0d664f2b50b972887cfc15fda032d1cb" "${RUNNER_TEMP}/libkml.tar.gz" | sha256sum -c -
+          libkml="$(python3 -B takx/upstream_inputs.py path --store "${RUNNER_TEMP}/upstream-lfs" takthirdparty/distfiles/libkml.tar.gz)"
           mkdir -p "${RUNNER_TEMP}/libkml-extract"
-          tar -xzf "${RUNNER_TEMP}/libkml.tar.gz" -C "${RUNNER_TEMP}/libkml-extract"
+          tar -xzf "${libkml}" -C "${RUNNER_TEMP}/libkml-extract"
           patch --batch --fuzz=0 -p1 \
             -d "${RUNNER_TEMP}/libkml-extract/libkml-1.3/third_party/zlib-1.2.3/contrib/minizip" \
             -i "${GITHUB_WORKSPACE}/takx/native-caches/libkml/patches/minizip-zlib-crc-type.patch"
           cp -a "${RUNNER_TEMP}/libkml-extract/libkml-1.3/third_party/zlib-1.2.3/contrib/minizip"/*.h \
             "${RUNNER_TEMP}/minizip-include/minizip/"
+
+      - name: Save verified upstream LFS payloads
+        if: steps.upstream-lfs-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/upstream-lfs
+          key: ${{ steps.upstream-lfs.outputs.key }}
 
       - name: Extract published GHCR Layer-0/1/2 native OCI caches
         timeout-minutes: 8
@@ -1912,6 +2016,24 @@ jobs:
           name: takx-kernel-native-build-output
           path: ${{ runner.temp }}/kernel-native
 
+      - name: Resolve the upstream LFS payload cache key
+        id: upstream-lfs
+        timeout-minutes: 2
+        run: |
+          key="$(python3 -B takx/upstream_inputs.py key --set kernel-native)"
+          echo "key=${key}" >> "${GITHUB_OUTPUT}"
+
+      # The cache only saves a download. Its content is verified again below,
+      # and a failed or slow restore is a cache miss, not a job failure.
+      - name: Restore upstream LFS payloads
+        id: upstream-lfs-cache
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/upstream-lfs
+          key: ${{ steps.upstream-lfs.outputs.key }}
+
       - name: Fetch pinned atak-civ 8.30.5 sources, tinygltf archives, and minizip headers
         timeout-minutes: 6
         run: |
@@ -1923,26 +2045,30 @@ jobs:
           git -C "${RUNNER_TEMP}/pinned-atak" fetch --depth 1 origin 9f6893dd657feacc35ec5de03dad721c2e44170e
           git -C "${RUNNER_TEMP}/pinned-atak" checkout -q FETCH_HEAD
 
-          for entry in \
-            "fa32ead8ec963f96ae6bd4a65d5b8b8361740d25e8915f3f226303d1ac2e6f85|https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/depends/tinygltf-2.4.1-mod.tar.gz" \
-            "2d9a0196d5346a955f3bbb08f890bb808e92b9980dd79d112611501500d68c43|https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/depends/tinygltfloader-0.9.5-mod.tar.gz"; do
-            sha="${entry%%|*}"
-            url="${entry#*|}"
-            curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "${url}" -o "${RUNNER_TEMP}/gltf-cache/${sha}"
-            printf '%s  %s\n' "${sha}" "${RUNNER_TEMP}/gltf-cache/${sha}" | sha256sum -c -
+          python3 -B takx/upstream_inputs.py materialize --set kernel-native \
+            --store "${RUNNER_TEMP}/upstream-lfs" --source "${RUNNER_TEMP}/pinned-atak"
+          for archive in depends/tinygltf-2.4.1-mod.tar.gz depends/tinygltfloader-0.9.5-mod.tar.gz; do
+            payload="$(python3 -B takx/upstream_inputs.py path --store "${RUNNER_TEMP}/upstream-lfs" "${archive}")"
+            cp "${payload}" "${RUNNER_TEMP}/gltf-cache/${payload##*/}"
           done
 
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-            "https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/takthirdparty/distfiles/libkml.tar.gz" \
-            -o "${RUNNER_TEMP}/libkml.tar.gz"
-          printf '%s  %s\n' "39692c0184933424e35ef69e5101f1ff0d664f2b50b972887cfc15fda032d1cb" "${RUNNER_TEMP}/libkml.tar.gz" | sha256sum -c -
+          libkml="$(python3 -B takx/upstream_inputs.py path --store "${RUNNER_TEMP}/upstream-lfs" takthirdparty/distfiles/libkml.tar.gz)"
           mkdir -p "${RUNNER_TEMP}/libkml-extract"
-          tar -xzf "${RUNNER_TEMP}/libkml.tar.gz" -C "${RUNNER_TEMP}/libkml-extract"
+          tar -xzf "${libkml}" -C "${RUNNER_TEMP}/libkml-extract"
           patch --batch --fuzz=0 -p1 \
             -d "${RUNNER_TEMP}/libkml-extract/libkml-1.3/third_party/zlib-1.2.3/contrib/minizip" \
             -i "${GITHUB_WORKSPACE}/takx/native-caches/libkml/patches/minizip-zlib-crc-type.patch"
           cp -a "${RUNNER_TEMP}/libkml-extract/libkml-1.3/third_party/zlib-1.2.3/contrib/minizip"/*.h \
             "${RUNNER_TEMP}/minizip-include/minizip/"
+
+      - name: Save verified upstream LFS payloads
+        if: steps.upstream-lfs-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/upstream-lfs
+          key: ${{ steps.upstream-lfs.outputs.key }}
 
       - name: Extract published GHCR Layer-0/1/2 native OCI caches
         timeout-minutes: 8
@@ -2131,6 +2257,24 @@ jobs:
           name: takx-kernel-native-build-output
           path: ${{ runner.temp }}/kernel-native
 
+      - name: Resolve the upstream LFS payload cache key
+        id: upstream-lfs
+        timeout-minutes: 2
+        run: |
+          key="$(python3 -B takx/upstream_inputs.py key --set kernel-native)"
+          echo "key=${key}" >> "${GITHUB_OUTPUT}"
+
+      # The cache only saves a download. Its content is verified again below,
+      # and a failed or slow restore is a cache miss, not a job failure.
+      - name: Restore upstream LFS payloads
+        id: upstream-lfs-cache
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/upstream-lfs
+          key: ${{ steps.upstream-lfs.outputs.key }}
+
       - name: Fetch pinned atak-civ 8.30.5 sources, tinygltf archives, and minizip headers
         timeout-minutes: 6
         run: |
@@ -2142,26 +2286,30 @@ jobs:
           git -C "${RUNNER_TEMP}/pinned-atak" fetch --depth 1 origin 9f6893dd657feacc35ec5de03dad721c2e44170e
           git -C "${RUNNER_TEMP}/pinned-atak" checkout -q FETCH_HEAD
 
-          for entry in \
-            "fa32ead8ec963f96ae6bd4a65d5b8b8361740d25e8915f3f226303d1ac2e6f85|https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/depends/tinygltf-2.4.1-mod.tar.gz" \
-            "2d9a0196d5346a955f3bbb08f890bb808e92b9980dd79d112611501500d68c43|https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/depends/tinygltfloader-0.9.5-mod.tar.gz"; do
-            sha="${entry%%|*}"
-            url="${entry#*|}"
-            curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 "${url}" -o "${RUNNER_TEMP}/gltf-cache/${sha}"
-            printf '%s  %s\n' "${sha}" "${RUNNER_TEMP}/gltf-cache/${sha}" | sha256sum -c -
+          python3 -B takx/upstream_inputs.py materialize --set kernel-native \
+            --store "${RUNNER_TEMP}/upstream-lfs" --source "${RUNNER_TEMP}/pinned-atak"
+          for archive in depends/tinygltf-2.4.1-mod.tar.gz depends/tinygltfloader-0.9.5-mod.tar.gz; do
+            payload="$(python3 -B takx/upstream_inputs.py path --store "${RUNNER_TEMP}/upstream-lfs" "${archive}")"
+            cp "${payload}" "${RUNNER_TEMP}/gltf-cache/${payload##*/}"
           done
 
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-            "https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/9f6893dd657feacc35ec5de03dad721c2e44170e/takthirdparty/distfiles/libkml.tar.gz" \
-            -o "${RUNNER_TEMP}/libkml.tar.gz"
-          printf '%s  %s\n' "39692c0184933424e35ef69e5101f1ff0d664f2b50b972887cfc15fda032d1cb" "${RUNNER_TEMP}/libkml.tar.gz" | sha256sum -c -
+          libkml="$(python3 -B takx/upstream_inputs.py path --store "${RUNNER_TEMP}/upstream-lfs" takthirdparty/distfiles/libkml.tar.gz)"
           mkdir -p "${RUNNER_TEMP}/libkml-extract"
-          tar -xzf "${RUNNER_TEMP}/libkml.tar.gz" -C "${RUNNER_TEMP}/libkml-extract"
+          tar -xzf "${libkml}" -C "${RUNNER_TEMP}/libkml-extract"
           patch --batch --fuzz=0 -p1 \
             -d "${RUNNER_TEMP}/libkml-extract/libkml-1.3/third_party/zlib-1.2.3/contrib/minizip" \
             -i "${GITHUB_WORKSPACE}/takx/native-caches/libkml/patches/minizip-zlib-crc-type.patch"
           cp -a "${RUNNER_TEMP}/libkml-extract/libkml-1.3/third_party/zlib-1.2.3/contrib/minizip"/*.h \
             "${RUNNER_TEMP}/minizip-include/minizip/"
+
+      - name: Save verified upstream LFS payloads
+        if: steps.upstream-lfs-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/upstream-lfs
+          key: ${{ steps.upstream-lfs.outputs.key }}
 
       - name: Extract published GHCR Layer-0/1/2 native OCI caches
         timeout-minutes: 8

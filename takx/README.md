@@ -97,7 +97,19 @@ Keep upstream changes as reviewable diffs under [patches](patches/README.md). Do
 
 ```bash
 python3 -B -m unittest discover -s takx -p 'test_source_inputs.py' -v
+python3 -B -m unittest discover -s takx -p 'test_upstream_inputs.py' -v
 bash -n takx/build-commoncommo.sh
 ```
 
 Source/hash guard tests are local and do not fetch archives or compile native dependencies. They complement the actual JAR/JNI smoke, which requires the real source-built outputs.
+
+## Upstream Git LFS payloads in qualification
+
+The qualification workflow checks out pinned `atak-civ` with `GIT_LFS_SKIP_SMUDGE=1`, so the checkout holds LFS pointers and makes no LFS request. A job that needs a payload names a set in [upstream-lfs.lock.json](upstream-lfs.lock.json):
+
+```bash
+python3 -B takx/upstream_inputs.py materialize --set kernel-native --store /private/upstream-lfs --source /private/pinned-atak
+python3 -B takx/upstream_inputs.py path --store /private/upstream-lfs takthirdparty/distfiles/libkml.tar.gz
+```
+
+`materialize` leaves each payload at `<store>/<sha256>`. It requires the path to be that exact LFS pointer at the pinned revision of `--source`, downloads only from the pinned `media.githubusercontent.com` URL, and checks the pointer's sha256 and size on every file, stored or downloaded. A stored file that fails is deleted and fetched again; `--offline` fails instead. The workflow keeps the store in the Actions cache under the key that `key --set` prints. The recipe locks keep their own checks on what they consume. On a pin bump, update the lock; `test_upstream_inputs.py` fails while it disagrees with a recipe lock.
