@@ -7,4 +7,6 @@
 # 'arches=<comma separated list of amd64, arm64>' (default: both).
 #
 # run 1: first build on hosted arm64 runners, with the amd64 control.
+# run 2: inputs fetched once per architecture and stored (Maven Central answered
+#        the per-job fetch with HTTP 429); ELF machine audit of the outputs.
 arches=arm64,amd64

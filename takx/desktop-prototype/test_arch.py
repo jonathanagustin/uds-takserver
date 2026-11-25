@@ -651,6 +651,48 @@ def archive(members):
     return data
 
 
+class InputsStore(unittest.TestCase):
+    """ci/inputs.sh: the key, and the refusals that need no registry."""
+
+    SCRIPT = HERE / 'ci/inputs.sh'
+
+    def call(self, *arguments, **env):
+        environment = dict(os.environ, CI_IMAGES='registry.invalid/ci', **env)
+        return subprocess.run(['bash', str(self.SCRIPT), *arguments], capture_output=True, text=True, env=environment,
+                              timeout=60)
+
+    @unittest.skipUnless((HERE.parent.parent / '.git').exists(), 'needs the Git index of the repository')
+    def test_key_names_the_architecture_and_depends_on_the_toolchain(self):
+        keys = {}
+        for arch in ('amd64', 'arm64'):
+            for identity in ('sha256:' + 'a' * 64, 'sha256:' + 'b' * 64):
+                done = self.call('key', arch, identity)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertRegex(done.stdout, r'\Aregistry\.invalid/ci/inputs:%s-[0-9a-f]{16}\n\Z' % arch)
+                keys[arch, identity] = done.stdout
+        self.assertEqual(len(set(keys.values())), 4)
+        self.assertEqual(self.call('key', 'arm64', 'sha256:' + 'a' * 64).stdout, keys['arm64', 'sha256:' + 'a' * 64])
+
+    def test_key_refuses_an_unknown_architecture_and_a_missing_identity(self):
+        self.assertNotEqual(self.call('key', 'riscv64', 'sha256:' + 'a' * 64).returncode, 0)
+        self.assertEqual(self.call('key', 'arm64', 'latest').returncode, 2)
+        self.assertEqual(self.call('key', 'arm64').returncode, 2)
+        self.assertEqual(self.call('nonsense').returncode, 2)
+
+    def test_save_refuses_a_fetch_that_is_not_ok_and_restore_refuses_a_used_work_root(self):
+        with tempfile.TemporaryDirectory() as root:
+            done = self.call('save', 'registry.invalid/ci/inputs:x', TAKX_PROTO_ROOT=root)
+            self.assertEqual(done.returncode, 1)
+            self.assertIn('status/fetch.json is not ok', done.stderr)
+            os.makedirs(os.path.join(root, 'status'))
+            Path(root, 'status/fetch.json').write_text('{"status": "failed"}')
+            self.assertEqual(self.call('save', 'registry.invalid/ci/inputs:x', TAKX_PROTO_ROOT=root).returncode, 1)
+            os.makedirs(os.path.join(root, 'cache'))
+            done = self.call('restore', 'registry.invalid/ci/inputs:x', TAKX_PROTO_ROOT=root)
+            self.assertEqual(done.returncode, 1)
+            self.assertIn('restored into an empty work root only', done.stderr)
+
+
 class ElfAudit(unittest.TestCase):
     def test_machine_names(self):
         self.assertEqual(PIPELINE.elf_machine(elf(183)[:20]), 'aarch64')
@@ -683,7 +725,7 @@ class Workflow(unittest.TestCase):
 
     def test_least_privilege_and_no_credentials(self):
         self.assertIn('\npermissions:\n  contents: read\n\n', self.TEXT)
-        self.assertEqual(self.TEXT.count('packages: write'), 4)  # toolchain and the three provider waves
+        self.assertEqual(self.TEXT.count('packages: write'), 5)  # toolchain, inputs and the three provider waves
         self.assertEqual(self.TEXT.count('packages: read'), 1)   # the final job pushes nothing
         for scope in ('id-token', 'contents: write', 'actions: write', 'pull-requests', 'write-all'):
             self.assertNotIn(scope, self.TEXT)
@@ -697,13 +739,13 @@ class Workflow(unittest.TestCase):
             self.assertRegex(action, r'^[\w.-]+/[\w.-]+@[0-9a-f]{40}$')
             self.assertRegex(comment, r'^ # v\d+\.\d+\.\d+$')
         jobs = re.findall(r'(?m)^  ([a-z-]+):\n(?:    .*\n|\n)+', self.TEXT[self.TEXT.index('\njobs:\n'):])
-        self.assertEqual(jobs, ['plan', 'toolchain', 'providers-a', 'providers-b', 'providers-c', 'client'])
+        self.assertEqual(jobs, ['plan', 'toolchain', 'inputs', 'providers-a', 'providers-b', 'providers-c', 'client'])
         limits = [int(value) for value in re.findall(r'timeout-minutes: (\d+)', self.TEXT)]
         self.assertEqual(len(limits), len(jobs))
         self.assertLess(max(limits), 360)
         self.assertIn("concurrency:\n  group: takx-desktop-prototype-${{ github.event_name }}-${{ github.ref }}\n"
                       '  cancel-in-progress: false\n', self.TEXT)
-        self.assertEqual(self.TEXT.count("runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}"), 5)
+        self.assertEqual(self.TEXT.count("runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}"), 6)
 
     def test_matrix_groups_are_the_groups_of_the_driver(self):
         listed = [name for row in re.findall(r'group: \[([a-z, -]+)\]', self.TEXT) for name in row.split(', ')]

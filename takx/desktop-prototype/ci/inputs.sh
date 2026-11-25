@@ -13,7 +13,8 @@
 #                                        root, push them, print repo@sha256:...
 #   ci/inputs.sh restore REFERENCE       pull, unpack below the work root and
 #                                        check; print repo@sha256:...
-#                                        Exit 3: nothing is stored under REFERENCE.
+#                                        Exit 3: nothing readable is stored
+#                                        under REFERENCE.
 #
 # The key covers what decides the fetch: the architecture, the toolchain image
 # (its Git reconstructs archives), the pinned atak-civ commit, every tracked
@@ -96,6 +97,7 @@ case "${1:-}" in
       case "${pulled}" in
         *"manifest unknown"*|*"not found"*|*"name unknown"*|*denied*)
           say "nothing readable is stored under ${reference}: ${pulled##*: }"; exit 3;;
+        *) ;;  # any other pull error is reported just below
       esac
       say "pull of ${reference} failed: ${pulled}"; exit 1
     fi
