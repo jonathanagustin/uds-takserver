@@ -15,6 +15,47 @@ GL thread. Running, null, child/shared ownership and wrong-thread transitions
 fail explicitly. Actual com/gov context and surface interfaces must be adapted
 with complete forwarding, including size listeners and physical dimensions.
 
+## Client-owned surface
+
+The unpatched Kernel returns the caller's context and surface objects, and the
+pinned TAKX clients rely on that: they cast `getRenderSurface()` of a renderer
+and of its context to their own `java.awt.Component` type and compare it by
+identity. The binding therefore returns the client's surface object itself
+whenever that object implements the legacy `com.atakmap.map.RenderSurface`
+type the context interface returns. The object is recorded when the binding is
+created. A replacement context must supply the same object; any other surface
+is refused with `IllegalArgumentException` before any state changes, because
+the view and the native peer hold the surface for the renderer's lifetime. The
+terminal tombstone drops the reference.
+
+The forwarding surface still exists for two purposes. It is the surface of the
+native peer, which reads `getRenderSurface()` exactly once while it is created:
+`GLMapView` runs that creation through `captureForNativePeer`, and only that
+read, on that thread, sees the forwarding surface. Native size listeners are
+therefore still counted (rebind and terminal disposal refuse while one is
+registered) and still dropped when their generation retired. It is also the
+visible surface for a context whose surface lacks the legacy type, such as the
+Kernel's own `JOGLRenderContext`; such contexts behave as before, including
+replacement with a context that has another surface object.
+
+## Current-context check
+
+A client context may answer `isRenderThread()` from a thread flag that only its
+own drawable callbacks set. JOGL initializes a listener added during `init` on
+the next display, so the context a client creates inside its `init` callback
+after a GL context re-creation still reports "not the render thread" while the
+client rebinds and restarts the renderer there. When the bound surface is a
+JOGL drawable, the lifecycle guards (`requireCurrent`, `rebind`, the quiescing
+submission check) therefore ask the real question instead: is the drawable's
+GL context the one current on the calling thread. The answer the binding gives
+the native guards follows the same rule: attached means that context is
+current, and the render thread is the one where it is current or the one the
+client context claims. The check is never skipped; if it cannot be made for a
+drawable surface the operation fails. Contexts whose surface is not a JOGL
+drawable are asked as before. This source set is also compiled without JOGL,
+so the two public JOGL methods are resolved from the drawable interface of the
+surface object rather than linked.
+
 Release drains generation-owned work on the old GL thread before GPU release,
 then removes only that view binding's shader/text/fixed-pipeline/worker caches.
 The generation retires old drawable callbacks so they cannot issue commands

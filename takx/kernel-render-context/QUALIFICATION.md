@@ -7,6 +7,65 @@ Headed OpenGL lifecycle remains unqualified.
 The actual upstream identity remains Kernel 8.30.5 at official commit
 9f6893dd657feacc35ec5de03dad721c2e44170e.
 
+## Client-owned surface and current-context candidate (2026-11-25)
+
+Every section below this one describes an earlier Context patch. The last of
+those patches has SHA-256
+`0371e8d01a89f5125466865f346043d4623e85c6f0696999da7f5596f4f1703c`; it is the
+one the 88-assertion state control and all earlier native, complete-Java,
+headed and client receipts were produced with. None of them was produced with
+the current patch, and their numbers are kept only as history.
+
+The current patch
+(`5e9d9fba183e1369974be16f56f2b834ca1909bb5665ece28696000f632cf29e`) changes
+two Java images and nothing else: `RenderContextBinding.java`
+(`77ad3d5587ade37ca8039afecf375ddaa26b1a4a6795f381753bfe79a06207ba`) and
+`GLMapView.java`
+(`1086ca73a15b5cdd15cae441272acb52b17e959e4f65f92e14a225f4749bcb54`). No
+native source, native method declaration or JNI header changes.
+
+Two defects of the previous patch were reproduced first, with
+`tests/TakxSurfaceLifecycleControl.java` on the composed Kernel built from the
+previous patch, under Xvfb and Mesa llvmpipe 25.0.7 (OpenGL 4.5 compatibility),
+with a `GLJPanel` and with a `GLCanvas`:
+
+- `getRenderSurface()` of the view and of its context returned the binding's
+  private forwarding surface (`RenderContextBinding$Surface`), so the cast to
+  the client's `java.awt.Component` that TAKX 5.7 performs cannot succeed.
+- After JOGL destroyed and re-created the GL context, `setRenderContext` called
+  inside the client's `init` callback threw `IllegalStateException: replacement
+  current GL thread required` although the drawable's GL context was current:
+  the client context's render-thread flag is set only by its own later
+  callbacks. The renderer then stayed unbound and every frame failed.
+
+Evidence for the current patch, all on Linux amd64 in the desktop-prototype
+images, none of it a renderer, SDK or client qualification:
+
+- `prepare.py --phase prepare` and `native_sources.py --phase prepare` pass
+  with the new lock (every stage image checked, patch applied with fuzz 0).
+- The whole composed Java (1,239 sources) compiles to 2,703 classes; the 119
+  generated JNI headers are byte-identical to those of the previous
+  composition. The 32 classes that differ are `GLMapView*` and
+  `RenderContextBinding*`; `RenderContextBinding$Drawable` is new.
+- `BindingStateTest` passes 106 assertions with the new binding. The previous
+  88 are unchanged and still pass; the 18 new ones cover the client-owned
+  surface. Against the previous binding the new control fails at assertion 89.
+  The state control has no JOGL on its class path, so it exercises the
+  context's own answers only, never the drawable check.
+- `tests/TakxSurfaceLifecycleControl.java` passes under `-Xcheck:jni` with a
+  `GLJPanel` and with a `GLCanvas`: surface identity, two GL context
+  re-creations with rebind inside `init`, globe pixels read back in every new
+  context, exactly one size listener on the client component while started
+  and none after stop, rejection of a rebind without a current GL context and
+  of a rebind to another surface object.
+
+Not run with the current patch: the native build (the previously built
+libraries were reused because the JNI headers are identical, and the
+desktop-prototype package step refuses to label them as built from this
+composition), the hosted CI controls, `ContextRecreationProbe` and every other
+headed or JNI probe in `tests/`, any hardware GPU, Windows or macOS. GPU
+context destruction and re-creation therefore remains unqualified.
+
 ## Queue-submission rejection candidate
 
 The current Java binding withdraws only its still-pending task when the delegate

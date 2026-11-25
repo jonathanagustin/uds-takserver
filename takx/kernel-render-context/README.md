@@ -73,6 +73,39 @@ The source ownership and pre-realization reasoning is in [DESIGN.md](DESIGN.md),
 [PRE_REALIZATION_AUDIT.md](PRE_REALIZATION_AUDIT.md), and
 [TERMINAL_OWNERSHIP_AUDIT.md](TERMINAL_OWNERSHIP_AUDIT.md).
 
+The binding returns a client-owned surface object unchanged and checks the
+real current GL context of a JOGL drawable surface; see the two sections on
+this in [DESIGN.md](DESIGN.md). `tests/BindingStateTest.java` is the JVM state
+control (106 assertions, no GL). `tests/TakxSurfaceLifecycleControl.java` is a
+headed control that drives the composed Kernel the way the TAKX 5.7 client
+does, with a `GLJPanel` or a `GLCanvas`, through two GL context re-creations.
+It needs the composed Kernel JAR, its dependency JARs with the JOGL native
+JARs beside them, a display and a GL implementation, and it is not part of any
+automated run. The first section of [QUALIFICATION.md](QUALIFICATION.md) says
+what was run with the current patch and that all older evidence there belongs
+to earlier patches.
+
+## Changing the Context patch
+
+There is no generator in this directory. A change is made to the final Java
+or native image of a file, and then:
+
+1. Replace that file's section of `render-context-control.patch` with the
+   `git diff` (three context lines) from the locked image of the stage before
+   `context` to the new image. Keep every other byte, including the CRLF lines.
+2. Set the new image's SHA-256 in `inputs.lock.json` (`stages.context` and
+   `stages.client_jni`) and in `source-scope.json` (`postimage_sha256`), then
+   `patch_sha256` and `context_patch_sha256`, then `context_scope_sha256`.
+   Compute them with `prepare.py`'s `digest(regular(path))`, never by hand.
+3. If `tests/BindingStateTest.java` changed, update `binding_state_control`
+   and the assertion count in `prepare.py`, `run_hosted_controls.py` and its
+   test.
+4. Run `prepare.py --phase prepare`. It applies the patch with fuzz 0 and
+   compares all 61 images of every stage, so a wrong section or digest fails.
+5. Rerun the consumers that pin Java outputs (`client_java.py --phase java`,
+   the hosted controls) and record in QUALIFICATION.md what was and was not
+   rerun.
+
 Default continuous integration (CI) runs only these small offline guards; it does not build third-party
 sources, acquire dependencies, start Java or open a display:
 
