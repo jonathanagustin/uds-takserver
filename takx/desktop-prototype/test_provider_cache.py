@@ -2710,6 +2710,317 @@ class ExitCodes(ServiceCase):
         self.assertEqual(sorted(os.listdir(self.root)), ['P', 'status'])
 
 
+class Details(ServiceCase):
+    """Smaller promises: messages, formats and defences that are hard to reach."""
+
+    def test_status_and_metadata_are_written_in_the_readable_form(self):
+        self.make('base')
+        original = json.loads((self.root / 'status/base.json').read_text())
+        ref = self.service.push('base')
+        labels, content = self.bundle('base')
+        self.assertEqual(content['meta.json'].decode(),
+                         json.dumps(json.loads(content['meta.json']), sort_keys=True, indent=1) + '\n')
+        self.assertEqual(content['files.json'].decode(), json.dumps(
+            json.loads(content['files.json']), sort_keys=True, separators=(',', ':')) + '\n')
+        self.set_aside('base')
+        self.service.restore('base')
+        self.assertEqual((self.root / 'status/base.json').read_text(), json.dumps(
+            dict(original, restored_from=ref, cache_key=self.service.key('base')), indent=1) + '\n')
+
+    def test_archive_that_unpacks_to_something_else_is_refused(self):
+        self.make('base')
+        self.service.push('base')
+        self.set_aside('base')
+        unpack = self.service.tree.unpack
+
+        def more(path, target):
+            unpack(path, target)
+            (Path(target) / 'beside').mkdir()
+        self.service.tree.unpack = more
+        self.assertEqual(self.refused(), 'base: archive unpacked to something else than base/')
+        self.service.tree.unpack = lambda path, target: None
+        self.assertEqual(self.refused(), 'base: archive unpacked to something else than base/')
+
+    def test_unpack_without_extraction_filters_keeps_numeric_owners(self):
+        calls = []
+
+        def extractall(archive, path, **options):
+            calls.append(options)
+            if 'filter' in options:
+                raise TypeError("extractall() got an unexpected keyword argument 'filter'")
+        tar = Path(self.tmp.name) / 'x.tar'
+        with tarfile.open(tar, 'w'):
+            pass
+        with mock.patch.object(tarfile.TarFile, 'extractall', extractall):
+            PC.WorkTree.unpack(tar, self.tmp.name)
+        self.assertEqual(calls, [{'numeric_owner': True, 'filter': 'fully_trusted'}, {'numeric_owner': True}])
+
+    def test_unpack_reads_only_plain_tar(self):
+        tar = Path(self.tmp.name) / 'x.tar.gz'
+        with tarfile.open(tar, 'w:gz') as archive:
+            archive.addfile(tarfile.TarInfo('p'))
+        for reader in (lambda: PC.WorkTree.unpack(tar, self.tmp.name), lambda: PC.WorkTree.tar_members(tar),
+                       lambda: PC.WorkTree.tar_entries(tar, 'p')):
+            with self.assertRaises(tarfile.ReadError):
+                reader()
+
+    def test_refusal_messages_name_what_is_wrong(self):
+        records = [{'kind': 'odd', 'name': 'nodigest', 'verified': True, 'expected_sha256': None},
+                   {'kind': 'bad', 'name': 'unchecked', 'verified': 'yes', 'expected_sha256': '1' * 64}]
+        for selector, message in (({'kind': 'odd'}, '^fetched input nodigest has no digest$'),
+                                  ({'kind': 'bad'}, '^fetched input unchecked is not verified$'),
+                                  ({'kind': 'none'}, '^no fetched input matches kind=none$'),
+                                  ({'path': 'x'}, '^no fetched input matches path=x$')):
+            with self.subTest(selector=selector), self.assertRaisesRegex(PC.CacheError, message):
+                PC.select_fetched(records, [selector], '/root')
+        for name, key, message in (('p', 'short', "^cannot name an image for 'p'$"),
+                                   ('P', 'a' * 64, "^cannot name an image for 'P'$")):
+            with self.assertRaisesRegex(PC.CacheError, message):
+                PC.image_ref('reg', name, key)
+        with self.assertRaisesRegex(PC.CacheError, '^unknown provider ghost$'):
+            self.service.push('ghost')
+        with self.assertRaisesRegex(PC.CacheError, '^unknown provider ghost$'):
+            self.service.restore('ghost')
+        with self.assertRaisesRegex(PC.CacheError, '^unknown provider ghost$'):
+            self.service.key('ghost')
+        tree = PC.WorkTree(self.root, self.repo)
+        os.mkfifo(self.repo / 'takx/pipe')
+        with self.assertRaisesRegex(PC.CacheError, '^recipe path %s is not a regular file$'
+                                    % re.escape(str(self.repo / 'takx/pipe'))):
+            tree.recipe_files(['takx/pip?'], [])
+        with self.assertRaisesRegex(PC.CacheError, r'^lock takx/none\.lock cannot be read: .*No such file'):
+            tree.locks(['takx/none.lock'])
+        os.unlink(self.root / 'status/images.json')
+        with self.assertRaisesRegex(PC.CacheError, r'^status/images\.json cannot be read: .*No such file'):
+            tree.recorded_toolchain()
+
+    def test_key_document_refusals_name_the_provider_and_the_input(self):
+        for field in ('toolchain', 'root', 'repo'):
+            for empty in ('', None):
+                with self.subTest(field=field), self.assertRaisesRegex(PC.CacheError, '^base: no %s identity$' % field):
+                    PC.key_document(manifest(), 'base', facts(**{field: empty}), {})
+            missing = facts()
+            del missing[field]
+            with self.assertRaisesRegex(PC.CacheError, '^base: no %s identity$' % field):
+                PC.key_document(manifest(), 'base', missing, {})
+        with self.assertRaisesRegex(PC.CacheError, '^base: no recipe files$'):
+            PC.key_document(manifest(), 'base', facts(recipe_files={}), {})
+        with self.assertRaisesRegex(PC.CacheError, '^top: prerequisite keys incomplete$'):
+            PC.key_document(manifest(), 'top', facts(), {})
+        with self.assertRaisesRegex(PC.CacheError, '^top: bad key for prerequisite base$'):
+            PC.key_document(manifest(), 'top', facts(), {'base': 'x'})
+
+    def test_member_checks_at_the_edges(self):
+        top = [('p', 'dir', '')]
+        self.assertEqual(PC.check_members('p', top + [('p/d/', 'dir', ''), ('p/d/f', 'file', '')]), 3)
+        self.assertEqual(PC.check_members('p', [('p/', 'dir', '')]), 1)
+        self.assertEqual(PC.check_members('p', iter(top)), 1)
+        cases = (
+            ([('a/x', 'file', '')], "^archive member is outside p/: 'a/x'$"),
+            ([('q/x', 'file', '')], "^archive member is outside p/: 'q/x'$"),
+            ([('a', 'dir', '')], "^archive member is outside p/: 'a'$"),
+            ([('', 'file', '')], "^archive member is not a plain relative path: ''$"),
+            ([('p/x\0y', 'file', '')], '^archive member is not a plain relative path'),
+            ([('p/d', 'dir', ''), ('p/d/l', 'symlink', '../a/..')], r"^symlink 'p/d/l' has \"..\" after a name"),
+            ([('p/l', 'symlink', 'a/..')], r"^symlink 'p/l' has \"..\" after a name in its target$"),
+            ([('p/l', 'symlink', 'a\0b')], "^symlink 'p/l' has an absolute or empty target$"),
+            ([('p/l', 'symlink', '../p2')], "^symlink 'p/l' leaves the provider directory$"),
+            ([('p/l', 'symlink', '../pp/x')], "^symlink 'p/l' leaves the provider directory$"),
+            ([('p/f', 'file', ''), ('p/h', 'hardlink', '')], '^archive hard link target is not a plain relative path'),
+            ([('p/f', 'file', ''), ('p/h', 'hardlink', 'q/f')], "^archive hard link target is outside p/: 'q/f'$"),
+            ([('p/h', 'hardlink', 'p')], "^hard link 'p/h' does not name an earlier file$"),
+            ([('p/l', 'symlink', 'x'), ('p/h', 'hardlink', 'p/l')], "^hard link 'p/h' does not name an earlier file$"),
+            ([('p/f', 'file', ''), ('p/h', 'hardlink', 'p/f'), ('p/h/x', 'file', '')],
+             "^archive member 'p/h/x' is below a link or file$"),
+            ([('p/a', 'dir', ''), ('p/a/l', 'symlink', '.'), ('p/a/l/b/c', 'file', '')],
+             "^archive member 'p/a/l/b/c' is below a link or file$"),
+            ([('p/f', 'file', ''), ('p/f', 'dir', '')], "^archive names 'p/f' twice$"),
+            ([('p/d', 'dir', ''), ('p/d/', 'dir', '')], "^archive names 'p/d' twice$"),
+            ([('p/x', 'weird', '')], "^archive member 'p/x' is a device or other special file$"),
+        )
+        for extra, message in cases:
+            with self.subTest(extra=extra), self.assertRaisesRegex(PC.CacheError, message):
+                PC.check_members('p', top + extra)
+        for members, message in (([], '^archive has no top-level p directory$'),
+                                 ([('p/f', 'file', '')], '^archive has no top-level p directory$'),
+                                 ([('p', 'file', '')], '^archive top-level entry is not a directory$'),
+                                 ([('p', 'symlink', 'x')], '^archive top-level entry is not a directory$'),
+                                 ([('p', 'other', '')], '^archive top-level entry is not a directory$')):
+            with self.subTest(members=members), self.assertRaisesRegex(PC.CacheError, message):
+                PC.check_members('p', members)
+        # A member whose name merely starts like the provider is outside it.
+        with self.assertRaisesRegex(PC.CacheError, "outside base/: 'base-2/x'"):
+            PC.check_members('base', [('base', 'dir', ''), ('base-2/x', 'file', '')])
+
+
+class DockerDetails(unittest.TestCase):
+    """More of DockerRegistry against a stub docker; no daemon involved."""
+
+    STUB = r"""#!/bin/bash
+dir="$(dirname "$0")"
+printf '%s\n' "$*" >> "$dir/calls"
+if [[ -f "$dir/script-$1" ]]; then source "$dir/script-$1"; fi
+exit 0
+"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        (self.dir / 'docker').write_text(self.STUB)
+        os.chmod(self.dir / 'docker', 0o755)
+        self.registry = PC.DockerRegistry(30, str(self.dir / 'docker'))
+        self.context = self.dir / 'context'
+        self.context.mkdir()
+        (self.context / 'p.tar').write_bytes(b'archive')
+
+    def script(self, command, text):
+        (self.dir / ('script-' + command)).write_text(text + '\n')
+
+    def calls(self):
+        path = self.dir / 'calls'
+        return path.read_text().splitlines() if path.exists() else []
+
+    def test_defaults(self):
+        registry = PC.DockerRegistry()
+        self.assertEqual((registry.timeout, registry.docker), (3600, 'docker'))
+
+    def test_commands_get_no_input_and_their_output_is_captured(self):
+        self.script('image', 'if read -r -t 1 line; then echo "got input"; else echo "sha256:abc  "; fi; echo noise >&2')
+        (self.dir / 'input').write_text('a line the command must not get\n')
+        saved = os.dup(0)
+        try:
+            with open(self.dir / 'input') as stream:
+                os.dup2(stream.fileno(), 0)
+            self.assertEqual(self.registry.image_id('some:image'), 'sha256:abc')
+        finally:
+            os.dup2(saved, 0)
+            os.close(saved)
+        self.assertEqual(self.calls(), ['image inspect --format {{.Id}} some:image'])
+
+    def test_failure_reports_the_command_and_the_end_of_its_errors(self):
+        text = ''.join('%04d ' % number for number in range(200))
+        self.script('pull', 'printf "%%s\\n  " "%s" >&2; exit 7' % text)
+        with self.assertRaises(PC.CacheError) as caught:
+            self.registry.fetch('reg/p:tag', self.dir, ['p.tar'])
+        self.assertEqual(str(caught.exception), 'docker pull failed: ' + text.strip()[-400:])
+        self.assertEqual(len(text.strip()[-400:]), 400)
+        self.script('import', 'cat > /dev/null; printf "%%s\\n  " "%s" >&2; exit 7' % text)
+        with self.assertRaises(PC.CacheError) as caught:
+            self.registry.publish('reg/p:tag', self.context, ['p.tar'], {})
+        self.assertEqual(str(caught.exception), 'docker import failed (7): ' + text.strip()[-400:])
+        self.script('pull', 'printf "\\377\\376 bad bytes" >&2; exit 1')
+        with self.assertRaisesRegex(PC.CacheError, '^docker pull failed: .* bad bytes$'):
+            self.registry.fetch('reg/p:tag', self.dir, ['p.tar'])
+
+    def test_missing_docker_is_an_error_of_the_command(self):
+        missing = PC.DockerRegistry(30, str(self.dir / 'missing'))
+        with self.assertRaisesRegex(PC.CacheError, r'^docker manifest: \[Errno 2\]'):
+            missing.probe('reg/p:tag')
+        with self.assertRaisesRegex(PC.CacheError, r'^docker import: \[Errno 2\]'):
+            missing.publish('reg/p:tag', self.context, ['p.tar'], {})
+        with self.assertRaisesRegex(PC.CacheError, r'^docker pull: \[Errno 2\]'):
+            missing.fetch('reg/p:tag', self.dir, ['p.tar'])
+        with self.assertRaisesRegex(PC.CacheError, r'^docker image: \[Errno 2\]'):
+            missing.image_id('some:image')
+
+    def test_command_that_takes_too_long_is_an_error(self):
+        slow = PC.DockerRegistry(0.3, str(self.dir / 'docker'))
+        self.script('manifest', 'exec sleep 20')
+        with self.assertRaisesRegex(PC.CacheError, '^docker manifest: .*timed out after 0.3 seconds'):
+            slow.probe('reg/p:tag')
+        self.script('import', 'cat > /dev/null; exec sleep 20')
+        with self.assertRaisesRegex(PC.CacheError, r'^docker import failed \(interrupted: .*timed out after 0.3 seconds'):
+            slow.publish('reg/p:tag', self.context, ['p.tar'], {})
+        self.assertEqual([call.split()[0] for call in self.calls()], ['manifest', 'import'])
+
+    def test_import_that_stops_reading_is_an_error(self):
+        (self.context / 'p.tar').write_bytes(b'\0' * (4 << 20))
+        self.script('import', 'echo "no space left" >&2; exit 1')
+        with self.assertRaisesRegex(PC.CacheError, r'^docker import failed \(.*\): no space left$'):
+            self.registry.publish('reg/p:tag', self.context, ['p.tar'], {})
+        self.assertEqual([call.split()[0] for call in self.calls()], ['import'])
+
+    def test_probe_reads_both_streams_in_any_case(self):
+        ref = 'ghcr.io/owner/cache/p:tag'
+        for text, expected in (('echo "MANIFEST UNKNOWN" >&2', 'absent'), ('echo "Manifest Unknown"', 'absent'),
+                               ('echo "No such manifest: x"', 'absent'), ('echo "NAME UNKNOWN: repo" >&2', 'absent'),
+                               ('echo "name unknown"', 'absent'),
+                               ('echo "UNAUTHORIZED" >&2', 'unauthorized'), ('echo "Unauthorized"', 'unauthorized'),
+                               ('echo "DENIED: requested access" >&2', 'unauthorized'), ('echo "denied"', 'unauthorized'),
+                               ('echo "Authentication Required" >&2', 'unauthorized'),
+                               ('echo "authentication required"', 'unauthorized'),
+                               ('echo "No Basic Auth Credentials" >&2', 'unauthorized'),
+                               ('echo "no basic auth credentials"', 'unauthorized'),
+                               ('printf "\\377 manifest unknown" >&2', 'absent'),
+                               ('printf "\\377 denied"', 'unauthorized'),
+                               ('echo "i/o timeout" >&2', 'error'), ('echo "unknown"', 'error'), ('true', 'error')):
+            self.script('manifest', text + '; exit 1')
+            with self.subTest(text=text):
+                self.assertEqual(self.registry.probe(ref), expected)
+        # A tag that exists is present whatever the command prints.
+        self.script('manifest', 'echo "manifest unknown"; echo denied >&2')
+        self.assertEqual(self.registry.probe(ref), 'present')
+        # 'not found' answers that name the manifest win over an authentication hint.
+        self.script('manifest', 'echo "manifest unknown: denied" >&2; exit 1')
+        self.assertEqual(self.registry.probe(ref), 'absent')
+
+    def test_loopback_detection_looks_at_the_host_only(self):
+        for ref, insecure in (('localhost/p:t', True), ('localhost:5000/a/p:t', True), ('127.0.0.1/p:t', True),
+                              ('127.0.0.1:5000/p:t', True), ('[::1]:5000/p:t', True), ('[::1]/p:t', False),
+                              ('ghcr.io/localhost/p:t', False), ('ghcr.io/127.0.0.1:5000/p:t', False),
+                              ('localhost.evil.example/p:t', False), ('evil.example:localhost/p:t', False),
+                              ('127.0.0.10:5000/p:t', False), ('xlocalhost:5000/p:t', False)):
+            self.registry.probe(ref)
+            with self.subTest(ref=ref):
+                self.assertEqual(self.calls()[-1], 'manifest inspect %s%s' % ('--insecure ' if insecure else '', ref))
+
+    def test_fetch_reads_the_labels_of_the_image(self):
+        for text, expected in (('echo null', {}), ('true', {}), ('echo "{}"', {}),
+                               ("""echo '{"a":"1","b":"two words"}'""", {'a': '1', 'b': 'two words'})):
+            self.script('image', text)
+            with self.subTest(text=text):
+                self.assertEqual(self.registry.fetch('reg/p:tag', self.dir, []), expected)
+        self.script('create', 'echo "  abc123  "')
+        self.script('cp', 'echo "$2 $3" >> "$dir/copies"')
+        self.registry.fetch('reg/p:tag', self.dir / 'target', ['p.tar', 'meta.json'])
+        self.assertEqual((self.dir / 'copies').read_text().splitlines(),
+                         ['abc123:/p.tar %s/target/p.tar' % self.dir, 'abc123:/meta.json %s/target/meta.json' % self.dir])
+        self.assertEqual(self.calls()[-2:], ['rm -f abc123', 'rmi reg/p:tag'])
+
+    def test_fetch_cleans_up_whatever_fails(self):
+        for failing, expected in (('image', ['pull', 'image', 'rmi']), ('create', ['pull', 'image', 'create', 'rmi']),
+                                  ('cp', ['pull', 'image', 'create', 'cp', 'rm', 'rmi'])):
+            self.script(failing, 'echo broken >&2; exit 1')
+            (self.dir / 'calls').unlink(missing_ok=True)
+            with self.subTest(failing=failing), self.assertRaisesRegex(PC.CacheError, 'docker %s failed: broken' % failing):
+                self.registry.fetch('reg/p:tag', self.dir, ['p.tar'])
+            self.assertEqual([call.split()[0] for call in self.calls()], expected)
+            (self.dir / ('script-' + failing)).unlink()
+        # Cleaning up may fail; the result still counts.
+        self.script('rm', 'exit 1')
+        self.script('rmi', 'exit 1')
+        self.assertEqual(self.registry.fetch('reg/p:tag', self.dir, []), {})
+        self.registry.publish('reg/p:tag', self.context, ['p.tar'], {})
+
+    def test_publish_writes_one_flat_layer_with_quoted_labels(self):
+        (self.context / 'sub').mkdir()
+        (self.context / 'sub/inner').write_text('not listed')
+        (self.context / 'meta.json').write_text('{}')
+        self.script('import', 'cat > "$dir/layer.tar"')
+        self.registry.publish('reg/p:tag', self.context, ['meta.json', 'p.tar'],
+                              {'z.label': 'a "quoted" value', 'a.label': 'new\nline'})
+        self.assertEqual(self.calls()[0], 'import --change LABEL "a.label"="new\\nline" '
+                                          '--change LABEL "z.label"="a \\"quoted\\" value" - reg/p:tag')
+        with tarfile.open(self.dir / 'layer.tar') as layer:
+            self.assertEqual([(member.name, member.isreg(), member.size) for member in layer],
+                             [('meta.json', True, 2), ('p.tar', True, 7)])
+        # A directory is stored as itself, never with what is below it.
+        self.registry.publish('reg/p:tag', self.context, ['sub'], {})
+        with tarfile.open(self.dir / 'layer.tar') as layer:
+            self.assertEqual(layer.getnames(), ['sub'])
+
+
 RUN_STUB = r"""#!/bin/bash
 # Stands in for run-in-toolchain.sh: records the call, "builds" by creating the outputs.
 printf '%s\n' "$*" >> "$STUB_LOG.run"

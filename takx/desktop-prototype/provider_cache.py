@@ -752,6 +752,10 @@ class DockerRegistry:
             except (OSError, subprocess.TimeoutExpired) as error:
                 process.kill()
                 process.wait()
+                try:
+                    process.stdin.close()
+                except OSError:
+                    pass  # what was still buffered for a command that is gone
                 code = 'interrupted: %s' % error
             if code != 0:
                 errors.seek(0)
