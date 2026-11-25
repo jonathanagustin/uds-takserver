@@ -147,6 +147,15 @@ class Pointers(Fixture):
             with self.subTest(path=path), self.assertRaisesRegex(ValueError, "Not the locked LFS pointer"):
                 upstream_inputs.verify_pointers(self.source, self.lock, [(path, sha256(data), len(data))])
 
+    def test_executable_pointer_passes(self):
+        # Upstream commits both tinygltf archive pointers with mode 100755.
+        os.chmod(self.source / "depends/other.zip", 0o755)
+        self.git("-c", "user.name=Fixture", "-c", "user.email=0+fixture@users.noreply.github.com",
+                 "-c", "core.hooksPath=/dev/null", "commit", "-qam", "executable pointer")
+        lock = dict(self.lock, revision=self.git("rev-parse", "HEAD").strip())
+        self.assertRegex(self.git("ls-tree", "HEAD", "--", "depends/other.zip"), r"^100755 blob ")
+        upstream_inputs.verify_pointers(self.source, lock, upstream_inputs.entries(lock, "both"))
+
     def test_checkout_without_the_pinned_revision_is_refused(self):
         lock = dict(self.lock, revision="0" * 40)
         with self.assertRaisesRegex(ValueError, "is not readable"):
@@ -348,6 +357,29 @@ class Materialize(Fixture):
         self.assertFalse(self.final.is_symlink())
         self.assertEqual((PAYLOAD, PAYLOAD), (self.final.read_bytes(), outside.read_bytes()))
 
+    def test_dangling_symlink_store_entry_is_never_taken_as_stored(self):
+        self.store.mkdir()
+        self.final.symlink_to(self.root / "absent")
+        with self.assertRaisesRegex(ValueError, "not stored and --offline"):
+            self.run_set(Scripted(), offline=True)
+        self.final.symlink_to(self.root / "absent")
+        self.assertEqual([("depends/payload.tar.gz", self.final, "fetched")], self.run_set(Scripted(PAYLOAD)))
+        self.assertEqual((False, PAYLOAD, False),
+                         (self.final.is_symlink(), self.final.read_bytes(), (self.root / "absent").exists()))
+
+    def test_download_is_staged_inside_the_store_until_verified(self):
+        # The rename that publishes a payload must stay within one directory.
+        staged = []
+
+        def opener(url, timeout):
+            staged.append(self.stored())
+            return Response(PAYLOAD)
+
+        self.run_set(opener)
+        self.assertEqual((1, 1), (len(staged), len(staged[0])))
+        self.assertRegex(staged[0][0], r"^\.partial-")
+        self.assertEqual([self.final.name], self.stored())
+
     def test_symlinked_store_is_refused(self):
         (self.root / "elsewhere").mkdir()
         self.store.symlink_to(self.root / "elsewhere")
@@ -450,6 +482,31 @@ class RepositoryPins(unittest.TestCase):
         fetched = re.findall(r"upstream_inputs\.py materialize --set ([a-z0-9-]+) \\\n +--store \S+ --source ",
                              self.workflow)
         self.assertEqual((keyed, set(self.lock["sets"])), (fetched, set(keyed)))
+
+    def test_each_fetch_restores_and_saves_its_own_store_under_the_resolved_key(self):
+        jobs = [job for job in re.split(r"(?m)^  (?=[a-z0-9-]+:$)", self.workflow)
+                if "upstream_inputs.py materialize" in job]
+        self.assertEqual(self.workflow.count("upstream_inputs.py materialize"), len(jobs))
+        for job in jobs:
+            with self.subTest(job=job.split(":", 1)[0]):
+                steps = ("\n" + job).split("\n      - ")[1:]
+                fetch = [index for index, step in enumerate(steps) if "upstream_inputs.py materialize" in step]
+                store = re.findall(r'materialize --set \S+ \\\n +--store "\$\{RUNNER_TEMP\}/([a-z-]+)" --source ', job)
+                caches = [(index, dict(re.findall(r"(?m)^ {8}([a-z-]+): (.+)$", "        " + step)),
+                           dict(re.findall(r"(?m)^ {10}([a-z-]+): (.+)$", step)))
+                          for index, step in enumerate(steps) if "actions/cache" in step]
+                self.assertEqual((1, 1, 2), (len(fetch), len(store), len(caches)))
+                (before, restore, restored), (after, save, saved) = caches
+                self.assertTrue(before < fetch[0] < after)
+                # No restore-keys: only the exact revision and file list may hit.
+                wanted = {"path": "${{ runner.temp }}/" + store[0], "key": "${{ steps.upstream-lfs.outputs.key }}"}
+                self.assertEqual((wanted, wanted), (restored, saved))
+                self.assertRegex(restore["uses"], r"^actions/cache/restore@[0-9a-f]{40} # v\S+$")
+                self.assertEqual(restore["uses"].replace("/restore@", "/save@"), save["uses"])
+                self.assertEqual(("upstream-lfs-cache", "true", "true"),
+                                 (restore.get("id"), restore.get("continue-on-error"), save.get("continue-on-error")))
+                self.assertEqual("steps.upstream-lfs-cache.outputs.cache-hit != 'true'", save.get("if"))
+                self.assertIn("\n        id: upstream-lfs\n", "".join(steps[:before]))
 
 
 if __name__ == "__main__":
