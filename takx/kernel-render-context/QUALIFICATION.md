@@ -58,13 +58,29 @@ images, none of it a renderer, SDK or client qualification:
   context, exactly one size listener on the client component while started
   and none after stop, rejection of a rebind without a current GL context and
   of a rebind to another surface object.
+- `run_hosted_controls.py --phase qualify`, the runner of the hosted
+  `qualify-render-context` job, passes when run locally in the toolchain
+  image (g++ 14.2.0, Temurin 17): live prepare, the 106 assertions compiled
+  from the prepared source without JOGL, and the RetirableWorker control. It
+  has not run in CI with this patch.
+- The desktop-prototype `ComposedControls` JNI control passes under
+  `-Xcheck:jni` with the 32 recompiled classes ahead of the packaged Kernel
+  JAR, and the assembled TAKX 5.7 prototype boots and draws its globe with
+  those classes and without the former prototype overlay patch for the
+  surface. A screenshot check of one boot is not a client qualification.
+
+`client_java.py` now expects 2,703 classes instead of 2,702. Its `--phase java`
+was not run here, because the reviewed native receipt and compilation database
+it requires are not available on this machine; the number comes from the
+equivalent whole-Java compile of the same 1,239 sources described above.
 
 Not run with the current patch: the native build (the previously built
 libraries were reused because the JNI headers are identical, and the
 desktop-prototype package step refuses to label them as built from this
-composition), the hosted CI controls, `ContextRecreationProbe` and every other
-headed or JNI probe in `tests/`, any hardware GPU, Windows or macOS. GPU
-context destruction and re-creation therefore remains unqualified.
+composition), `client_java.py --phase java`, `run_hosted_jni_controls.py`,
+any CI job, `ContextRecreationProbe` and every other headed or JNI probe in
+`tests/`, any hardware GPU, Windows or macOS. GPU context destruction and
+re-creation therefore remains unqualified.
 
 ## Queue-submission rejection candidate
 
