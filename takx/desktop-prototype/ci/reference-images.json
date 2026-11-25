@@ -1,0 +1,23 @@
+{
+ "copyright": "# Copyright 2026 uds-takserver authors",
+ "license": "# SPDX-License-Identifier: GPL-3.0-only",
+ "description": [
+  "Images that were built by hand and whose identity existing provider cache keys",
+  "were derived from. ci/images.sh pulls them by digest when it can, so that an",
+  "architecture restores those providers instead of rebuilding them; when the",
+  "pull is refused it builds the images from ../Dockerfile and the keys are new.",
+  "A digest here is the identity of one existing image, never a value to edit:",
+  "a rebuilt image gets its own tag and digest under the CI namespace."
+ ],
+ "schema": 1,
+ "images": {
+  "amd64": {
+   "toolchain": "ghcr.io/jonathanagustin/uds-takserver/takx-desktop-proto@sha256:2ad98b1fa1d85fed875a0819db899ed5c6f9c6e8199700fb51b27c8d7240a1f0",
+   "runtime": "ghcr.io/jonathanagustin/uds-takserver/takx-desktop-proto@sha256:bca15e92663b6ef80714fb0d342890dd4847994bd83c01460e78b823678e2db6",
+   "toolchain_id": "sha256:2ad98b1fa1d85fed875a0819db899ed5c6f9c6e8199700fb51b27c8d7240a1f0",
+   "provider_cache": "ghcr.io/jonathanagustin/uds-takserver/takx-desktop-proto-cache",
+   "keys_assume": {"work_root": "/var/lib/takx-proto", "repository": "/home/user/uds-takserver"},
+   "source": "built in the development sandbox on 2026-11-25 from ../Dockerfile as it was before the multi-architecture change (tags toolchain-wip and runtime-wip); the ids are those of status/images.json there and of the header of ../cache-index.tsv. Whether GITHUB_TOKEN may pull them was not verified from the sandbox."
+  }
+ }
+}

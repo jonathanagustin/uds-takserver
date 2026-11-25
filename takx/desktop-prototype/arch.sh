@@ -97,6 +97,7 @@ takx_arch_json() { # [arch] -> {"field": "name", ...}
 # already runs from the patched tree. Otherwise it builds or re-verifies that
 # tree and replaces the process with the same script inside it, so every
 # recipe path, the provider cache keys and the mounts refer to the patched copy.
+# File descriptor 8 stays open on the tree's lock file for the life of the stage.
 takx_arch_enter() {
   local script="$1"; shift
   local arch here repo root tree relative
@@ -112,6 +113,9 @@ takx_arch_enter() {
   relative="${script#"${repo}"/}"
   [[ "${relative}" != "${script}" && -x "${tree}/${relative}" ]] || {
     echo "arch.sh: ${script} has no counterpart in ${tree}" >&2; exit 2; }
+  # A shared lock, held by this process and whatever it starts, keeps
+  # arch_tree.py from replacing the tree under a running stage.
+  if exec 8<"${root}/overrides/${arch}/.lock"; then flock -s 8 || true; fi
   exec "${tree}/${relative}" "$@"
 }
 

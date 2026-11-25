@@ -12,6 +12,7 @@ import hashlib
 import os
 from pathlib import Path
 import pty
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -21,6 +22,8 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 RUN = HERE / 'run-in-toolchain.sh'
 FETCH = HERE / 'fetch.sh'
+ARCH = HERE / 'arch.sh'
+ARCH_TREE = HERE / 'arch_tree.py'
 TIMEOUT = float(os.environ.get('TAKX_TEST_TIMEOUT', '60'))
 TOOLCHAIN = 'takx-desktop-proto:toolchain'
 RUNTIME = 'takx-desktop-proto:runtime'
@@ -114,6 +117,9 @@ class ScriptCase(unittest.TestCase):
         self.cwd.mkdir()
         self.fake('docker')
         self.fake('python3')
+        # The machine is x86_64 in every test unless one says otherwise, so the
+        # suite gives the same answers on an arm64 host.
+        self.fake('uname', 'echo "${FAKE_UNAME:-x86_64}"\n')
         self.store = self.root / 'ca' / 'java-cacerts.p12'
 
     # -- plumbing ---------------------------------------------------------
@@ -410,7 +416,7 @@ class RunInToolchain(ScriptCase):
             self.assertEqual(lines[0], 'Run one command in the desktop-prototype toolchain '
                              '(or runtime) image with the')
             self.assertEqual(lines[-1], 'that compare tool output.')
-            self.assertEqual(len(lines), 41)
+            self.assertEqual(len(lines), 46)
             self.assertIn('  run-in-toolchain.sh [options] -- command [args...]', lines)
             self.assertIn('  TAKX_PROTO_CA    CA bundle to mount, default '
                           '/root/.ccr/ca-bundle.crt when', lines)
@@ -419,7 +425,7 @@ class RunInToolchain(ScriptCase):
             for word in ('--runtime', '--image IMAGE', '--name NAME', '-d, --detach', '--log FILE',
                          '--cpus N', '--memory SIZE', '-e, --env KEY=VALUE', '-w, --workdir DIR',
                          '--mount SPEC', '--docker-arg ARG', '--java-truststore',
-                         'TAKX_PROTO_ROOT'):
+                         'TAKX_PROTO_ROOT', 'TAKX_PROTO_ARCH'):
                 self.assertIn(word, result.stdout)
             self.assertEqual(self.count(), 0)
             self.assertFalse(self.root.exists())
@@ -435,7 +441,72 @@ class RunInToolchain(ScriptCase):
                 break
             header.append(line[2:] if line.startswith('# ') else line[1:])
         self.assertEqual(self.run_tc('--help').stdout.splitlines(), header)
-        self.assertEqual(len(header), 41)
+        self.assertEqual(len(header), 46)
+
+    # -- architecture -------------------------------------------------------
+    def test_without_an_architecture_setting_docker_gets_no_platform(self):
+        for extra in ({}, {'TAKX_PROTO_ARCH': ''}, {'FAKE_UNAME': 'aarch64'}):
+            with self.subTest(extra=extra):
+                result = self.run_tc('--', 'x', **extra)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.calls()[-1], self.expect(['x']))
+                self.assertNotIn('--platform', self.calls()[-1])
+        self.assertEqual(self.count('uname'), 0, 'the wrapper itself never asks for the machine')
+
+    def test_architecture_setting_selects_the_platform_and_reaches_the_container(self):
+        for value, arch in (('arm64', 'arm64'), ('aarch64', 'arm64'), ('amd64', 'amd64'), ('x86_64', 'amd64')):
+            with self.subTest(value=value):
+                result = self.run_tc('--', 'x', TAKX_PROTO_ARCH=value)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                base = self.base()
+                split = base.index('HOME=/tmp') + 1
+                self.assertEqual(self.calls()[-1], ['run'] + base[:split] + [
+                    '--platform', 'linux/' + arch, '-e', 'TAKX_PROTO_ARCH=' + arch] + base[split:] + [
+                    '-w', str(self.root), '--rm', TOOLCHAIN, 'x'])
+
+    def test_unknown_architecture_is_refused_before_docker(self):
+        result = self.run_tc('--', 'x', TAKX_PROTO_ARCH='riscv64')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unsupported architecture 'riscv64'", result.stderr)
+        self.assertEqual(self.count(), 0)
+
+    def tree(self, base_parts=('upstream', '.git')):
+        """A copy of the wrapper inside a directory marked as an architecture tree."""
+        tree, base = self.tmp / 'arch tree', self.tmp / 'base repo'
+        proto = tree / 'takx' / 'desktop-prototype'
+        proto.mkdir(parents=True)
+        for script in (RUN, ARCH):
+            shutil.copy2(script, proto / script.name)
+        for part in base_parts:
+            (base / part).mkdir(parents=True)
+        (tree / '.takx-arch-tree.base').write_text('%s\n' % base)
+        return tree, base, proto / RUN.name
+
+    def test_architecture_tree_gets_upstream_and_git_of_the_base_repository(self):
+        tree, base, script = self.tree()
+        result = self.script(script, '--', 'x')
+        self.assertEqual((result.returncode, result.stderr), (0, ''))
+        argv = self.calls()[0]
+        expected = ['run', '--init', '-v', '%s:%s:ro' % (tree, tree), '-v', '%s:%s' % (self.root, self.root),
+                    '-e', 'TAKX_PROTO_ROOT=%s' % self.root, '-e', 'TAKX_PROTO_REPO=%s' % tree, '-e', 'HOME=/tmp',
+                    '-v', '%s/upstream:%s/upstream:ro' % (base, tree), '-v', '%s/.git:%s/.git:ro' % (base, tree),
+                    '-e', 'TAKX_PROTO_BASE_REPO=%s' % base]
+        self.assertEqual(argv[:len(expected)], expected)
+        self.assertEqual(argv[-5:], ['-w', str(self.root), '--rm', TOOLCHAIN, 'x'])
+        # The tracked wrapper, outside a tree, mounts neither.
+        self.run_tc('--', 'x')
+        self.assertFalse([item for item in self.calls()[-1] if '/upstream:' in item or '/.git:' in item])
+
+    def test_architecture_tree_without_its_base_repository_is_refused(self):
+        for parts in ((), ('upstream',), ('.git',)):
+            with self.subTest(parts=parts):
+                shutil.rmtree(self.tmp / 'arch tree', ignore_errors=True)
+                shutil.rmtree(self.tmp / 'base repo', ignore_errors=True)
+                script = self.tree(parts)[2]
+                result = self.script(script, '--', 'x')
+                self.assertEqual(result.returncode, 2)
+                self.assertIn('has no upstream/ and .git/', result.stderr)
+                self.assertEqual(self.count(), 0)
 
     def test_work_root_that_cannot_be_created_aborts_before_docker(self):
         blocker = self.tmp / 'a file'
@@ -911,6 +982,71 @@ echo fetch-stdout; echo fetch-stderr >&2; exit "${FAKE_EXIT:-0}"
         self.assertIn('no CA bundle', result.stderr)
         inspect, run = self.calls()
         self.assertEqual(run, self.expect(self.python(), ca=None))
+
+    # -- architecture -------------------------------------------------------
+    def tree_stub(self):
+        """A stand-in for the patched tree: its fetch.sh records how it was called."""
+        tree = self.tmp / 'arch tree'
+        proto = tree / 'takx' / 'desktop-prototype'
+        proto.mkdir(parents=True)
+        stub = proto / 'fetch.sh'
+        stub.write_text('#!/bin/bash\nprintf "%s\\n" "$0" "$@" > "$FAKE_REC/tree-fetch"\n'
+                        'flock -n -x "$TAKX_PROTO_ROOT/overrides/arm64/.lock" true || echo locked >> "$FAKE_REC/tree-fetch"\n'
+                        'exit 7\n')
+        stub.chmod(0o755)
+        lock = self.root / 'overrides' / 'arm64' / '.lock'
+        lock.parent.mkdir(parents=True)
+        lock.write_text('')
+        self.hook('python3', 'echo "$FAKE_TREE"; exit "${FAKE_TREE_EXIT:-0}"\n')
+        return tree, stub
+
+    def test_amd64_never_asks_for_a_tree(self):
+        self.assertFalse(list((HERE / 'overrides').glob('amd64/*.patch')), 'amd64 has no override patches')
+        result = self.fetch()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.count('python3'), 0)
+        self.assertEqual(self.count('uname'), 1)
+        self.assertEqual(self.calls()[0], self.INSPECT)
+
+    def test_arm64_continues_from_the_patched_tree(self):
+        self.assertTrue(list((HERE / 'overrides').glob('arm64/*.patch')), 'arm64 has override patches')
+        for extra in ({'FAKE_UNAME': 'aarch64'}, {'TAKX_PROTO_ARCH': 'arm64'}):
+            with self.subTest(extra=extra):
+                shutil.rmtree(self.tmp / 'arch tree', ignore_errors=True)
+                shutil.rmtree(self.root, ignore_errors=True)
+                for stale in self.rec.glob('*.argv'):
+                    stale.unlink()
+                tree, stub = self.tree_stub()
+                arguments = ['--only', 'a b', '*']
+                result = self.fetch(*arguments, FAKE_TREE=tree, **extra)
+                self.assertEqual(result.returncode, 7, result.stderr)
+                self.assertEqual(self.calls('python3'), [['-I', '-B', str(ARCH_TREE), 'ensure', '--arch', 'arm64',
+                                                          '--root', str(self.root)]])
+                # The same script inside the tree got the same arguments, and
+                # holds the shared lock that keeps the tree from being replaced.
+                self.assertEqual((self.rec / 'tree-fetch').read_text().splitlines(),
+                                 [str(stub)] + arguments + ['locked'])
+                self.assertEqual(self.calls(), [], 'the tracked fetch.sh itself runs nothing on arm64')
+
+    def test_a_tree_that_cannot_be_prepared_stops_the_fetch(self):
+        tree, _ = self.tree_stub()
+        result = self.fetch(FAKE_UNAME='aarch64', FAKE_TREE=tree, FAKE_TREE_EXIT=2)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('the arm64 tree could not be prepared', result.stderr)
+        self.assertFalse((self.rec / 'tree-fetch').exists())
+        self.assertEqual(self.count(), 0)
+        # A path that does not hold this script is refused as well.
+        result = self.fetch(FAKE_UNAME='aarch64', FAKE_TREE=self.tmp / 'elsewhere')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('has no counterpart', result.stderr)
+        self.assertEqual(self.count(), 0)
+
+    def test_unknown_machine_is_refused(self):
+        result = self.fetch(FAKE_UNAME='riscv64')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unsupported architecture 'riscv64'", result.stderr)
+        self.assertEqual(self.count(), 0)
+        self.assertEqual(self.count('python3'), 0)
 
     def test_runs_from_any_directory(self):
         process = subprocess.run(['bash', 'fetch.sh', '--only', 'jars'], env=self.env(), cwd=HERE,

@@ -5,7 +5,9 @@
 # Run one command in the desktop-prototype toolchain (or runtime) image with the
 # standard mounts and environment used by every stage of the prototype:
 #
-#   * the repository, read-only, at the same absolute path as on the host;
+#   * the repository, read-only, at the same absolute path as on the host
+#     (from an architecture tree built by arch_tree.py: that tree, with the
+#     upstream/ and .git directories of the base repository mounted into it);
 #   * the persistent work root (default /var/lib/takx-proto) at the same path;
 #   * an optional CA bundle, read-only, at /ca.crt, exported through
 #     SSL_CERT_FILE, CURL_CA_BUNDLE, GIT_SSL_CAINFO, PIP_CERT and
@@ -36,6 +38,9 @@
 #   TAKX_PROTO_ROOT  work root, default /var/lib/takx-proto
 #   TAKX_PROTO_CA    CA bundle to mount, default /root/.ccr/ca-bundle.crt when
 #                    that file exists, otherwise none (image trust store)
+#   TAKX_PROTO_ARCH  amd64 or arm64 (see arch.sh). Unset: the host decides and
+#                    docker is called without --platform. Set: passed to docker
+#                    as --platform linux/<arch> and into the container
 #
 # Inside the container TAKX_PROTO_ROOT and TAKX_PROTO_REPO are set. When the
 # trust store exists, TAKX_JAVA_TRUSTSTORE names it; pass it to a JVM that must
@@ -75,7 +80,7 @@ while (($#)); do
     --docker-arg) extra+=("$2"); shift 2;;
     --java-truststore) truststore_only=1; shift;;
     --) shift; break;;
-    -h|--help) sed -n '5,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help) sed -n '5,50p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "run-in-toolchain.sh: unknown option '$1' (use -- before the command)" >&2; exit 2;;
   esac
 done
@@ -88,6 +93,22 @@ base=(--init
   -e "TAKX_PROTO_ROOT=$root"
   -e "TAKX_PROTO_REPO=$repo"
   -e HOME=/tmp)
+if [[ -f "${repo}/.takx-arch-tree.base" ]]; then
+  # Running from an architecture tree: it holds copies of takx/ and LICENSE
+  # only. The submodule checkout and the Git directory it points into stay in
+  # the base repository and are mounted where the stages expect them.
+  base_repo="$(<"${repo}/.takx-arch-tree.base")"
+  [[ -d "${base_repo}/upstream" && -d "${base_repo}/.git" ]] || {
+    echo "run-in-toolchain.sh: base repository '${base_repo}' of this architecture tree has no upstream/ and .git/" >&2; exit 2; }
+  base+=(-v "${base_repo}/upstream:${repo}/upstream:ro" -v "${base_repo}/.git:${repo}/.git:ro"
+    -e "TAKX_PROTO_BASE_REPO=${base_repo}")
+fi
+if [[ -n "${TAKX_PROTO_ARCH:-}" ]]; then
+  # shellcheck source=takx/desktop-prototype/arch.sh
+  . "${here}/arch.sh"
+  arch="$(takx_arch)" || exit 2
+  base+=(--platform "$(takx_arch_get docker "${arch}")" -e "TAKX_PROTO_ARCH=${arch}")
+fi
 if [[ -n "$ca" ]]; then
   [[ -s "$ca" ]] || { echo "run-in-toolchain.sh: CA bundle '$ca' is missing or empty" >&2; exit 2; }
   base+=(-v "$ca:/ca.crt:ro"

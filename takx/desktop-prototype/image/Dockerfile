@@ -84,6 +84,13 @@ RUN apt-get update \
  && mkdir -p /run/takx/session /run/takx/vnc /run/takx/identity /run/takx/secret /usr/share/takx-desktop \
  && for tool in nodejs node ffmpeg Xvfb gcc cc; do \
       if command -v "${tool}" >/dev/null; then echo "unexpected tool ${tool}"; exit 1; fi; done
+# The mount points carry the ownership and mode their volumes need: Docker
+# copies both to a new named volume on first use, and a Kubernetes emptyDir
+# with fsGroup 10001 ends up equivalent. The web user (10002) reaches the RFB
+# socket through the supplementary group 10001 and nothing else.
+RUN chown 10001:10001 /run/takx/session /run/takx/vnc /run/takx/identity \
+ && chmod 0750 /run/takx/session /run/takx/identity \
+ && chmod 2770 /run/takx/vnc
 COPY --from=jdk /tools /tools
 COPY --from=novnc /out/web-root /opt/takx-desktop/web-root
 COPY --from=novnc /out/doc/copyright /usr/share/doc/novnc/copyright
@@ -99,11 +106,16 @@ RUN dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\t${source
 
 FROM os AS base
 # The tree is copied byte for byte: no patchelf, no symlinks, no repacked JAR,
-# so manifest.json keeps describing exactly what is in the image.
-COPY --from=tree --chown=0:0 --chmod=a-w . /opt/takx
+# so manifest.json keeps describing exactly what is in the image. File modes
+# stay as assembled (0644/0755, owner root): the client runs as uid 10001 on
+# a read-only root and cannot change them. They must not be made read-only
+# for the owner: TAKX copies conf/Default*.xml into a new project together
+# with their mode, and a read-only copy ends in an "Access Denied" dialog
+# instead of the globe (seen with --chmod=a-w, evidence/try1).
+COPY --from=tree --chown=0:0 . /opt/takx
 COPY --chmod=0555 assemble/launch.sh /opt/takx-desktop/launch.sh
 COPY --chmod=0555 image/entrypoint.sh image/healthcheck.sh image/stage_identity.py \
-     image/verify_tree.py image/check_native_closure.py /opt/takx-desktop/
+     image/verify_tree.py image/check_native_closure.py image/elf_audit.sh /opt/takx-desktop/
 COPY --chmod=0444 image/web/index.html /opt/takx-desktop/web-root/index.html
 COPY --from=notices --chown=0:0 . /usr/share/takx-desktop/
 RUN test ! -e /var/lib/takx-proto \
@@ -111,14 +123,21 @@ RUN test ! -e /var/lib/takx-proto \
  && test -s /usr/share/takx-desktop/SOURCES.json \
  && test -s /usr/share/takx-desktop/LICENSES/GPL-3.0-only.txt
 
-# Gates. Nothing from this stage but its reports reaches the final image.
-FROM base AS verify
-ARG TREE_MANIFEST_SHA256
+# Gates (verify/build_gates.sh). The tools they need (binutils, mesa-utils)
+# live in a stage of their own on top of 'os', so they are not installed
+# again for every change of the tree or the scripts. The tree and the scripts
+# are bind-mounted from 'base', the stage the final image is made of. Only
+# the reports in /verify reach the final image.
+FROM os AS verify-tools
 RUN apt-get update \
  && apt-get install -y --no-install-recommends binutils mesa-utils \
  && rm -rf /var/lib/apt/lists/*
-COPY --chmod=0555 image/verify/build_gates.sh /tmp/build_gates.sh
-RUN /tmp/build_gates.sh "${TREE_MANIFEST_SHA256}" /verify
+
+FROM verify-tools AS verify
+ARG TREE_MANIFEST_SHA256
+RUN --mount=type=bind,from=base,source=/opt,target=/opt \
+    --mount=type=bind,source=image/verify/build_gates.sh,target=/tmp/build_gates.sh \
+    bash /tmp/build_gates.sh "${TREE_MANIFEST_SHA256}" /verify
 
 FROM base
 ARG TREE_MANIFEST_SHA256

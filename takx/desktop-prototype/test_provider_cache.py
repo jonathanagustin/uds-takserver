@@ -595,7 +595,7 @@ class ServiceCase(unittest.TestCase):
             {'kind': 'lock-entry', 'name': recipe, 'verified': True, 'expected_sha256': '5' * 64,
              'consumers': [{'recipe': recipe}]} for recipe in ('one', 'two')]})
         self.registry = FakeRegistry()
-        self.messages = []
+        self.messages, self.builds = [], 0
         self.service = self.new_service()
 
     def new_service(self, prefix='reg.example/cache', override='', root=None):
@@ -609,13 +609,14 @@ class ServiceCase(unittest.TestCase):
         top = self.root / 'P' / name
         (top / 'install/lib/.libs').mkdir(parents=True)
         (top / 'empty').mkdir()
-        (top / 'install/lib/lib.a').write_bytes(os.urandom(3000) if name != 'fixed' else b'x')
+        self.builds += 1  # every build differs from the one before, the same way in every run
+        (top / 'install/lib/lib.a').write_bytes(hashlib.sha256(b'%s %d' % (name.encode(), self.builds)).digest() * 94)
         (top / 'install/tool').write_text('#!/bin/sh\n')
         os.chmod(top / 'install/tool', 0o755)
         os.symlink('../lib.a', top / 'install/lib/.libs/lib.a')
         os.symlink('tool', top / 'install/tool-1')
         if marker:
-            (top / 'complete.json').write_text(json.dumps({'provider': name, 'nonce': os.urandom(4).hex()}))
+            (top / 'complete.json').write_text(json.dumps({'provider': name, 'build': self.builds}))
         self.write_json('status/%s.json' % name, {'stage': name, 'status': status, 'outputs': [str(top)],
                                                   'seconds': 1, 'notes': 'n'})
         return top
@@ -2942,7 +2943,7 @@ exit 0
         with self.assertRaisesRegex(
                 PC.CacheError, r'^docker import failed \(interrupted: .*timed out after 0.3 seconds'):
             slow.publish('reg/p:tag', self.context, ['p.tar'], {})
-        self.assertEqual([call.split()[0] for call in self.calls()], ['manifest', 'import'])
+        self.assertNotIn('push', [call.split()[0] for call in self.calls()])
 
     def test_import_that_stops_reading_is_an_error(self):
         (self.context / 'p.tar').write_bytes(b'\0' * (4 << 20))
@@ -3235,7 +3236,8 @@ class Refusals(ServiceCase):
             (lambda m: m['providers']['top']['invocation'].update(env=None), '^top: invocation needs argv and env$'),
             (lambda m: m['providers']['top']['invocation'].pop('env'), '^top: invocation needs argv and env$'),
             (lambda m: m['providers']['top'].update(fetched=[{}]), r'^top: bad fetched selector \{\}$'),
-            (lambda m: m['providers']['top'].update(fetched=[['consumer']]), r"^top: bad fetched selector \['consumer'\]$"),
+            (lambda m: m['providers']['top'].update(fetched=[['consumer']]),
+             r"^top: bad fetched selector \['consumer'\]$"),
             (lambda m: m['providers']['top'].update(fetched=['kind']), "^top: bad fetched selector 'kind'$"),
             (lambda m: m['providers']['top'].update(fetched=[{'consumer': 'a', 'kind': 'b'}]),
              '^top: bad fetched selector '),

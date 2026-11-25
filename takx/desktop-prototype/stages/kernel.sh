@@ -27,6 +27,8 @@
 # and is never labelled as such. kernel/compose.py and kernel/controls.py do
 # the work; this script only runs them in the images, moves failed outputs
 # aside and writes status files. No recipe or lock under takx/ is edited.
+# On arm64 the stage runs from the patched copy of the tree (../arch.sh,
+# ../arch_tree.py) and the composed layout gets ../overrides/arm64/layout/.
 #
 # Usage: kernel.sh [all|kernel-sources|kernel-java-ready|kernel-native|
 #                   kernel-composed|kernel-controls|kernel-baseline]...
@@ -40,6 +42,12 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Architecture hand-over (../arch.sh): on a host whose architecture has override
+# patches under ../overrides/<arch>/ (arm64) this script continues from the
+# patched copy of the tree; on amd64 it does nothing and the tracked recipes run.
+# shellcheck source=takx/desktop-prototype/arch.sh
+. "${here}/../arch.sh"
+takx_arch_enter "${BASH_SOURCE[0]}" "$@"
 repo="$(cd "$here/../../.." && pwd)"
 root="${TAKX_PROTO_ROOT:-/var/lib/takx-proto}"
 run="$repo/takx/desktop-prototype/run-in-toolchain.sh"
@@ -51,6 +59,10 @@ jobs="${TAKX_KERNEL_JOBS:-3}"
 javapath="PATH=$jdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 providers="$root/kernel-providers.json"
 label='Kernel 8.30.5 + project patches (texture, render-context), unqualified'
+# File name of the runtime JAR: it carries the architecture (arch.sh). The key
+# ...linux-amd64-public-cpu.jar further down is a reference into the
+# takx/client-compiler lock, not a file name, and is the same everywhere.
+kernel_jar="$(takx_arch_get kernel_jar)"
 
 mkdir -p "$root"/{P,failed,logs,status}
 
@@ -172,7 +184,7 @@ print(json.dumps({'jar': d['jar'], 'class_dir': out + '/classes', 'jni_headers':
                       'sdk-package-bounded-stock-qualification:package/kernel-8.30.5-linux-amd64-public-cpu.jar']}))
 PY
   KERNEL_STATUS_EXTRA="$extra" write_status kernel-java-ready ok "$seconds" \
-    "Composed Kernel 8.30.5 Java: kernel-java sources + texture + render-context + kernel-client-interop Java (incl. PublicViewportFit) + sdk-package stock-loader/read-only-IO/OBJ patches. Classes only: no native libraries or runtime resources in this JAR; it is for compiling. $(tail -n 1 "$root/logs/kernel-java-ready.log"). The runtime JAR with natives is P/kernel-composed/package/kernel-8.30.5-linux-amd64-public-cpu.jar (status/kernel-composed.json). $label; not private 8.57.11." \
+    "Composed Kernel 8.30.5 Java: kernel-java sources + texture + render-context + kernel-client-interop Java (incl. PublicViewportFit) + sdk-package stock-loader/read-only-IO/OBJ patches. Classes only: no native libraries or runtime resources in this JAR; it is for compiling. $(tail -n 1 "${root}/logs/kernel-java-ready.log"). The runtime JAR with natives is P/kernel-composed/package/${kernel_jar} (status/kernel-composed.json). ${label}; not private 8.57.11." \
     "$out/kernel-8.30.5-composed-classes.jar" "$out/classes" "$out/jni-headers" "$out/classpath.txt" "$out/composed-java.json"
   rm -f "$extra"
 }
@@ -232,7 +244,7 @@ print(json.dumps({'label': r['label'], 'jar': r['outputs']['jar'], 'receipt': ou
 PY
   KERNEL_STATUS_EXTRA="$extra" write_status kernel-composed "$state" "$seconds" \
     "$label. sdk-package layout (stock EngineLibrary loader, nine natives under libs/linux64, locked runtime resources) with receipt.json; controls in the runtime image: $(tail -n 1 "$root/logs/kernel-controls.log"). CPU/JNI controls only: renderer, SDK and client acceptance remain false." \
-    "$out/package/kernel-8.30.5-linux-amd64-public-cpu.jar" "$out/receipt.json" "$out/controls/controls.json" "$out/lib/linux64" "$out/package/third-party"
+    "${out}/package/${kernel_jar}" "${out}/receipt.json" "${out}/controls/controls.json" "${out}/lib/linux64" "${out}/package/third-party"
   rm -f "$extra"
   [[ "$state" == ok ]]
 }
@@ -290,7 +302,7 @@ for target in "$@"; do
     kernel-composed) stage_kernel_composed || rc=1;;
     kernel-controls) stage_kernel_controls || rc=1;;
     kernel-baseline) stage_kernel_baseline || rc=1;;
-    -h|--help) sed -n '5,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help) sed -n '5,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "kernel.sh: unknown target '$target'" >&2; exit 2;;
   esac
 done

@@ -7,10 +7,16 @@
 # as a user would: Home > TAK Server > Add, then the Connection Details form
 # (TakServerConnectionDetailsPanel). Mouse and keyboard only, through xdotool.
 #
-# Usage: connect-configure.sh [TAKCLIENT] [--ca FILE] [--name NAME] [--no-ok]
+# Usage: connect-configure.sh [TAKCLIENT] [--ca-from TAKCLIENT] [--name NAME]
+#        [--address HOST] [--no-ok]
 #   TAKCLIENT  directory name under $TAKX_PROTO_ROOT/secrets (default
-#              takx-desktop); its client.p12 is the client certificate and
-#              its truststore.p12 the CA file unless --ca names another file
+#              takx-desktop); its client.p12 is the client certificate
+#   --ca-from  the directory whose truststore.p12 (and password file) is the
+#              CA file; default: the same directory. The negative checks mix
+#              the two: a foreign CA with the real client certificate, and
+#              the real CA with a foreign client certificate
+#   --address  dial this name instead of the certificate name (used once, to
+#              find out whether the client checks the server name)
 #   --no-ok    fill the form but do not press OK
 #
 # Never run this while a recording is in progress: the form with its
@@ -30,15 +36,17 @@ set -euo pipefail
 root="${TAKX_PROTO_ROOT:-/var/lib/takx-proto}"
 name=takx-connect
 client=takx-desktop
-ca=""
+cafrom=""
 label="UDS TAK Server"
 ok=1
+address=""
 while (($#)); do
   case "$1" in
-    --ca) ca="$2"; shift 2;;
+    --ca-from) cafrom="$2"; shift 2;;
     --name) label="$2"; shift 2;;
+    --address) address="$2"; shift 2;;
     --no-ok) ok=0; shift;;
-    -h|--help) sed -n '5,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help) sed -n '5,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0;;
     -*) echo "connect-configure.sh: unknown option '$1'" >&2; exit 2;;
     *) client="$1"; shift;;
   esac
@@ -46,15 +54,16 @@ done
 # shellcheck disable=SC1091
 source "$root/server/endpoints.env"
 secrets="$root/secrets/$client"
-[[ -n "$ca" ]] || ca="$secrets/truststore.p12"
-[[ -s "$secrets/client.p12" && -s "$ca" && -s "$secrets/password.txt" ]] || { echo "connect-configure.sh: incomplete identity $secrets" >&2; exit 1; }
+casecrets="$root/secrets/${cafrom:-$client}"
+ca="$casecrets/truststore.p12"
+[[ -s "$secrets/client.p12" && -s "$ca" && -s "$secrets/password.txt" && -s "$casecrets/password.txt" ]] || { echo "connect-configure.sh: incomplete identity $secrets" >&2; exit 1; }
 
-docker exec -i -e DISPLAY=:99 -e LABEL="$label" -e ADDRESS="$TAK_CERT_NAME" -e PORT="$TAK_STREAM_PORT" \
-  -e CA="$ca" -e CERT="$secrets/client.p12" -e SECRET_FILE="$secrets/password.txt" -e OK="$ok" "$name" bash -s <<'DRIVE'
+docker exec -i -e DISPLAY=:99 -e LABEL="$label" -e ADDRESS="${address:-$TAK_CERT_NAME}" -e PORT="$TAK_STREAM_PORT" \
+  -e CA="$ca" -e CERT="$secrets/client.p12" -e CA_SECRET_FILE="$casecrets/password.txt" -e SECRET_FILE="$secrets/password.txt" -e OK="$ok" "$name" bash -s <<'DRIVE'
 set -euo pipefail
 click() { xdotool mousemove --sync "$1" "$2"; sleep 0.35; xdotool click 1; sleep 0.4; }
 field() { click "$1" "$2"; xdotool key ctrl+a; xdotool type --delay 25 -- "$3"; sleep 0.3; }
-secret() { click "$1" "$2"; xdotool key ctrl+a; tr -d '\r\n' <"$SECRET_FILE" | xdotool type --delay 25 --file -; sleep 0.3; }
+secret() { click "$1" "$2"; xdotool key ctrl+a; tr -d '\r\n' <"$3" | xdotool type --delay 25 --file -; sleep 0.3; }
 
 # Open the TAK Server dock if its Add button is not there yet, and widen it so
 # that the whole form is visible (drag the divider between globe and dock).
@@ -71,9 +80,9 @@ field 1610 266 "$LABEL"                   # Name
 field 1610 298 "$ADDRESS"                 # Address
 field 1800 330 "$PORT"; xdotool key Tab   # Port (spinner); Protocol stays SSL
 field 1610 428 "$CA"                      # CA File
-secret 1600 460                           # CA Password
+secret 1600 460 "$CA_SECRET_FILE"         # CA Password
 field 1620 499 "$CERT"                    # Client Cert File
-secret 1610 531                           # Client Password
+secret 1610 531 "$SECRET_FILE"            # Client Password
 if [[ "$OK" == 1 ]]; then click 1713 583; fi
 DRIVE
-echo "connect-configure.sh: form filled for '$client' ($TAK_CERT_NAME:$TAK_STREAM_PORT, SSL)$( ((ok)) && echo ', OK pressed')" >&2
+echo "connect-configure.sh: form filled for '$client', CA from '${cafrom:-$client}' (${address:-$TAK_CERT_NAME}:$TAK_STREAM_PORT, SSL)$( ((ok)) && echo ', OK pressed')" >&2

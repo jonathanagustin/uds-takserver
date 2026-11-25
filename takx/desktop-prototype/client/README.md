@@ -112,6 +112,24 @@ rebuild of any of them makes `client.sh lock` fail until
 digests and the comparison summary are in `P/takx57/result.json`; they are not
 tracked because JAR manifests carry the build date.
 
+## Architecture
+
+The compile is the same on Linux `amd64` and `arm64`; `../arch.sh` holds the
+names that differ. Nothing in this section was run on arm64 yet.
+
+- **JDK identity.** The specification lock pins four files of the x64 Temurin
+  17.0.21+9. On arm64 `build.py` checks the same four files of the aarch64
+  archive against `../inputs.arm64.lock.json`; the x64 pins are not reused.
+- **Tracked lock.** amd64 compares with `inputs.lock.json`. arm64 compares with
+  `inputs.lock.arm64.json`, which does not exist yet: the first arm64 run of
+  `client.sh lock` records it.
+- **Native classifier JARs.** The official `gradle/binCreator.gradle` declares
+  only `natives-linux-amd64` (JOGL, GlueGen, JOCL) and `linux-x86_64`
+  (FFmpeg). On arm64 `resolve_runtime.py` requests `natives-linux-aarch64` and
+  `linux-arm64` of the same artifacts and versions, checks them against
+  `../inputs.arm64.lock.json`, and says in `manifest.json` that this is a
+  prototype substitution.
+
 ## Not covered
 
 No Gradle task runs, so nothing here is evidence about the official Gradle

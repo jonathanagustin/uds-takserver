@@ -116,3 +116,104 @@ Not tested at all:
 3. Find why `MilStd2525.get2525DFrom2525C("SUGP-----------")` plus `getSymbol` yields nothing on 8.30.5.
 4. Connect to a local TAK Server from this repository to test CommonCommo 1.17.2 in the client.
 5. Run `boot.sh start` in a second image without `/var/lib/takx-proto/P` mounted to prove the tree is self-contained.
+
+## Connected run (2026-11-25)
+
+The same TAKX 5.7 prototype (main tree `dist/takx57`) connected to the TAK Server 5.7-RELEASE-14 that `server/` deploys in this sandbox (package `takserver` 1.4.0-upstream on UDS Core 1.16.0, native k3s), exchanged markers with a second real client in both directions, and was recorded. The peer was a scripted streaming client, not CloudTAK. Missions, data packages and the contact list did not work. One day, one machine, three short sessions: not acceptance.
+
+Paths are under `/var/lib/takx-proto` unless they start with `demo/` or `server/`.
+
+### How it was connected
+
+- `server/connect.sh start` runs the boot session with one extra host entry: `takserver`, the only name in the server certificate, mapped to the passthrough gateway `10.44.0.12`. The JVM keeps the stock JDK trust store.
+- `server/connect-configure.sh` drives TAKX's own form with the mouse and keyboard (Home > TAK Server > Add): address `takserver`, port 8089, protocol SSL, CA file `secrets/takx-desktop/truststore.p12`, client certificate `secrets/takx-desktop/client.p12`. Both passwords are typed from the mode 600 file inside the container. "Use Authentication" and "Enroll for Client Certificate" stay off.
+- It connected on the first attempt (`connect-1`). No client or server change was needed.
+- The package's own `truststore.p12` works as the CA file, although JDK keytool lists no entries in it: the form accepts an empty key store and CommonCommo reads the CA with OpenSSL. `truststore-java.p12` was not needed and not tried.
+
+### Evidence of the connection
+
+| Evidence | Result | Where |
+| --- | --- | --- |
+| TAKX interface | Green check on the "UDS TAK Server ssl://takserver:8089" row and green "TAK Network Status"; I viewed the frames | `connect/connect-1/shots/05-after-ok.png`, `demo/out/takx/frames/takx57-connected-*` |
+| Client log | `Stream connection to ssl:takserver:8089 is up!`, then `Proto Negotiate: ... Protocol negotiation request accepted` (TAK protocol version 1) | `logs/connect-1.log` 20:43:28, `logs/connect-2.log` 20:54:33 |
+| Server | `/Marti/api/subscriptions/all` lists `dn OU=UDS, O=TAK, CN=takx-desktop`, protocol `tls`, groups `Operators` IN and OUT, `takClient TAKX-CIV`, `takVersion 5.7.4-SNAPSHOT`; `/Marti/api/clientEndPoints` shows the same user `Connected` | `connect/connect-1/evidence/stream-takx-desktop.json`, `connect/connect-2/evidence/capture-stream.json` |
+
+`server/connect_evidence.py` asks the server as a different TakClient (`takx-peer`), with mutual TLS through the gateway.
+
+### Marker exchange (recorded run, `connect-2`)
+
+| Direction | Result | Where |
+| --- | --- | --- |
+| TAKX to peer | Point Dropper placed `SYNTHETIC-TAKX 2` (neutral, 30 S 15 W); the marker's radial menu > Send > Broadcast sent it. `takx-peer` (group `Operators`) received it at 20:55:09 as `a-n-G` at -30.0, -15.0. The server stored it | `connect/connect-2/capture/peer.json`, `evidence/capture-takx-marker.json` |
+| Peer to TAKX | `takx-peer` sent `SYNTHETIC-PEER-2` (`a-u-G`, 10 S 25 W) from 20:54:39. It appears on the TAKX globe as a yellow unknown-affiliation marker; hovering shows the label and the status line reads `(SYNTHETIC-PEER-2)` | clip 2 and its frames, `evidence/capture-peer-marker.json` |
+| Unrelated group | `takx-outsider` (group `TakxIsolation`), connected for the whole take, received only the server's protocol notice: neither marker, nor TAKX's own position report | `connect/connect-2/capture/outsider.json` |
+
+The first session (`connect-1`) gave the same result for `SYNTHETIC-TAKX 1` (peer received it, outsider did not: `connect/connect-1/evidence/try1-listen-*.json`) and showed `SYNTHETIC-PEER-0` on the globe (`shots/12-peer0.png`, `13-crop.png`).
+
+Two things differ from the plan:
+
+- The marker is named `SYNTHETIC-TAKX 2`, with a space. Point Dropper builds names as prefix, space, index; I did not rename it.
+- TAKX does not send a marker when it is placed. Nothing reached the server until Send > Broadcast.
+
+### Rejected connections
+
+| Case | Client | Server | Where |
+| --- | --- | --- | --- |
+| Foreign CA as the CA file, real client certificate | `Error trying to make network connection ... (server certificate failed verification - check truststore)`, `CONN_SSL_PEER_CERT_NOT_TRUSTED`; red row; retried every 15 s | subscription added and removed within about 20 ms, no identity | `connect/connect-2/evidence/neg-client-log.txt`, `neg-server-messaging-log.txt` |
+| Real CA, client certificate from a foreign CA with the same subject `CN=takx-desktop` | "Connected" for about 85 ms, then `SSL Read fatal error`, `Commo Interface Error ... IO`, toast "Network Error, TAK Server Not Connected"; repeats every 15 s | `SSLHandshakeException ... Certificate error: peer not verified` at the same seconds; the subscription list has no entry for the identity | same files, `neg-foreign-client-cert-subscriptions.json` |
+| No client certificate (OpenSSL, TAKX's form does not allow SSL without one) | chain verifies, then `tlsv13 alert certificate required` | | `neg-openssl.txt` |
+| Address `takserver-stream.uds.dev` (not in the certificate), real CA and client certificate (`connect-3`) | `(server certificate does not match configured endpoint)`, `CONN_SSL_PEER_CERT_NOT_TRUSTED` | no subscription | `connect/connect-3/evidence/name-check-client-log.txt`, `name-check-stream.json` |
+
+The brief "Connected" in the second row is TLS 1.3: the client finishes its handshake before the server has judged the client certificate. TAKX shows a success toast and then an error toast each time.
+
+The last row means the project's CommonCommo patch (`takx/patches/0101`) enforces the server name in this build. It also means a TAKX user of this package cannot dial the documented gateway name `takserver-stream.uds.dev`: the server certificate names only `takserver`.
+
+A certificate revoked by deleting its TakClient was not tested.
+
+### What did not work
+
+- **HTTPS API from TAKX.** TAKX calls `https://<address>:8443` (preference `CommonCommo/SecureServerApiPort`) for missions and the contact list. The passthrough gateway exposes 443, 8446 and 8089, so every call fails with `ConnectException: Connection refused`. The log has `Failed to fetch mission list from server` once per connection, and the toast "Failed to query Contact List from: UDS TAK Server" appears every 30 s, also in the footage. Moving the preference to 443 would not help: that route needs SNI `takserver-api.uds.dev`, and TAKX sends the address it dials. Mission sync, data packages, contacts and chat are therefore untested.
+- **CloudTAK as the peer.** CloudTAK v13.112.3 is deployed, but `POST /api/login` answers 403 "Username/Password login is disabled - Please use SSO", and I drove no browser. The test user `mapuser` is in `Operators_READ` only, so a CloudTAK-to-TAKX marker would also need a writable group.
+
+### Footage
+
+`stages/capture-connected.sh all` recorded `connect-2` into the git-ignored `demo/out/takx/`. The credential form was filled and closed before the recording started; the connection was then disabled so the take could start red.
+
+| File | Length | Content |
+| --- | --- | --- |
+| `takx57-connected-raw-take-1080p30.mp4` | 51.57 s | the whole master, uncut |
+| `takx57-connected-clip-1-status-goes-green.mp4` | 7.0 s | the "enabled" box is ticked; row and status bar turn green |
+| `takx57-connected-clip-2-peer-marker-arrives.mp4` | 10.0 s | `SYNTHETIC-PEER-2` appears on the globe; hover shows its label |
+| `takx57-connected-clip-3-takx-marker-placed.mp4` | 10.0 s | Point Dropper places `SYNTHETIC-TAKX 2` |
+| `takx57-connected-clip-4-takx-marker-broadcast.mp4` | 10.0 s | radial menu > Send > Broadcast |
+
+All five are H.264 High, `yuv420p`, 1920x1080, 30 fps and passed the checks in `capture-connected.json`. I viewed the 20 extracted frames. About 36 s of the raw take are still. `PROVENANCE.md` there has versions, trust, digests and caveats. Unpublished.
+
+### Issue #374 acceptance
+
+| Item | State |
+| --- | --- |
+| Record versions, OS, plugin set, endpoint configuration, date | Partly. Versions, endpoint, trust and date are in `PROVENANCE.md`. The workstation is a container on a sandbox VM, and the plugin set was not inspected |
+| Streaming mutual TLS with a dedicated TakClient, validation on, unrelated trust and revoked credentials rejected | Partly. Mutual TLS with `takx-desktop`, a foreign CA, a foreign client certificate and a wrong server name have evidence. Revocation was not tested |
+| Synthetic marker with CloudTAK in both directions, negative check for an unrelated group | Not with CloudTAK. Done in both directions with a second streaming client, with the unrelated-group check |
+| Mission synchronization and data-package transfer | No. Blocked by the API port; the limit is recorded above |
+| Credential renewal, re-import, deletion, revocation, reconnect | No. Only disable and re-enable of the connection was exercised |
+| Streaming and HTTPS endpoints checked separately | Yes as a finding: streaming works, HTTPS on 8443 is refused |
+| Repeatable checklist and bounded evidence without secrets | Partly. The scripts and evidence files exist; the client guide was not touched |
+| Short TAKX-to-CloudTAK demo linked from the client guide | No. The footage has no CloudTAK and is unpublished |
+
+### Where the secrets are
+
+Nothing secret is in the repository or in `demo/out`. TAKX keeps its own copies of the PKCS#12 files and the passwords in each run's project directory (`runs/connect-<n>/ProjectData/.../SslCerts` and `kernel/databases/credentials.sqlite`); those directories and `connect/connect-<n>/` (private screenshots, including the filled form with masked passwords) are mode 700. `secrets/untrusted/` holds the throwaway CA and client certificate of the rejected-connection checks.
+
+### Not verified
+
+- `stages/capture-connected.sh record` ran once, before a lint comment was added. `server/connect-configure.sh` gained `--ca-from` and `--address` after the recorded run; the later sessions used the new version.
+- A first connection of a brand-new client on camera, a reconnect after a server restart, and any run longer than a few minutes.
+- The fixed render-context tree `dist/takx57-rcfix` was not used.
+
+### Next experiments
+
+1. Expose 8443 on the passthrough gateway by port, or add the gateway names to the server certificate, then test missions, data packages and contacts from TAKX.
+2. Drive CloudTAK through SSO in a browser (`google-chrome` is on the host) with a user in a writable group, and repeat the exchange with CloudTAK as the peer.
+3. Delete the `takx-desktop` TakClient and watch the running client and a reconnect.

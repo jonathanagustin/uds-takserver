@@ -13,8 +13,15 @@
 #
 # Exit status is non-zero when any required input is missing or differs from
 # its pin. Pins and locks are never changed by this stage.
+#
+# On an architecture with override patches (arm64, see arch.sh) the fetch
+# continues from the patched tree, so that it reads the locks the stages of
+# that architecture verify. On amd64 nothing changes.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=takx/desktop-prototype/arch.sh
+. "${here}/arch.sh"
+takx_arch_enter "${BASH_SOURCE[0]}" "$@"
 root="${TAKX_PROTO_ROOT:-/var/lib/takx-proto}"
 jobs="${TAKX_FETCH_JOBS:-4}"
 mkdir -p "$root/logs" "$root/status"

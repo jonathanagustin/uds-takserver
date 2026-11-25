@@ -25,6 +25,13 @@ Layout under the work root (default /var/lib/takx-proto):
   src/takx57                           official TAKX 5.7 checkout (LFS skipped)
   src/WorldWindJava                    NASA WorldWindJava at the locked revision
   status/fetch.json                    one record per input
+
+Architecture (arch.sh; TAKX_PROTO_ARCH or the machine): the native classifier
+JARs of the runtime extras and the Debian package index of the CommonCommo
+tools are per-architecture files. On arm64 the classifier JARs are also
+checked against their own pins in inputs.arm64.lock.json; the Debian pins of
+that architecture come from the lock of the patched native-commoncommo copy
+this script then runs from (arch_tree.py).
 """
 import argparse
 import base64
@@ -57,6 +64,11 @@ TAKX_REVISION = '0b59a9bb2d0e90dc35c9edfff1c2056daab2b713'
 LFS_MEDIA = 'https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/'
 MAVEN = 'https://repo1.maven.org/maven2/'
 JOGAMP = 'https://jogamp.org/deployment/maven/'
+# Dated copy of the Debian archive that still serves the pinned trixie 13.7
+# InRelease after a point release replaced it on deb.debian.org. It is only
+# another location: every file from it is checked against the same pins.
+DEBIAN_ARCHIVE = 'https://deb.debian.org/debian'
+DEBIAN_SNAPSHOT = 'https://snapshot.debian.org/archive/debian/20260912T143000Z'
 # Recipes that are not on the 5.7 prototype path. Their inputs are still tried,
 # but a failure there is reported without failing the stage.
 OPTIONAL = {'compat', 'sqlite-jdbc', 'registry-cache', 'geos-cache', 'contour-elevation', 'contour-grid',
@@ -67,6 +79,19 @@ SKIP_LOCKS = {'native-cesium/metadata.lock.json'}
 SAFE_COORDINATE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.+-]*')
 LOCK = threading.Lock()
 RECORDS = []
+
+
+def arch_names():
+    """The names of this architecture from arch.sh, the one table of the prototype."""
+    return json.loads(subprocess.check_output(['bash', str(HERE / 'arch.sh'), 'json'], timeout=30))
+
+
+def runtime_native_pins(arch):
+    """{'group:artifact:version:classifier': sha256} of the architecture's own pins; amd64 has none."""
+    path = HERE / f'inputs.{arch}.lock.json'
+    if not path.is_file():
+        return {}
+    return {name: entry['sha256'] for name, entry in json.loads(path.read_text())['runtime_natives']['jars'].items()}
 
 
 def log(*parts):
@@ -655,6 +680,8 @@ def fetch_runtime_extras(root, takx, closure_names):
     repository publishes next to it, and its SHA-256 is recorded for later pinning.
     """
     versions = gradle_versions(takx)
+    names = arch_names()
+    jogamp, bytedeco, pins = names['jogamp'], names['bytedeco'], runtime_native_pins(names['arch'])
     directory = root / 'jars/runtime-extras'
     directory.mkdir(parents=True, exist_ok=True)
     wanted = [  # (repository, group, artifact, version property, classifier), from the cited Gradle files
@@ -673,12 +700,12 @@ def fetch_runtime_extras(root, takx, closure_names):
         (MAVEN, 'org.aspectj', 'aspectjweaver', 'aspectjVersion', None),
         (JOGAMP, 'org.jogamp.jocl', 'jocl-main', 'joclVersion', None),
         (JOGAMP, 'org.jogamp.jocl', 'jocl', 'joclVersion', None),
-        (JOGAMP, 'org.jogamp.jocl', 'jocl', 'joclVersion', 'natives-linux-amd64'),
+        (JOGAMP, 'org.jogamp.jocl', 'jocl', 'joclVersion', jogamp),
         (JOGAMP, 'org.jogamp.gluegen', 'gluegen-rt', 'joglVersion', None),
-        (JOGAMP, 'org.jogamp.gluegen', 'gluegen-rt', 'joglVersion', 'natives-linux-amd64'),
-        (JOGAMP, 'org.jogamp.jogl', 'jogl-all', 'joglVersion', 'natives-linux-amd64'),
+        (JOGAMP, 'org.jogamp.gluegen', 'gluegen-rt', 'joglVersion', jogamp),
+        (JOGAMP, 'org.jogamp.jogl', 'jogl-all', 'joglVersion', jogamp),
         (MAVEN, 'org.bytedeco', 'ffmpeg', 'ffmpegVersion', None),
-        (MAVEN, 'org.bytedeco', 'ffmpeg', 'ffmpegVersion', 'linux-x86_64'),
+        (MAVEN, 'org.bytedeco', 'ffmpeg', 'ffmpegVersion', bytedeco),
     ]
     queue, done, memo = [], set(), {}
     for repository, group, artifact, key, classifier in wanted:
@@ -706,15 +733,22 @@ def fetch_runtime_extras(root, takx, closure_names):
             if error:
                 note = error
         verified = bool(published) and target.is_file() and digest(target, 'sha1') == published
+        coordinate = f'{group}:{artifact}:{version}' + (':' + classifier if classifier else '')
+        pin = pins.get(coordinate)
+        extra = {}
+        if pin:  # this architecture's own pin (inputs.<arch>.lock.json)
+            extra = {'expected_sha256': pin, 'pinned_by': f'takx/desktop-prototype/inputs.{names["arch"]}.lock.json'}
+            if verified and digest(target) != pin:
+                verified, note = False, 'differs from the architecture pin'
         if verified:
             actual = digest(target)
         elif target.exists():
             target.unlink()
         in_closure = file_name in closure_names
-        record(kind='runtime-extra-jar', name=f'{group}:{artifact}:{version}' + (':' + classifier if classifier else ''),
+        record(kind='runtime-extra-jar', name=coordinate,
                source=url, method='direct', expected_sha1=published, actual_sha256=actual, verified=verified, required=False,
                pinned_by_recipe_lock=False, also_in_compile_closure=in_closure, reason=why, path=str(target) if verified else None,
-               verification='SHA-1 published by the Maven repository; no project pin exists', note=note)
+               verification='SHA-1 published by the Maven repository; no project pin exists', note=note, **extra)
         if classifier is None and verified:
             dependencies = pom_dependencies(repository, group, artifact, version, memo)
             for g, a, v in dependencies or []:
@@ -729,7 +763,7 @@ def fetch_runtime_extras(root, takx, closure_names):
                 origin = repository if g.startswith('org.jogamp') else MAVEN
                 queue.append((origin, g, a, v, None, f'POM dependency of {group}:{artifact}:{version}'))
                 if g == 'org.bytedeco':  # JavaCPP presets load their natives from the classifier JAR
-                    queue.append((origin, g, a, v, 'linux-x86_64', f'linux natives of {g}:{a}:{v}'))
+                    queue.append((origin, g, a, v, bytedeco, f'linux natives of {g}:{a}:{v}'))
 
 
 # --------------------------------------------------------------------------- Debian tools
@@ -740,13 +774,16 @@ def fetch_commoncommo_tools(root):
     metadata = root / 'cache-commoncommo-tools/metadata'
     metadata.mkdir(parents=True, exist_ok=True)
     base = tools['metadata_url'].rsplit('/dists/', 1)[0]
-    items = [('InRelease', tools['metadata_url'], tools['inrelease_sha256'], None),
-             ('Packages.xz', f'{base}/dists/trixie/main/binary-amd64/by-hash/SHA256/{tools["packages_sha256"]}',
-              tools['packages_sha256'], tools['packages_bytes'])]
+    index = f'dists/trixie/main/binary-{arch_names()["debian"]}'
+    # (name, URL, sha256, size, path below a dated snapshot of the same archive)
+    items = [('InRelease', tools['metadata_url'], tools['inrelease_sha256'], None, 'dists/trixie/InRelease'),
+             ('Packages.xz', f'{base}/{index}/by-hash/SHA256/{tools["packages_sha256"]}',
+              tools['packages_sha256'], tools['packages_bytes'], f'{index}/Packages.xz')]
     for package in tools['packages']:
-        items.append((Path(package['Filename']).name, f'{base}/{package["Filename"]}', package['SHA256'], int(package['Size'])))
+        items.append((Path(package['Filename']).name, f'{base}/{package["Filename"]}', package['SHA256'], int(package['Size']),
+                      package['Filename']))
     complete = True
-    for name, url, sha, size in items:
+    for name, url, sha, size, path in items:
         target = metadata / name
         note = ''
         if not (target.is_file() and digest(target) == sha):
@@ -759,6 +796,17 @@ def fetch_commoncommo_tools(root):
                                  'the pinned bytes then only exist on snapshot.debian.org)')
                 if candidate.exists():
                     candidate.unlink()
+                if base == DEBIAN_ARCHIVE:
+                    # The pin is unchanged; only the location differs.
+                    snapshot = f'{DEBIAN_SNAPSHOT}/{path}'
+                    error = download(snapshot, candidate)
+                    if error is None and digest(candidate) == sha:
+                        os.replace(candidate, target)
+                        url, note = snapshot, f'{note}; the pinned bytes were fetched from the dated snapshot instead'
+                    else:
+                        note = f'{note}; snapshot {snapshot}: {error or "differs from the pin"}'
+                        if candidate.exists():
+                            candidate.unlink()
         verified = target.is_file() and digest(target) == sha and (size is None or target.stat().st_size == size)
         complete &= verified
         record(kind='debian-tool-metadata', name=name, source=url, method='direct', expected_sha256=sha,

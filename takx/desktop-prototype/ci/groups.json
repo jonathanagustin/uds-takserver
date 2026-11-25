@@ -1,0 +1,71 @@
+{
+ "copyright": "# Copyright 2026 uds-takserver authors",
+ "license": "# SPDX-License-Identifier: GPL-3.0-only",
+ "description": [
+  "Job groups of the opt-in workflow .github/workflows/takx-desktop-prototype.yaml.",
+  "One group is one job of one architecture. 'builds' names the providers of",
+  "../providers.json the group produces; pipeline.py restores their prerequisites",
+  "(the whole closure) from the provider cache before 'run' starts, so a group",
+  "never waits for another job. 'run' lists stage scripts of ../stages/ with",
+  "their arguments, in order. 'wave' orders the jobs: every prerequisite of a",
+  "group is built in an earlier wave. 'restore': 'all' restores every provider.",
+  "'runtime' pulls the runtime image as well. pipeline.py check verifies all of",
+  "this against ../providers.json."
+ ],
+ "schema": 1,
+ "waves": ["a", "b", "c", "d"],
+ "groups": {
+  "native-base": {
+   "wave": "a",
+   "builds": ["sqlcipher", "draco", "las", "mdb"],
+   "run": [["lane1.sh", "sqlcipher"], ["lane3.sh", "draco", "las", "mdb"]]
+  },
+  "geo-base": {
+   "wave": "a",
+   "builds": ["proj", "geos", "assimp"],
+   "run": [["lane2.sh", "proj", "geos", "assimp"]]
+  },
+  "java": {
+   "wave": "a",
+   "builds": ["gis-java", "kernel-java", "worldwind-java", "worldwind-interop", "consumers57", "ui-original",
+    "ui-wizard-reference"],
+   "run": [["lane4.sh", "gis-java", "kernel-java", "worldwind-java", "worldwind-interop", "consumers57",
+    "ui-original", "ui-wizard-reference"]]
+  },
+  "cesium": {
+   "wave": "b",
+   "builds": ["cesium-acq", "cesium"],
+   "run": [["lane1.sh", "cesium-acq", "cesium"]]
+  },
+  "scene": {
+   "wave": "b",
+   "builds": ["gles", "scene", "gdal-jni", "curl"],
+   "run": [["lane3.sh", "gles", "scene", "gdal-jni", "curl"]]
+  },
+  "commo": {
+   "wave": "b",
+   "builds": ["spatial", "crypto", "commoncommo"],
+   "run": [["lane2.sh", "spatial", "crypto", "commoncommo"]]
+  },
+  "kml": {
+   "wave": "c",
+   "builds": ["kml"],
+   "run": [["lane1.sh", "kml"]]
+  },
+  "client": {
+   "wave": "d",
+   "builds": [],
+   "restore": "all",
+   "runtime": true,
+   "run": [["lane4.sh", "java-classpath"], ["kernel.sh", "all"], ["client.sh", "all"]]
+  },
+  "boot": {
+   "wave": "d",
+   "builds": [],
+   "restore": "all",
+   "runtime": true,
+   "after": "client",
+   "run": [["assemble.sh"], ["boot.sh", "start"], ["boot.sh", "check"], ["boot.sh", "stop"]]
+  }
+ }
+}

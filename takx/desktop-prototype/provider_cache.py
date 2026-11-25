@@ -960,8 +960,9 @@ class ProviderCache:
                 listing = json.loads(files_bytes.decode())
             except ValueError as error:
                 raise CacheError('%s: bundle metadata is not JSON: %s' % (name, error))
+            recorded = (work / 'tar.sha256').read_bytes().decode('ascii', 'replace').strip()
             check_bundle(name, key, str(self.tree.root), meta, status, labels, sha256_file(tar),
-                         (work / 'tar.sha256').read_bytes().decode('ascii', 'replace').strip(), sha256_bytes(files_bytes), markers)
+                         recorded, sha256_bytes(files_bytes), markers)
             if not isinstance(listing, dict) or listing.get('provider') != name \
                     or not isinstance(listing.get('entries'), list):
                 raise CacheError('%s: malformed file manifest' % name)

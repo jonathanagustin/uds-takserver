@@ -19,6 +19,12 @@ is not Gradle's highest-wins; the manifest records what was actually selected.
 
 Output: P/takx57-runtime-jars/jars/*.jar and manifest.json (coordinates,
 sha256, repository, whether the same bytes are in the compile closure).
+
+Architecture (../arch.sh): the official gradle/binCreator.gradle declares the
+JogAmp and FFmpeg natives for amd64 only (natives-linux-amd64, linux-x86_64).
+On amd64 exactly those are requested. On arm64 the prototype requests the
+arm64 classifiers of the same artifacts and versions instead, says so in the
+manifest, and checks each against its pin in ../inputs.arm64.lock.json.
 """
 import hashlib
 import json
@@ -36,6 +42,7 @@ from xml.sax.saxutils import escape
 ROOT = Path(os.environ.get('TAKX_PROTO_ROOT', '/var/lib/takx-proto'))
 REPO = Path(os.environ.get('TAKX_PROTO_REPO', Path(__file__).resolve().parents[3]))
 JDK = Path('/tools/temurin-17.0.21_9/jdk-17.0.21+9')
+PROTO = Path(__file__).resolve().parents[1]
 SRC = ROOT / 'src/takx57'
 OUT = ROOT / 'P/takx57-runtime-jars'
 CACHE = ROOT / 'cache-client'
@@ -90,6 +97,19 @@ def fail(message):
     sys.exit(1)
 
 
+def arch_names():
+    """The names of this architecture from ../arch.sh, the one table of the prototype."""
+    return json.loads(subprocess.check_output(['bash', str(PROTO / 'arch.sh'), 'json'], timeout=30))
+
+
+def native_pins(arch):
+    """{'group:artifact:version:classifier': sha256} of this architecture's own pins; amd64 has none."""
+    path = PROTO / ('inputs.%s.lock.json' % arch)
+    if not path.is_file():
+        return {}
+    return {name: entry['sha256'] for name, entry in json.loads(path.read_text())['runtime_natives']['jars'].items()}
+
+
 def digest(path, algorithm='sha256'):
     value = hashlib.new(algorithm)
     with open(path, 'rb') as stream:
@@ -141,7 +161,12 @@ def declared():
             version = parts[2] if len(parts) > 2 else versions['jaxbVersion']
             found.append((name, configuration, parts[0], parts[1], version, parts[3] if len(parts) > 3 else None))
     # gradle/binCreator.gradle:62-75: the platform natives and the Bootstrap
-    # weaver. Only the Linux amd64 classifiers are taken.
+    # weaver. Only the Linux amd64 classifiers are taken; on another
+    # architecture its classifiers of the same artifacts replace them.
+    names = arch_names()
+    jogamp, bytedeco = names['jogamp'], names['bytedeco']
+    runtime_only = 'runtimeOnly' if names['arch'] == 'amd64' else (
+        'runtimeOnly (prototype substitution: the official file declares natives-linux-amd64 and linux-x86_64 only)')
     name = 'gradle/binCreator.gradle'
     text = (SRC / name).read_text()
     sources[name] = digest(SRC / name)
@@ -152,11 +177,10 @@ def declared():
                    'org.aspectj:aspectjweaver:$aspectjVersion'):
         if needle not in text:
             fail('binCreator.gradle no longer declares ' + needle)
-    found += [(name, 'runtimeOnly', 'org.jogamp.jogl', 'jogl-all', versions['joglVersion'], 'natives-linux-amd64'),
-              (name, 'runtimeOnly', 'org.jogamp.gluegen', 'gluegen-rt', versions['joglVersion'],
-               'natives-linux-amd64'),
-              (name, 'runtimeOnly', 'org.jogamp.jocl', 'jocl', versions['joclVersion'], 'natives-linux-amd64'),
-              (name, 'runtimeOnly', 'org.bytedeco', 'ffmpeg', versions['ffmpegVersion'], 'linux-x86_64'),
+    found += [(name, runtime_only, 'org.jogamp.jogl', 'jogl-all', versions['joglVersion'], jogamp),
+              (name, runtime_only, 'org.jogamp.gluegen', 'gluegen-rt', versions['joglVersion'], jogamp),
+              (name, runtime_only, 'org.jogamp.jocl', 'jocl', versions['joclVersion'], jogamp),
+              (name, runtime_only, 'org.bytedeco', 'ffmpeg', versions['ffmpegVersion'], bytedeco),
               (name, 'implementation', 'org.aspectj', 'aspectjweaver', versions['aspectjVersion'], None)]
     return found, sources, versions
 
@@ -315,10 +339,26 @@ def main():
                         'directly_declared': direct.get(coordinates, [])})
     if not entries:
         fail('Maven resolved nothing')
+    names = arch_names()
     for group in JOGAMP_GROUPS:
-        if not any(e['coordinates'].startswith(group + ':') and 'natives-linux-amd64' in e['coordinates']
+        if not any(e['coordinates'].startswith(group + ':') and e['coordinates'].endswith(':' + names['jogamp'])
                    for e in entries):
-            fail('no linux-amd64 natives resolved for ' + group)
+            fail('no %s resolved for %s' % (names['jogamp'], group))
+    pinned = native_pins(names['arch'])
+    for coordinates, pin in sorted(pinned.items()):
+        hits = [e for e in entries if e['coordinates'] == coordinates]
+        if len(hits) != 1 or hits[0]['sha256'] != pin:
+            fail('%s is absent or differs from its pin in inputs.%s.lock.json' % (coordinates, names['arch']))
+        hits[0]['pinned_by'] = 'takx/desktop-prototype/inputs.%s.lock.json' % names['arch']
+    classifier_note = (
+        'Only the Linux amd64 classifiers of the JogAmp and FFmpeg natives were declared; jocl-main is an '
+        'umbrella POM and may add natives of other platforms.')
+    if names['arch'] != 'amd64':
+        classifier_note = (
+            'Linux %s: the %s and %s classifiers of the JogAmp and FFmpeg natives were requested in place of the '
+            'amd64 ones the official gradle/binCreator.gradle declares (a prototype substitution, each checked '
+            'against inputs.%s.lock.json); jocl-main is an umbrella POM and may add natives of other platforms.'
+            % (names['arch'], names['jogamp'], names['bytedeco'], names['arch']))
     missing = [k for k in direct if not any(e['coordinates'] == k for e in entries)
                and not k.startswith('com.sun.xml.bind:jaxb-ri:')]
     if missing:
@@ -343,8 +383,7 @@ def main():
             'The official scripts exclude org.glassfish.jaxb:jaxb-runtime from api, implementation and '
             'runtimeOnly; Maven has no global exclusion, so a jaxb-runtime entry here is one the assembler '
             'may leave out.',
-            'Only the Linux amd64 classifiers of the JogAmp and FFmpeg natives were declared; jocl-main is an '
-            'umbrella POM and may add natives of other platforms.',
+            classifier_note,
             'The Kernel dependency JARs (mil-sym, kxml2, httpclient, gdal, jassimp and others) are not here: '
             'they are the frozen classpath of P/kernel-java/classpath.'],
         'jars': sorted(entries, key=lambda e: e['coordinates']),

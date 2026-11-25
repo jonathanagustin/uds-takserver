@@ -136,7 +136,10 @@ class Case(unittest.TestCase):
         self.patch(F.urllib.request, 'urlopen', self.net)
         environment = {k: v for k, v in os.environ.items()
                        if not k.startswith('GIT_') and not k.lower().endswith('_proxy')}
-        environment.update(GIT_ALLOW_PROTOCOL='file', HOME=str(self.tmp / 'home'), TAKX_PROTO_ROOT=str(self.tmp / 'env-root'))
+        # The architecture is pinned to amd64 so that the fixtures give the same
+        # answers on an arm64 host; the arm64 cases select it themselves.
+        environment.update(GIT_ALLOW_PROTOCOL='file', HOME=str(self.tmp / 'home'), TAKX_PROTO_ROOT=str(self.tmp / 'env-root'),
+                           TAKX_PROTO_ARCH='amd64')
         patcher = mock.patch.dict(os.environ, environment, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -2423,6 +2426,68 @@ class RuntimeExtras(Case):
         self.assertNotIn(self.url('M', 'never', 'read', '1') + '.sha1', self.net.calls)
         self.assertNotIn(self.url('M', 'org.bytedeco.other', 'not-preset', '1', 'linux-x86_64') + '.sha1', self.net.calls)
 
+    def test_architecture_names_come_from_the_one_table(self):
+        self.assertEqual((F.arch_names()['arch'], F.arch_names()['jogamp'], F.arch_names()['bytedeco'],
+                          F.arch_names()['debian']), ('amd64', 'natives-linux-amd64', 'linux-x86_64', 'amd64'))
+        self.assertEqual(F.runtime_native_pins('amd64'), {})
+        os.environ['TAKX_PROTO_ARCH'] = 'arm64'
+        self.assertEqual((F.arch_names()['arch'], F.arch_names()['jogamp'], F.arch_names()['bytedeco'],
+                          F.arch_names()['debian']), ('arm64', 'natives-linux-aarch64', 'linux-arm64', 'arm64'))
+        pins = F.runtime_native_pins('arm64')
+        self.assertEqual(sorted(pins), ['org.bytedeco:ffmpeg:4.1.3-1.5.1:linux-arm64',
+                                        'org.jogamp.gluegen:gluegen-rt:2.5.0:natives-linux-aarch64',
+                                        'org.jogamp.jocl:jocl:2.5.0:natives-linux-aarch64',
+                                        'org.jogamp.jogl:jogl-all:2.5.0:natives-linux-aarch64'])
+        for value in pins.values():
+            self.assertRegex(value, r'^[0-9a-f]{64}$')
+        os.environ['TAKX_PROTO_ARCH'] = 'riscv64'
+        with self.assertRaises(subprocess.CalledProcessError):
+            F.arch_names()
+
+    def test_arm64_requests_its_own_classifiers_and_never_the_amd64_ones(self):
+        os.environ['TAKX_PROTO_ARCH'] = 'arm64'
+        self.patch(F, 'runtime_native_pins', lambda arch: {})
+        keys = sorted({row[3] for row in WANTED})
+        self.versions(**{key: f'{index}.0' for index, key in enumerate(keys)})
+        self.fetch()
+        swap = {'natives-linux-amd64': 'natives-linux-aarch64', 'linux-x86_64': 'linux-arm64'}
+        self.assertEqual([r['name'] for r in self.records], [
+            f'{group}:{artifact}:{keys.index(key)}.0' + (':' + swap[classifier] if classifier else '')
+            for _, group, artifact, key, classifier in WANTED])
+        self.assertFalse([url for url in self.net.calls if 'amd64' in url or 'x86_64' in url])
+        self.assertEqual(len([url for url in self.net.calls if 'natives-linux-aarch64' in url]), 3)
+        self.assertEqual(len([url for url in self.net.calls if 'linux-arm64' in url]), 1)
+
+    def test_arm64_classifier_jars_are_checked_against_their_own_pins(self):
+        os.environ['TAKX_PROTO_ARCH'] = 'arm64'
+        lock = 'takx/desktop-prototype/inputs.arm64.lock.json'
+        good, bad = 'org.jogamp.jocl:jocl:2.5:natives-linux-aarch64', 'org.bytedeco:ffmpeg:7:linux-arm64'
+        self.patch(F, 'runtime_native_pins', lambda arch: {good: sha(b'natives'), bad: sha(b'what was pinned')}
+                   if arch == 'arm64' else self.fail('pins of another architecture were read'))
+        self.versions(joclVersion='2.5', ffmpegVersion='7')
+        natives = self.publish('J', 'org.jogamp.jocl', 'jocl', '2.5', b'natives', classifier='natives-linux-aarch64')
+        ffmpeg = self.publish('M', 'org.bytedeco', 'ffmpeg', '7', b'ffmpeg', pom_body=pom(dependencies=[
+            {'groupId': 'org.bytedeco', 'artifactId': 'javacpp', 'version': '1.5'}]))
+        ffmpeg_natives = self.publish('M', 'org.bytedeco', 'ffmpeg', '7', b'published, but not what was pinned',
+                                      classifier='linux-arm64')
+        javacpp_natives = self.publish('M', 'org.bytedeco', 'javacpp', '1.5', b'javacpp natives', classifier='linux-arm64')
+        self.fetch()
+        by_name = {r['name']: r for r in self.results()}
+        self.assertEqual(by_name[good], self.expected(natives, good, b'natives', expected_sha256=sha(b'natives'),
+                                                      pinned_by=lock))
+        # The repository's own SHA-1 matched, the architecture pin did not.
+        self.assertEqual(by_name[bad], self.failed(ffmpeg_natives, bad, b'published, but not what was pinned',
+                                                   expected_sha256=sha(b'what was pinned'), pinned_by=lock,
+                                                   note='differs from the architecture pin'))
+        self.assertFalse((self.directory / 'ffmpeg-7-linux-arm64.jar').exists())
+        self.assertTrue(by_name['org.bytedeco:ffmpeg:7']['verified'])
+        self.assertEqual(by_name['org.bytedeco:ffmpeg:7']['source'], ffmpeg)
+        self.assertNotIn('expected_sha256', by_name['org.bytedeco:ffmpeg:7'])
+        # Transitive JavaCPP presets get the classifier of this architecture too; no pin exists for them.
+        unpinned = by_name['org.bytedeco:javacpp:1.5:linux-arm64']
+        self.assertEqual((unpinned['source'], unpinned['verified']), (javacpp_natives, True))
+        self.assertNotIn('expected_sha256', unpinned)
+
     def test_coordinates_that_are_not_plain_names_never_become_paths(self):
         self.versions(xmpcoreVersion='6')
         evil = [('org.dep', '../../../escape', '1'), ('org.dep', 'a', '../1'), ('org/dep', 'a', '1'), ('org.dep', 'a/b', '1'),
@@ -2586,6 +2651,76 @@ class CommoncommoTools(Case):
         self.assertEqual(self.records, [self.expected(name) for name in self.urls])
         self.assertEqual((self.metadata / 'InRelease').read_bytes(), self.INRELEASE)
         self.assertTrue(self.extracted.is_dir())
+
+    def test_arm64_reads_the_arm64_package_index(self):
+        os.environ['TAKX_PROTO_ARCH'] = 'arm64'
+        amd64 = self.urls['Packages.xz']
+        self.urls['Packages.xz'] = amd64.replace('binary-amd64', 'binary-arm64')
+        self.assertNotEqual(self.urls['Packages.xz'], amd64)
+        self.net.routes[self.urls['Packages.xz']] = self.net.routes.pop(amd64)
+        F.fetch_commoncommo_tools(self.root)
+        self.assertEqual(self.records, [self.expected(name) for name in self.urls])
+        self.assertEqual(self.net.calls, list(self.urls.values()))
+        self.assertTrue(self.extracted.is_dir())
+
+    def official(self):
+        """Point the lock at the official archive, where a dated snapshot exists."""
+        for url in self.urls.values():
+            del self.net.routes[url]
+        self.urls = {name: url.replace(self.BASE, F.DEBIAN_ARCHIVE) for name, url in self.urls.items()}
+        self.write_lock()
+        self.snapshot = {
+            'InRelease': F.DEBIAN_SNAPSHOT + '/dists/trixie/InRelease',
+            'Packages.xz': F.DEBIAN_SNAPSHOT + '/dists/trixie/main/binary-amd64/Packages.xz',
+            'ant_1.10_all.deb': F.DEBIAN_SNAPSHOT + '/pool/main/a/ant/ant_1.10_all.deb',
+            'dos2unix_7_amd64.deb': F.DEBIAN_SNAPSHOT + '/pool/main/d/dos2unix/dos2unix_7_amd64.deb'}
+
+    def test_pinned_bytes_replaced_upstream_come_from_the_dated_snapshot(self):
+        self.official()
+        self.assertTrue(F.DEBIAN_SNAPSHOT.startswith('https://snapshot.debian.org/archive/debian/2'))
+        # A point release replaced InRelease, the old by-hash index is gone, one package still answers.
+        self.net.routes[self.urls['InRelease']] = b'the next point release'
+        self.net.routes[self.urls['ant_1.10_all.deb']] = self.ANT
+        for name in ('InRelease', 'Packages.xz', 'dos2unix_7_amd64.deb'):
+            self.net.routes[self.snapshot[name]] = self.content[name]
+        F.fetch_commoncommo_tools(self.root)
+        moved = '; the pinned bytes were fetched from the dated snapshot instead'
+        self.assertEqual(self.records, [
+            self.expected('InRelease', source=self.snapshot['InRelease'], note=self.DIFFERS + moved),
+            self.expected('Packages.xz', source=self.snapshot['Packages.xz'],
+                          note='HTTPError: HTTP Error 404: status 404' + moved),
+            self.expected('ant_1.10_all.deb'),
+            self.expected('dos2unix_7_amd64.deb', source=self.snapshot['dos2unix_7_amd64.deb'],
+                          note='HTTPError: HTTP Error 404: status 404' + moved)])
+        self.assertNotIn(self.snapshot['ant_1.10_all.deb'], self.net.calls)
+        self.assertEqual((self.metadata / 'InRelease').read_bytes(), self.INRELEASE)
+        self.assertTrue(self.extracted.is_dir())
+        # The pins did not move: the digests recorded are the locked ones.
+        self.assertEqual([r['expected_sha256'] for r in self.records], [sha(self.content[name]) for name in self.urls])
+
+    def test_snapshot_that_differs_from_the_pin_is_refused_too(self):
+        self.official()
+        for name in self.urls:
+            self.net.routes[self.urls[name]] = self.content[name]
+        self.net.routes[self.urls['InRelease']] = b'the next point release'
+        self.net.routes[self.snapshot['InRelease']] = b'not the pinned release either'
+        self.net.routes[self.urls['Packages.xz']] = [http_error(404)]
+        F.fetch_commoncommo_tools(self.root)
+        self.assertEqual(self.records[0], self.failed(
+            'InRelease', note=self.DIFFERS + '; snapshot %s: differs from the pin' % self.snapshot['InRelease']))
+        self.assertEqual(self.records[1], self.failed(
+            'Packages.xz', note='HTTPError: HTTP Error 404: status 404; snapshot %s: HTTPError: HTTP Error 404: status 404'
+            % self.snapshot['Packages.xz']))
+        self.assertEqual([r['verified'] for r in self.records], [False, False, True, True])
+        self.assertFalse(self.extracted.exists())
+        self.assertEqual(self.names(self.metadata), ['ant_1.10_all.deb', 'dos2unix_7_amd64.deb'])
+
+    def test_only_the_official_archive_has_a_snapshot(self):
+        # Another base (the fixtures use one) is never looked up on snapshot.debian.org.
+        self.net.routes[self.urls['InRelease']] = b'replaced upstream'
+        F.fetch_commoncommo_tools(self.root)
+        self.assertEqual(self.records[0], self.failed('InRelease', note=self.DIFFERS))
+        self.assertFalse([url for url in self.net.calls if 'snapshot.debian.org' in url])
 
     def test_without_dpkg_deb_nothing_is_extracted(self):
         self.patch(F.shutil, 'which', lambda name: None if name == 'dpkg-deb' else '/usr/bin/' + name)

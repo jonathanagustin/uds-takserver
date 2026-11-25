@@ -19,7 +19,8 @@
 #   package       bootstrap, preferences-factory, platform, client and
 #                 processmanager JARs with their resources.
 #   lock          write P/takx57/inputs.lock.json and compare it with the
-#                 tracked client/inputs.lock.json.
+#                 tracked client/inputs.lock.json (on arm64:
+#                 client/inputs.lock.arm64.json).
 #   all           everything above, in that order.
 #
 # The work is done by ../client/build.py and ../client/resolve_runtime.py
@@ -62,12 +63,29 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Architecture hand-over (../arch.sh): on a host whose architecture has override
+# patches under ../overrides/<arch>/ (arm64) this script continues from the
+# patched copy of the tree; on amd64 it does nothing and the tracked recipes run.
+# shellcheck source=takx/desktop-prototype/arch.sh
+. "${here}/../arch.sh"
+takx_arch_enter "${BASH_SOURCE[0]}" "$@"
 repo="$(cd "$here/../../.." && pwd)"
 root="${TAKX_PROTO_ROOT:-/var/lib/takx-proto}"
 run="$repo/takx/desktop-prototype/run-in-toolchain.sh"
 build="$repo/takx/desktop-prototype/client/build.py"
 resolve="$repo/takx/desktop-prototype/client/resolve_runtime.py"
+# The tracked lock is per architecture: the JDK digests differ, and so do the
+# locally built inputs. amd64 keeps client/inputs.lock.json. Any other
+# architecture uses client/inputs.lock.<arch>.json of the base repository (the
+# stage itself runs from the patched copy of the tree, see ../arch.sh), so a
+# first run records it where it can be reviewed and committed.
+arch="$(takx_arch)"
 tracked_lock="$repo/takx/desktop-prototype/client/inputs.lock.json"
+if [[ "${arch}" != amd64 ]]; then
+  lock_home="${repo}"
+  [[ -f "${repo}/.takx-arch-tree.base" ]] && lock_home="$(<"${repo}/.takx-arch-tree.base")"
+  tracked_lock="${lock_home}/takx/desktop-prototype/client/inputs.lock.${arch}.json"
+fi
 out="$root/P/takx57"
 cpus="${TAKX_CLIENT_CPUS:-1.5}"
 force="${TAKX_CLIENT_FORCE:-0}"
@@ -242,7 +260,7 @@ for kind in sorted(set(new) | set(old)):
     if changed:
         print('  %s: %d differing inputs, e.g. %s' % (kind, len(changed), changed[:3]))
 PY
-    write_status takx57-lock failed 0 "the inputs consumed by this run differ from the tracked client/inputs.lock.json; set TAKX_CLIENT_RECORD_LOCK=1 to record them deliberately"
+    write_status takx57-lock failed 0 "the inputs consumed by this run differ from the tracked client/$(basename "${tracked_lock}"); set TAKX_CLIENT_RECORD_LOCK=1 to record them deliberately"
     write_status takx57 failed 0 "compiled and packaged, but the inputs differ from the tracked lock; see status/takx57-lock.json"
     return 1
   fi
@@ -272,7 +290,7 @@ for target in "$@"; do
     package) do_package;;
     lock) do_lock;;
     all) do_prepare; do_runtime_jars; do_wait_kernel; do_compile; do_package; do_lock;;
-    -h|--help) sed -n '5,62p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0;;
+    -h|--help) sed -n '5,63p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0;;
     *) echo "client.sh: unknown target '$target'" >&2; exit 2;;
   esac
 done

@@ -23,6 +23,14 @@ Phases (each writes into one new directory and never edits a recipe or lock):
 Nothing here is the private Kernel 8.57.11, and nothing is qualified: the
 receipt label is 'Kernel 8.30.5 + project patches (texture, render-context),
 unqualified'. Run inside the takx-desktop-proto:toolchain image.
+
+Architecture (../arch.sh). On amd64 nothing below differs from the description
+above. On arm64 this file runs from the patched copy of the tree
+(../arch_tree.py), 'sources' additionally applies ../overrides/arm64/layout/
+*.patch to its copy of the native layout (the upstream engine CMakeLists.txt
+passes -msse3 on every Linux), the JAR is named for the architecture, and
+the receipts carry an 'architecture' record. The native directory inside the
+JAR stays libs/linux64: the stock loader selects it for any 64-bit os.arch.
 """
 import argparse
 import hashlib
@@ -104,6 +112,42 @@ def patch(directory, patch_file, log):
     run(['/usr/bin/patch', '--batch', '--fuzz=0', '--no-backup-if-mismatch', '-p1', '-d', directory, '-i', patch_file], log)
 
 
+def arch_names():
+    """The names of this architecture from ../arch.sh, the one table of the prototype."""
+    return json.loads(subprocess.check_output(['bash', str(HERE.parent / 'arch.sh'), 'json'], timeout=30))
+
+
+def architecture_record():
+    """None on amd64 (receipts keep their bytes); otherwise what was overridden to build here."""
+    names = arch_names()
+    if names['arch'] == 'amd64':
+        return None
+    record = {'arch': names['arch'], 'machine': os.uname().machine, 'validated': False,
+              'note': 'recipes under takx/ are validated on Linux x86_64 only; this build used the desktop-prototype '
+                      'architecture overrides and is unvalidated; receipt fields that say amd64 or x86_64 name '
+                      'locked profiles, not this build'}
+    marker = REPO / '.takx-arch-tree.json'
+    if marker.is_file():
+        tree = load(marker)
+        record['tree'] = {'path': str(REPO), 'base_repo': tree['base_repo'], 'fingerprint': tree['fingerprint'],
+                          'receipt_sha256': sha(marker),
+                          'patches': [{'patch': 'takx/desktop-prototype/overrides/%s/%s' % (tree['arch'], row['name']),
+                                       'sha256': row['sha256'], 'files': sorted(row['files'])} for row in tree['patches']]}
+    return record
+
+
+def layout_overrides(layout, log):
+    """Apply ../overrides/<arch>/layout/*.patch (fuzz 0) to the composed native layout; none exist for amd64."""
+    names = arch_names()
+    rows = []
+    for patch_file in sorted((HERE.parent / 'overrides' / names['arch'] / 'layout').glob('*.patch')):
+        patch(layout, patch_file, log)
+        rows.append({'patch': 'takx/desktop-prototype/overrides/%s/layout/%s' % (names['arch'], patch_file.name),
+                     'sha256': sha(patch_file), 'applied': True,
+                     'kind': 'architecture build-flag override of the composed native layout, not a Kernel source patch'})
+    return rows
+
+
 # ---------------------------------------------------------------- sources
 def phase_sources(args):
     out = fresh(args.output)
@@ -135,6 +179,7 @@ def phase_sources(args):
         else:
             row.update(applied=False, reason='a locked preimage differs on the composed layout; layer left out')
         layers.append(row)
+    arch_layers = layout_overrides(layout, log)
     record = {
         'label': LABEL, 'official_revision': REVISION, 'actual_kernel_version': '8.30.5',
         'producers': {name: sha(TAKX / name) for name in (
@@ -150,6 +195,9 @@ def phase_sources(args):
         'gles1_declarations': tree(out / 'native-src/gles1-declarations'),
     }
     record['java_images'] = {k: v for k, v in record['java_images'].items() if k.endswith('.java')}
+    if arch_layers:  # absent on amd64, whose record keeps its shape
+        record['architecture_layout_overrides'] = arch_layers
+        record['architecture'] = architecture_record()
     dump(out / 'composed-sources.json', record)
     print('sources: layout %d files, %d composed Java images, JNI layers applied: %s' % (
         record['layout_files'], len(record['java_images']), [r['recipe'] for r in layers if r['applied']]))
@@ -369,6 +417,7 @@ def phase_native(args):
     require(tree(out / 'layout') == composed['layout'], 'layout changed during the build')
     libs = {name: {'path': str(out / 'build' / rel), 'sha256': sha(out / 'build' / rel), 'bytes': (out / 'build' / rel).stat().st_size}
             for name, rel in (('libtakengine.so', 'kernel-cpp/libtakengine.so'), ('libtakenginejni.so', 'kernel-jni/libtakenginejni.so'))}
+    architecture = architecture_record()
     dump(out / 'composed-native.json', {
         'label': LABEL, 'official_revision': REVISION, 'composed_sources_sha256': sha(args.sources / 'composed-sources.json'),
         'composed_java_sha256': sha(args.java / 'composed-java.json'), 'cmake_parent': cmake_parent,
@@ -376,7 +425,8 @@ def phase_native(args):
         'providers_file': str(args.providers), 'providers': results, 'tools': identities, 'actual_toolchain': actual,
         'elf_audit': elf, 'libraries': libs, 'jobs': args.jobs, 'resumed': bool(args.resume),
         'seconds': round(time.time() - started, 1),
-        'kernel_native_recipe_build_py_used': False, 'runtime_acceptance': False, 'sdk_acceptance': False})
+        'kernel_native_recipe_build_py_used': False, 'runtime_acceptance': False, 'sdk_acceptance': False,
+        **({'architecture': architecture} if architecture else {})})
     print('native: %s; ELF audit passed; %s' % (counts, {k: v['sha256'][:12] for k, v in libs.items()}))
 
 
@@ -431,7 +481,8 @@ def phase_package(args):
     (out / 'native-resources.sha256').write_text(''.join(digest + ' ' + name + '\n' for name, digest in native_manifest.items()))
     package = out / 'package'
     package.mkdir()
-    artifact = package / 'kernel-8.30.5-linux-amd64-public-cpu.jar'
+    names = arch_names()
+    artifact = package / names['kernel_jar']
     sdk.jar_write(artifact, entries)
     third = package / 'third-party'
     third.mkdir()
@@ -459,6 +510,8 @@ def phase_package(args):
                  'applied': row['applied'], 'locked_preimage': row['locked_preimage'],
                  'locked_postimage': row['locked_postimage'], **({'reason': row['reason']} if 'reason' in row else {})}
                 for row in java['notes']['sdk_package_patches']]
+    patches += composed.get('architecture_layout_overrides', [])
+    architecture = architecture_record()
     receipt = {
         'label': LABEL, 'actual_kernel_version': '8.30.5', 'private_kernel_8_57_11': False, 'qualified': False,
         'source': {'repository': 'https://github.com/TAK-Product-Center/atak-civ', 'revision': REVISION},
@@ -487,6 +540,8 @@ def phase_package(args):
         'acceptance': {'runtime': False, 'renderer': False, 'sdk': False, 'client': False,
                        'note': 'controls are recorded separately in controls.json by kernel/controls.py'},
     }
+    if architecture:  # absent on amd64, whose receipt keeps its shape
+        receipt['architecture'] = architecture
     dump(out / 'receipt.json', receipt)
     print('package: %s sha256 %s (%d classes, %d natives, %d resources)' % (
         artifact, receipt['outputs']['jar']['sha256'], len(classes), len(natives), len(resources)))

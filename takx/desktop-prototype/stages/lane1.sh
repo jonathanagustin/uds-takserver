@@ -24,6 +24,14 @@
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Architecture hand-over (../arch.sh): on a host whose architecture has override
+# patches under ../overrides/<arch>/ (arm64) this script continues from the
+# patched copy of the tree; on amd64 it does nothing and the tracked recipes run.
+if [[ -f "${here}/../arch.sh" ]]; then
+  # shellcheck source=takx/desktop-prototype/arch.sh
+  . "${here}/../arch.sh"
+  takx_arch_enter "${BASH_SOURCE[0]}" "$@"
+fi
 repo="$(cd "$here/../../.." && pwd)"
 ROOT="${TAKX_PROTO_ROOT:-/var/lib/takx-proto}"
 run="$here/../run-in-toolchain.sh"

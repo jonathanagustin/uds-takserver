@@ -25,6 +25,11 @@ Steps (each writes P/takx57/<step>/ and P/takx57/receipts/<step>.json):
 The Kernel on the classpath is public Kernel 8.30.5 plus the project patches
 and CommonCommo is 1.17.2 patched. Nothing here turns them into the private
 Kernel 8.57.11 or CommonCommo 1.20.0 that TAKX 5.7 declares.
+
+Architecture (../arch.sh): the compile is the same on amd64 and arm64. Only
+the JDK identity differs: the specification lock pins the four files of the
+x64 Temurin 17.0.21+9; on arm64 the same four files of the aarch64 archive
+are pinned by ../inputs.arm64.lock.json.
 """
 import argparse
 import datetime
@@ -42,7 +47,10 @@ from pathlib import Path
 REVISION = '0b59a9bb2d0e90dc35c9edfff1c2056daab2b713'
 ROOT = Path(os.environ.get('TAKX_PROTO_ROOT', '/var/lib/takx-proto'))
 REPO = Path(os.environ.get('TAKX_PROTO_REPO', Path(__file__).resolve().parents[3]))
+PROTO = Path(__file__).resolve().parents[1]
 JDK = Path('/tools/temurin-17.0.21_9/jdk-17.0.21+9')
+JDK_PREFIX = 'tools:temurin-17.0.21_9/jdk-17.0.21+9/'
+JDK_FILES = ('bin/java', 'bin/javac', 'release', 'lib/modules')
 SPEC = REPO / 'takx/client-compiler'
 SRC = ROOT / 'src/takx57'
 OUT = ROOT / 'P/takx57'
@@ -187,11 +195,33 @@ class Step:
         print('%s ok in %ss' % (self.name, self.receipt['seconds']))
 
 
+def arch_names():
+    """The names of this architecture from ../arch.sh, the one table of the prototype."""
+    return json.loads(subprocess.check_output(['bash', str(PROTO / 'arch.sh'), 'json'], timeout=30))
+
+
+def jdk_pins():
+    """({file: sha256}, note) of the four JDK identity files for this architecture.
+
+    amd64: the specification lock, as before. Any other architecture: its own
+    pins in ../inputs.<arch>.lock.json; the x64 pins are never reused or edited.
+    """
+    arch = arch_names()['arch']
+    if arch == 'amd64':
+        files = client_lock()['files']
+        return {name: files[JDK_PREFIX + name] for name in JDK_FILES}, None
+    path = PROTO / ('inputs.%s.lock.json' % arch)
+    require(path.is_file(), 'no JDK pins for %s: %s is missing' % (arch, path))
+    own = load(path)['jdk_files']
+    require(own['prefix'] == JDK_PREFIX and set(own['files']) == set(JDK_FILES), 'malformed JDK pins in %s' % path)
+    return dict(own['files']), 'pinned by takx/desktop-prototype/%s (the specification lock pins the x64 JDK)' % path.name
+
+
 def jdk(step):
     """The pinned JDK identity: the four files the specification binds."""
-    files = client_lock()['files']
-    for name in ['bin/java', 'bin/javac', 'release', 'lib/modules']:
-        step.use('jdk', JDK / name, files['tools:temurin-17.0.21_9/jdk-17.0.21+9/' + name])
+    pins, note = jdk_pins()
+    for name in JDK_FILES:
+        step.use('jdk', JDK / name, pins[name], note)
     return JDK / 'bin/javac'
 
 
