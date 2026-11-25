@@ -72,6 +72,7 @@ jobs:
         id: plan
         env:
           REQUESTED: ${{ inputs.arches }}
+        shell: bash
         run: |
           set -euo pipefail
           python3 -I -B takx/desktop-prototype/ci/pipeline.py check
@@ -103,6 +104,7 @@ jobs:
           persist-credentials: false
 
       - name: Record runner capacity
+        shell: bash
         run: |
           set -euo pipefail
           uname -m
@@ -123,6 +125,7 @@ jobs:
         id: images
         env:
           ARCH: ${{ matrix.arch }}
+        shell: bash
         run: |
           set -euo pipefail
           takx/desktop-prototype/ci/images.sh "${ARCH}" > "${RUNNER_TEMP}/images.env"
@@ -189,6 +192,7 @@ jobs:
 
       - name: Summarize statuses
         if: always()
+        shell: bash
         run: |
           set -euo pipefail
           python3 -I -B takx/desktop-prototype/ci/pipeline.py summary "${TAKX_PROTO_ROOT}" >> "${GITHUB_STEP_SUMMARY}"
@@ -292,6 +296,7 @@ jobs:
 
       - name: Summarize statuses
         if: always()
+        shell: bash
         run: |
           set -euo pipefail
           python3 -I -B takx/desktop-prototype/ci/pipeline.py summary "${TAKX_PROTO_ROOT}" >> "${GITHUB_STEP_SUMMARY}"
@@ -299,6 +304,7 @@ jobs:
 
       - name: Collect receipts
         if: always()
+        shell: bash
         run: |
           set -euo pipefail
           sudo mkdir -p "${TAKX_PROTO_ROOT}/ci-receipts"

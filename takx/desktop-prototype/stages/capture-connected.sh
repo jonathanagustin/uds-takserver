@@ -212,6 +212,10 @@ do_record() {
   mark "CloudTAK: search box, type SYNTHETIC-TAKX-${n}, select the map feature, open its details"
   "${cloudtak}" find "SYNTHETIC-TAKX-${n}" 30 >"${dir}/cloudtak-find.json" 2>"${dir}/cloudtak-find.err" ||
     mark "CloudTAK: find FAILED (see cloudtak-find.err)"
+  if grep -q '"found":true' "${dir}/cloudtak-find.json" 2>/dev/null; then
+    mark_at "$(date -u -d "$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["listed_utc"])' "${dir}/cloudtak-find.json")" +%s.%N)" \
+      "CloudTAK: SYNTHETIC-TAKX-${n} is listed under MAP FEATURES"
+  fi
   sleep 3
   mark "CloudTAK: back to the overview, both markers on the map"
   "${cloudtak}" view -20 -20 3.2 >/dev/null
@@ -273,7 +277,9 @@ do_finish() {
     enc takx57-connected-cloudtak-clip-1-peer-marker-created.mp4 "$(browser "CloudTAK: Geometry Editing" 1.5)" 10
     enc takx57-connected-cloudtak-clip-2-peer-marker-broadcast.mp4 "$(browser "CloudTAK: Share > Broadcast" -6.5)" 9
     enc takx57-connected-cloudtak-clip-3-takx-marker-arrives.mp4 "$(browser "TAKX: Send As Cot: Broadcast" -1)" 10
-    enc takx57-connected-cloudtak-clip-4-takx-marker-found.mp4 "$(browser "CloudTAK: search box" 1)" 10
+    # The software-rendered page repaints up to about 4 s after the search
+    # result exists, so this clip is anchored on the result, not on the click.
+    enc takx57-connected-cloudtak-clip-4-takx-marker-found.mp4 "$(browser "CloudTAK: SYNTHETIC-TAKX" -3)" 10
     mkdir -p "$OUT/frames"; rm -f "$OUT"/frames/takx57-connected-*
     for f in "$OUT"/takx57-connected-*.mp4; do
       b="$(basename "$f" .mp4)"
@@ -290,7 +296,7 @@ do_finish() {
       done
     done
     { printf "# seconds (add %s for the position in the TAKX takes, %s in the CloudTAK takes)\tUTC\taction\n" "$TAKX_LEAD" "$CLOUDTAK_LEAD"
-      cat "$DIR/events.tsv"; } >"$OUT/takx57-connected-events.tsv"
+      sort -n "$DIR/events.tsv"; } >"$OUT/takx57-connected-events.tsv"
   '
   python3 -I - "${media}" "${dir}" "${attempt}" <<'PY'
 import glob, hashlib, json, os, re, sys
