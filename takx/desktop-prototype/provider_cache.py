@@ -25,8 +25,9 @@ Environment:
   TAKX_PROTO_CACHE_TIMEOUT seconds allowed for one docker command (3600)
 
 Exit status: 0 done, 3 cleanly skipped (cache off, not logged in, nothing
-cached under this key, provider not ok), 1 anything else. A restore that does
-not exit 0 has left nothing behind, so the caller builds instead.
+cached under this key, provider not ok, or already present and ok), 1 anything
+else. A restore that does not exit 0 has changed nothing, so the caller builds
+instead; a provider directory that exists is never overwritten.
 
 Layout (light hexagonal): the functions up to 'Adapters' are the pure core
 (no I/O); WorkTree and DockerRegistry are the adapters behind two small
@@ -909,6 +910,8 @@ class ProviderCache:
             raise CacheError('unknown provider ' + name)
         if not self.enabled:
             raise Skip('cache is off')
+        if self.tree.status_of(name) == 'ok' and self.tree.marker_sha256(name, entry['marker']):
+            raise Skip('already present and ok here')
         markers = self._markers(name)
         action, reason = decide_restore(True, self.tree.has_directory(name), markers is not None, 'present')
         if action == 'skip':

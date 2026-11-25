@@ -556,10 +556,17 @@ class PushAndRestore(ServiceCase):
         self.assertEqual(self.leftovers(), [])
 
     def test_restore_never_overwrites_an_existing_directory(self):
-        self.make('base')
+        top = self.make('base')
         self.service.push('base')
-        with self.assertRaises(PC.CacheError):
+        before = PC.WorkTree.entries(top)
+        with self.assertRaises(PC.Skip):  # present and ok: nothing to do
             self.service.restore('base')
+        self.write_json('status/base.json', {'stage': 'base', 'status': 'failed'})
+        with self.assertRaises(PC.CacheError):  # present and not ok: the lane sets it aside
+            self.service.restore('base')
+        self.assertEqual(PC.WorkTree.entries(top), before)
+        self.assertEqual(json.loads((self.root / 'status/base.json').read_text())['status'], 'failed')
+        self.write_json('status/base.json', {'stage': 'base', 'status': 'ok'})
         self.set_aside('base')
         (self.root / 'P/base').mkdir()
         with self.assertRaises(PC.CacheError):
@@ -806,7 +813,10 @@ class CommandLine(ServiceCase):
         self.assertEqual(self.run_cli('push', 'base')[0], 3)
         self.make('base')
         self.assertEqual(self.run_cli('push', 'base')[0], 0)
+        self.assertEqual(self.run_cli('restore', 'base')[0], 3)
+        os.unlink(self.root / 'status/base.json')
         self.assertEqual(self.run_cli('restore', 'base')[0], 1)
+        self.write_json('status/base.json', {'stage': 'base', 'status': 'ok'})
         self.set_aside('base')
         self.assertEqual(self.run_cli('restore', 'base')[0], 0)
         self.assertEqual(self.run_cli('push')[0], 3)
