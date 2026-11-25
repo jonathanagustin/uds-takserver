@@ -1,0 +1,28 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype architecture override for takx/kernel-native (Linux arm64).
+# Never applied to the tracked recipe: arch_tree.py applies it, with fuzz 0, to
+# the copy of the tree under <work root>/overrides/arm64/tree, and only on an
+# arm64 host. On amd64 the unmodified recipe is used. The patched recipe still
+# accepts x86_64 unless a line below says otherwise, so its offline tests run
+# on either machine. Nothing here is validated or qualified on arm64.
+#
+# Why:
+# audit.py (used by desktop-prototype/kernel/compose.py for the ELF audit of
+# libtakengine.so and libtakenginejni.so) allows only the x86_64 dynamic
+# loader among the system DT_NEEDED names. build.py and toolchain.py also
+# carry x86_64 checks but are not on the composed path (only the optional
+# kernel-baseline target runs build.py); they are left alone, so
+# kernel-baseline stays amd64-only.
+--- a/takx/kernel-native/audit.py
++++ b/takx/kernel-native/audit.py
+@@ -6,7 +6,7 @@
+ import re
+ import providers as p
+ HERE=Path(__file__).resolve().parent
+-SYSTEM=re.compile(r'^(lib(c|m|dl|pthread|rt|stdc\+\+|gcc_s)\.so(?:\..*)?|ld-linux-x86-64\.so\.2)$')
++SYSTEM=re.compile(r'^(lib(c|m|dl|pthread|rt|stdc\+\+|gcc_s)\.so(?:\..*)?|ld-linux-x86-64\.so\.2|ld-linux-aarch64\.so\.1)$')
+ def symbols(text):
+     exports=set();imports=set();all_names=set()
+     for line in text.splitlines():

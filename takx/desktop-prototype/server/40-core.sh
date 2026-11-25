@@ -39,10 +39,11 @@ trap 'kill "${patcher}" 2>/dev/null || true' EXIT
 out="${WORK}/core-bundle"
 mkdir -p "${out}"
 cd "${WORK}"
-bundle="$(ls "${out}"/uds-bundle-takx-proto-core-amd64-*.tar.zst 2>/dev/null | head -1 || true)"
+pattern="${out}/uds-bundle-takx-proto-core-amd64-*.tar.zst"
+bundle="$(compgen -G "${pattern}" | head -1 || true)"
 if [ -z "${bundle}" ]; then
   "${UDS}" create "${here}/core" --confirm --no-color --output "${out}"
-  bundle="$(ls "${out}"/uds-bundle-takx-proto-core-amd64-*.tar.zst | head -1)"
+  bundle="$(compgen -G "${pattern}" | head -1)"
 fi
 "${UDS}" deploy "${bundle}" --confirm --no-color "$@"
 kubectl get pods -A

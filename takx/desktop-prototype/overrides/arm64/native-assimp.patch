@@ -1,0 +1,27 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype architecture override for takx/native-assimp (Linux arm64).
+# Never applied to the tracked recipe: arch_tree.py applies it, with fuzz 0, to
+# the copy of the tree under <work root>/overrides/arm64/tree, and only on an
+# arm64 host. On amd64 the unmodified recipe is used. The patched recipe still
+# accepts x86_64 unless a line below says otherwise, so its offline tests run
+# on either machine. Nothing here is validated or qualified on arm64.
+#
+# Why:
+# main() refuses every machine but x86_64; nothing else is architecture-specific.
+# The x64 Temurin asset in inputs.lock.json is informational: the recipe
+# checks the version strings of the JDK it is given and fingerprints it.
+--- a/takx/native-assimp/build.py
++++ b/takx/native-assimp/build.py
+@@ -235,8 +235,8 @@
+         parser.add_argument('--' + name, default=default)
+     parser.add_argument('--fetch-dependencies', action='store_true')
+     args = parser.parse_args()
+-    if (platform.system(), platform.machine()) != ('Linux', 'x86_64'):
+-        raise ValueError('only Linux amd64 is validated')
++    if platform.system() != 'Linux' or platform.machine() not in ('x86_64', 'aarch64'):
++        raise ValueError('only Linux amd64 is validated (arm64: desktop-prototype override, unvalidated)')
+     lock = json.loads((HERE / 'inputs.lock.json').read_text())
+     validate_lock(lock)
+     start_recipe = recipe()

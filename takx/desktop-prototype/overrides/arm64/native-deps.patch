@@ -1,0 +1,28 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype architecture override for takx/native-deps (Linux arm64).
+# Never applied to the tracked recipe: arch_tree.py applies it, with fuzz 0, to
+# the copy of the tree under <work root>/overrides/arm64/tree, and only on an
+# arm64 host. On amd64 the unmodified recipe is used. The patched recipe still
+# accepts x86_64 unless a line below says otherwise, so its offline tests run
+# on either machine. Nothing here is validated or qualified on arm64.
+#
+# Why:
+# main() refuses every machine but x86_64. The Draco/tinygltf/Khronos build
+# itself is plain CMake with no architecture flag. The lock label
+# "platform": "Linux-x86_64" is left alone (it names the validated profile,
+# and validate_lock() requires it); it is not the build architecture.
+--- a/takx/native-deps/build.py
++++ b/takx/native-deps/build.py
+@@ -312,8 +312,8 @@
+     parser.add_argument('--jobs', type=int, choices=(1, 2), default=1)
+     parser.add_argument('--fetch-dependencies', action='store_true')
+     args = parser.parse_args()
+-    if platform.system() != 'Linux' or platform.machine() != 'x86_64':
+-        raise ValueError('only native Linux x86_64 has a validated profile')
++    if platform.system() != 'Linux' or platform.machine() not in ('x86_64', 'aarch64'):
++        raise ValueError('only native Linux x86_64 has a validated profile (aarch64: desktop-prototype override, unvalidated)')
+     lock = json.loads((HERE / 'inputs.lock.json').read_text())
+     validate_lock(lock)
+     output, cache = external(args.output), external(args.cache)

@@ -1,0 +1,55 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype architecture override for takx/native-gles (Linux arm64).
+# Never applied to the tracked recipe: arch_tree.py applies it, with fuzz 0, to
+# the copy of the tree under <work root>/overrides/arm64/tree, and only on an
+# arm64 host. On amd64 the unmodified recipe is used. The patched recipe still
+# accepts x86_64 unless a line below says otherwise, so its offline tests run
+# on either machine. Nothing here is validated or qualified on arm64.
+#
+# Why:
+# main() refuses every machine but x86_64, and the Mesa vendor library, the
+# software rasterizer and the allowed runtime-provider directory are named
+# under /usr/lib/x86_64-linux-gnu. Debian puts them under
+# /usr/lib/<uname -m>-linux-gnu on both machines. The lock profile string
+# "real-glvnd-surfaceless-es3-linux-amd64" is left alone (LOCK_SHA binds the
+# lock); in a receipt it names the locked profile, not the build architecture.
+--- a/takx/native-gles/build.py
++++ b/takx/native-gles/build.py
+@@ -100,7 +100,7 @@
+         p=Path(line)
+         if not p.is_absolute() or not p.is_file():raise ValueError('non-file runtime provider')
+         p=p.resolve()
+-        if not (p.is_relative_to(prefix.resolve()) or p.is_relative_to(Path('/usr/lib/x86_64-linux-gnu'))):
++        if not (p.is_relative_to(prefix.resolve()) or p.is_relative_to(Path('/usr/lib/'+platform.machine()+'-linux-gnu'))):
+             raise ValueError('unreviewed runtime provider directory')
+         found[str(p)]={'sha256':native.digest(p),'bytes':p.stat().st_size}
+     for name in ('libEGL.so.1.1.0','libGLESv2.so.2.1.0','libGLdispatch.so.0.0.0'):
+@@ -115,7 +115,7 @@
+     for name in ('output','cache','headers'):p.add_argument('--'+name,type=Path,required=True)
+     p.add_argument('--ninja',type=Path,default=Path('/workspace/takx-native-tools/venv/bin/ninja'))
+     p.add_argument('--fetch-dependencies',action='store_true');args=p.parse_args()
+-    if (platform.system(),platform.machine())!=('Linux','x86_64'):raise ValueError('Linux amd64 host profile only')
++    if platform.system()!='Linux' or platform.machine() not in ('x86_64','aarch64'):raise ValueError('Linux amd64 host profile only (arm64: desktop-prototype override, unvalidated)')
+     lock=json.loads((HERE/'inputs.lock.json').read_text());validate_lock(lock);initial=recipe()
+     output,cache=native.external(args.output),native.external(args.cache)
+     if output.exists() or output==cache or output in cache.parents or cache in output.parents:raise ValueError('new separate output required')
+@@ -144,7 +144,7 @@
+         dst=include/h['destination'];dst.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(src,dst);headers[h['destination']]=native.digest(dst)
+     vendor=Path('/usr/share/glvnd/egl_vendor.d/50_mesa.json');vendor_data=json.loads(vendor.read_text())
+     if vendor_data!={'file_format_version':'1.0.0','ICD':{'library_path':'libEGL_mesa.so.0'}}:raise ValueError('unexpected Mesa EGL vendor contract')
+-    mesa=Path('/usr/lib/x86_64-linux-gnu/libEGL_mesa.so.0').resolve();dri=Path('/usr/lib/x86_64-linux-gnu/dri/swrast_dri.so').resolve()
++    multiarch='/usr/lib/'+platform.machine()+'-linux-gnu';mesa=Path(multiarch+'/libEGL_mesa.so.0').resolve();dri=Path(multiarch+'/dri/swrast_dri.so').resolve()
+     host={str(x):native.digest(x) for x in (vendor,mesa,dri)}
+     archive=native.acquire(cache,lock['source'],args.fetch_dependencies);wheel=native.acquire(cache,lock['meson'],args.fetch_dependencies)
+     sources=output/'source';sources.mkdir();source_before=source_unpack(archive,sources,lock['source'],lock['source_links'])
+@@ -162,7 +162,7 @@
+     run([python,'-m','mesonbuild.mesonmain','install','-C',build,'--no-rebuild'],'source-install',60,extra=menv)
+     ownvendor=output/'mesa-vendor.json';ownvendor.write_text(json.dumps({'file_format_version':'1.0.0','ICD':{'library_path':str(mesa)}})+'\n')
+     probe=output/'surfaceless-es3';run([cc,'-std=c11','-O1','-I'+str(include),HERE/'SurfacelessES3.c',prefix/'lib/libEGL.so.1',prefix/'lib/libGLESv2.so.2','-ldl','-Wl,-rpath,'+str(prefix/'lib'),'-o',probe],'probe-compile')
+-    runtimeenv={'LD_LIBRARY_PATH':str(prefix/'lib'),'__EGL_VENDOR_LIBRARY_FILENAMES':str(ownvendor),'LIBGL_DRIVERS_PATH':'/usr/lib/x86_64-linux-gnu/dri','LIBGL_ALWAYS_SOFTWARE':'1','GALLIUM_DRIVER':'llvmpipe','EGL_PLATFORM':'surfaceless'}
++    runtimeenv={'LD_LIBRARY_PATH':str(prefix/'lib'),'__EGL_VENDOR_LIBRARY_FILENAMES':str(ownvendor),'LIBGL_DRIVERS_PATH':multiarch+'/dri','LIBGL_ALWAYS_SOFTWARE':'1','GALLIUM_DRIVER':'llvmpipe','EGL_PLATFORM':'surfaceless'}
+     text=run([probe],'real-es3-control',30,True,runtimeenv)
+     if text.splitlines().count('real_surfaceless_es3_clear_readback=true')!=1:raise ValueError('actual ES3 control incomplete')
+     runtime=providers(text,prefix)

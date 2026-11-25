@@ -26,6 +26,7 @@ TAK_PACKAGE_VERSION="${TAK_PACKAGE_VERSION:-1.4.0-upstream}"
 # 10/8, which the session NO_PROXY already bypasses, and outside the k3s pod
 # (10.42/16) and Service (10.43/16) ranges.
 LB_POOL="${LB_POOL:-10.44.0.10-10.44.0.19}"
+# shellcheck disable=SC2034  # used by the scripts that source this file
 UDS="${TOOLS}/uds-${UDS_VERSION}/uds"
 PATH="${TOOLS}/uds-${UDS_VERSION}:${PATH}"
 

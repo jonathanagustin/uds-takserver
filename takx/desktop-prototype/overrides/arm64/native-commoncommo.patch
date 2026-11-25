@@ -1,0 +1,96 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype architecture override for takx/native-commoncommo (Linux arm64).
+# Never applied to the tracked recipe: arch_tree.py applies it, with fuzz 0, to
+# the copy of the tree under <work root>/overrides/arm64/tree, and only on an
+# arm64 host. On amd64 the unmodified recipe is used. The patched recipe still
+# accepts x86_64 unless a line below says otherwise, so its offline tests run
+# on either machine. Nothing here is validated or qualified on arm64.
+#
+# Why:
+# main() refuses every machine but x86_64, the JNI closure allows only the
+# x86_64 dynamic loader, and the make target label is linux-amd64 (the
+# upstream Makefile only tests for the substring "linux").
+#
+# Debian tool pins: the recipe verifies its ant and dos2unix packages against
+# the Packages index of one architecture, bound by the pinned, signed
+# InRelease (sha256 0584fba3..., Debian 13.7). The arm64 build gets its own
+# pins from the SAME InRelease; the amd64 pins in the tracked lock are not
+# touched:
+#   main/binary-arm64/Packages.xz  sha256 be16b37b2f740f066ea93d35d56f04f94d63693e5a3eb421b052bf86fae75bcd
+#                                  9614192 bytes (the InRelease line for that file)
+#   dos2unix 7.5.2-1+b1 arm64      pool/main/d/dos2unix/dos2unix_7.5.2-1+b1_arm64.deb
+#                                  sha256 94b7d3e4327d36f64d498bb0bc7be3a142adc68308679cd3708923fdfe4e0e5e
+#                                  515556 bytes (its record in that index; a binNMU, so not 7.5.2-1)
+#   ant 1.10.15-1 all              unchanged: the arm64 index holds the identical record
+# Source: https://snapshot.debian.org/archive/debian/20260912T143000Z/ (same
+# paths as deb.debian.org; downloaded and hashed on 2026-11-25). The same
+# values are recorded in takx/desktop-prototype/inputs.arm64.lock.json. With
+# this lock the patched recipe verifies arm64 tools only.
+--- a/takx/native-commoncommo/build.py
++++ b/takx/native-commoncommo/build.py
+@@ -86,7 +86,7 @@
+     # Debian archive keyring is an explicit trusted host prerequisite, never fetched from the package being verified.
+     subprocess.run(['/usr/bin/gpg','--batch','--no-options','--no-default-keyring','--keyring','/usr/share/keyrings/debian-archive-keyring.gpg',
+                     '--homedir',str(metadata),'--verify',str(metadata/'InRelease')],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True,timeout=20)
+-    if f"{LOCK['tools']['packages_sha256']}  {LOCK['tools']['packages_bytes']} main/binary-amd64/Packages.xz" not in (metadata/'InRelease').read_text():
++    if f"{LOCK['tools']['packages_sha256']}  {LOCK['tools']['packages_bytes']} main/binary-arm64/Packages.xz" not in (metadata/'InRelease').read_text():
+         raise ValueError('index is not bound by signed release metadata')
+     entries={};entry={}
+     with lzma.open(metadata/'Packages.xz','rt') as stream:
+@@ -134,7 +134,7 @@
+     return sorted(public)
+ 
+ def runtime_closure(text):
+-    allowed={'libc.so.6','libm.so.6','libdl.so.2','libpthread.so.0','ld-linux-x86-64.so.2','libstdc++.so.6','libgcc_s.so.1'}
++    allowed={'libc.so.6','libm.so.6','libdl.so.2','libpthread.so.0','ld-linux-x86-64.so.2','ld-linux-aarch64.so.1','libstdc++.so.6','libgcc_s.so.1'}
+     result={}
+     for line in text.splitlines():
+         if not line.strip() or 'linux-vdso.so.1' in line:continue
+@@ -200,7 +200,7 @@
+     p=argparse.ArgumentParser(description=__doc__)
+     for n in ['output','cache','source','spatial-proof','zlib-proof','quictls-proof','tools-root','tool-metadata','java-home']:p.add_argument('--'+n,type=Path,required=True)
+     p.add_argument('--fetch-dependencies',action='store_true');a=p.parse_args()
+-    if (platform.system(),platform.machine())!=('Linux','x86_64'):raise ValueError('Linux amd64 only')
++    if platform.system()!='Linux' or platform.machine() not in ('x86_64','aarch64'):raise ValueError('Linux amd64 only (arm64: desktop-prototype override, unvalidated)')
+     signal.signal(signal.SIGALRM,hard_deadline);signal.alarm(1800)
+     for path in vars(a).values():
+         if isinstance(path,Path) and (not path.is_absolute() or any(c.isspace() for c in str(path))):raise ValueError('upstream Make requires absolute paths without whitespace')
+@@ -291,7 +291,7 @@
+         ant_config_guard();run(['ant','-Dnative-init=internal','jar'],'commoncommo-java',cc/'jni',90)
+         exportmap=output/'jni-exports.map';exportmap.write_text('{ global: JNI_OnLoad; JNI_OnUnload; Java_com_atakmap_commoncommo_*; local: *; };\n')
+         link='-shared -Wl,--hash-style=both -Wl,--no-undefined -Wl,--exclude-libs,ALL -Wl,--version-script='+str(exportmap)
+-        ant_config_guard();run(core+['TARGET=linux-amd64','LINK_FLAGS='+link],'commoncommo-jni',cc/'jni/native',180)
++        ant_config_guard();run(core+['TARGET=linux-'+{'x86_64':'amd64','aarch64':'arm64'}[platform.machine()],'LINK_FLAGS='+link],'commoncommo-jni',cc/'jni/native',180)
+         shutil.copy2(cc/'jni/native/libcommoncommojni.so',prefix/'lib/libcommoncommojni.so');(prefix/'java').mkdir();shutil.copy2(cc/'jni/jcommoncommo.jar',prefix/'java/jcommoncommo.jar')
+         symbolset=set()
+         for name in ['libssl.a','libcrypto.a']:
+--- a/takx/native-commoncommo/inputs.lock.json
++++ b/takx/native-commoncommo/inputs.lock.json
+@@ -113,8 +113,8 @@
+   "tools": {
+     "metadata_url": "https://deb.debian.org/debian/dists/trixie/InRelease",
+     "inrelease_sha256": "0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675",
+-    "packages_sha256": "7778d3e3f303b7ddb8ce0fe7c8d57473a076c6bf2e8f241f75421d2396352498",
+-    "packages_bytes": 9678380,
++    "packages_sha256": "be16b37b2f740f066ea93d35d56f04f94d63693e5a3eb421b052bf86fae75bcd",
++    "packages_bytes": 9614192,
+     "packages": [
+       {
+         "Package": "ant",
+@@ -125,10 +125,10 @@
+       },
+       {
+         "Package": "dos2unix",
+-        "Version": "7.5.2-1",
+-        "Filename": "pool/main/d/dos2unix/dos2unix_7.5.2-1_amd64.deb",
+-        "Size": "517828",
+-        "SHA256": "866c335c3374c8010a0a01df5b22560bbc3c80cd62f5c17d4bb85fc355dcd0d9"
++        "Version": "7.5.2-1+b1",
++        "Filename": "pool/main/d/dos2unix/dos2unix_7.5.2-1+b1_arm64.deb",
++        "Size": "515556",
++        "SHA256": "94b7d3e4327d36f64d498bb0bc7be3a142adc68308679cd3708923fdfe4e0e5e"
+       }
+     ]
+   },

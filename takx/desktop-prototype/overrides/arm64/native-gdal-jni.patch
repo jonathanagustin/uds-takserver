@@ -1,0 +1,37 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype architecture override for takx/native-gdal-jni (Linux arm64).
+# Never applied to the tracked recipe: arch_tree.py applies it, with fuzz 0, to
+# the copy of the tree under <work root>/overrides/arm64/tree, and only on an
+# arm64 host. On amd64 the unmodified recipe is used. The patched recipe still
+# accepts x86_64 unless a line below says otherwise, so its offline tests run
+# on either machine. Nothing here is validated or qualified on arm64.
+#
+# Why:
+# The DT_NEEDED allow-list names only the x86_64 dynamic loader (aarch64
+# shared objects commonly list ld-linux-aarch64.so.1 as NEEDED), and the
+# system runtime files are bound from /usr/lib/x86_64-linux-gnu, which does
+# not exist on aarch64, so nothing would be bound there.
+--- a/takx/native-gdal-jni/build.py
++++ b/takx/native-gdal-jni/build.py
+@@ -40,7 +40,7 @@
+     if 'TEXTREL' in text:raise ValueError('ELF text relocations')
+     import re
+     needed=re.findall(r'\(NEEDED\).*?\[(.*?)\]',text)
+-    allowed={'libstdc++.so.6','libm.so.6','libgcc_s.so.1','libc.so.6','ld-linux-x86-64.so.2'}
++    allowed={'libstdc++.so.6','libm.so.6','libgcc_s.so.1','libc.so.6','ld-linux-x86-64.so.2','ld-linux-aarch64.so.1'}
+     if path.name=='libgdalalljni.so':allowed.add('libgdal.so')
+     if not needed or not set(needed)<=allowed:raise ValueError('unexpected ELF dependency')
+     if path.name=='libgdalalljni.so' and 'libgdal.so' not in needed:raise ValueError('shared provider dependency absent')
+@@ -176,8 +176,8 @@
+             if item.is_file():
+                 with item.open('rb') as stream:magic=stream.read(4)
+                 if magic==b'\x7fELF':runtime_before[str(item.resolve())]=b.native.digest(item)
+-        for name in ('libc.so.6','libm.so.6','libstdc++.so.6','libgcc_s.so.1','libpthread.so.0','libdl.so.2','librt.so.1','ld-linux-x86-64.so.2'):
+-            item=Path('/usr/lib/x86_64-linux-gnu')/name
++        for name in ('libc.so.6','libm.so.6','libstdc++.so.6','libgcc_s.so.1','libpthread.so.0','libdl.so.2','librt.so.1','ld-linux-x86-64.so.2','ld-linux-aarch64.so.1'):
++            item=Path('/usr/lib/'+os.uname().machine+'-linux-gnu')/name
+             if item.exists():runtime_before[str(item.resolve())]=b.native.digest(item)
+         bound_files.update(runtime_before)
+         (out/'tools.json').write_text(json.dumps(tools,indent=2)+'\n')

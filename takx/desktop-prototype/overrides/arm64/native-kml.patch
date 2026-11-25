@@ -1,0 +1,23 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype architecture override for takx/native-kml (Linux arm64).
+# Never applied to the tracked recipe: arch_tree.py applies it, with fuzz 0, to
+# the copy of the tree under <work root>/overrides/arm64/tree, and only on an
+# arm64 host. On amd64 the unmodified recipe is used. The patched recipe still
+# accepts x86_64 unless a line below says otherwise, so its offline tests run
+# on either machine. Nothing here is validated or qualified on arm64.
+#
+# Why:
+# The runtime-provider check allows only the x86_64 dynamic loader name.
+--- a/takx/native-kml/build.py
++++ b/takx/native-kml/build.py
+@@ -204,7 +204,7 @@
+         text=run([probe,out],'probe',20,True)
+         if not text.startswith(b'kml_dom_coordinates_kmz_uri_negative_controls=true\n'):raise ValueError('actual KML controls missing')
+         providers_loaded={line[9:] for line in text.decode().splitlines() if line.startswith('provider=')}
+-        allowed=re.compile(r'^(?:libc|libm|libpthread|libdl|librt|libstdc\+\+|libgcc_s)\.so(?:\..*)?$|^ld-linux-x86-64\.so\.2$')
++        allowed=re.compile(r'^(?:libc|libm|libpthread|libdl|librt|libstdc\+\+|libgcc_s)\.so(?:\..*)?$|^ld-linux-(?:x86-64\.so\.2|aarch64\.so\.1)$')
+         if str(shared) not in providers_loaded or any(Path(x)!=shared and not allowed.fullmatch(Path(x).name) for x in providers_loaded):raise ValueError('unexpected runtime provider')
+         if inventory(kml)!=post['libkml'] or inventory(expat)!=post['expat']:raise ValueError('vendor source changed')
+         if recipe()!=initial or any(native.digest(Path(tool['path']))!=tool['sha256'] for tool in tools.values()):raise ValueError('recipe or tools changed')

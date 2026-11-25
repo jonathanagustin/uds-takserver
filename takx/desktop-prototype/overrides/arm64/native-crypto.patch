@@ -1,0 +1,33 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype architecture override for takx/native-crypto (Linux arm64).
+# Never applied to the tracked recipe: arch_tree.py applies it, with fuzz 0, to
+# the copy of the tree under <work root>/overrides/arm64/tree, and only on an
+# arm64 host. On amd64 the unmodified recipe is used. The patched recipe still
+# accepts x86_64 unless a line below says otherwise, so its offline tests run
+# on either machine. Nothing here is validated or qualified on arm64.
+#
+# Why:
+# main() refuses every machine but x86_64 and quictls 3.0.14 is configured
+# for the fixed target linux-x86_64 (linux-aarch64 on aarch64).
+--- a/takx/native-crypto/build.py
++++ b/takx/native-crypto/build.py
+@@ -79,7 +79,7 @@
+     if exported!=set(expected):raise ValueError('owned experiment exports differ: '+repr(exported))
+ def main():
+     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True);p.add_argument('--cache',type=Path,required=True);p.add_argument('--modern-proof',type=Path,required=True);p.add_argument('--fetch-dependencies',action='store_true');a=p.parse_args()
+-    if (platform.system(),platform.machine())!=('Linux','x86_64'):raise ValueError('Linux amd64 only')
++    if platform.system()!='Linux' or platform.machine() not in ('x86_64','aarch64'):raise ValueError('Linux amd64 only (arm64: desktop-prototype override, unvalidated)')
+     validate_lock(LOCK);initial=recipe();modern=native.external(a.modern_proof);mr,msha=reused(modern)
+     output,cache=sql.validate_paths(a.output,a.cache)
+     if any(r==modern or r in modern.parents or modern in r.parents for r in [output,cache]):raise ValueError('modern input must be separate')
+@@ -107,7 +107,7 @@
+         if native.digest(src/LOCK['license']['source'])!=LOCK['license']['sha256']:raise ValueError('license differs')
+         (output/'sources.json').write_text(json.dumps(expected,sort_keys=True)+'\n')
+         build=output/'quictls-build';build.mkdir();prefix=output/'quictls-install'
+-        run([tools['perl']['path'],src/'Configure','linux-x86_64','no-shared','no-tests','no-module','--prefix='+str(prefix),'--libdir=lib','-O2','-fPIC'],'quictls-configure',build,90)
++        run([tools['perl']['path'],src/'Configure','linux-'+platform.machine(),'no-shared','no-tests','no-module','--prefix='+str(prefix),'--libdir=lib','-O2','-fPIC'],'quictls-configure',build,90)
+         run([tools['make']['path'],'-j1','build_libs'],'quictls-build',build,1000)
+         run([tools['make']['path'],'-j1','install_dev'],'quictls-install',build,90)
+         installed=native.inventory(prefix);sql.check_sources(source,expected)

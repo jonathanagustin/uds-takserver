@@ -1,0 +1,25 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype architecture override for takx/native-mdbtools (Linux arm64).
+# Never applied to the tracked recipe: arch_tree.py applies it, with fuzz 0, to
+# the copy of the tree under <work root>/overrides/arm64/tree, and only on an
+# arm64 host. On amd64 the unmodified recipe is used. The patched recipe still
+# accepts x86_64 unless a line below says otherwise, so its offline tests run
+# on either machine. Nothing here is validated or qualified on arm64.
+#
+# Why:
+# main() refuses every machine but x86_64; nothing else is architecture-specific.
+--- a/takx/native-mdbtools/build.py
++++ b/takx/native-mdbtools/build.py
+@@ -116,8 +116,8 @@
+     parser.add_argument('--with-upstream-fixture', action='store_true',
+                         help='explicit private use of Internet-sourced upstream Northwind test data')
+     args = parser.parse_args()
+-    if (platform.system(), platform.machine()) != ('Linux', 'x86_64'):
+-        raise ValueError('only Linux amd64 historical component profile validated')
++    if platform.system() != 'Linux' or platform.machine() not in ('x86_64', 'aarch64'):
++        raise ValueError('only Linux amd64 historical component profile validated (arm64: desktop-prototype override, unvalidated)')
+     if not args.with_upstream_fixture:
+         raise ValueError('explicit --with-upstream-fixture required for private data controls')
+     lock = json.loads((HERE / 'inputs.lock.json').read_text())

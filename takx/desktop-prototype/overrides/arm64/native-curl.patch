@@ -1,0 +1,23 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype architecture override for takx/native-curl (Linux arm64).
+# Never applied to the tracked recipe: arch_tree.py applies it, with fuzz 0, to
+# the copy of the tree under <work root>/overrides/arm64/tree, and only on an
+# arm64 host. On amd64 the unmodified recipe is used. The patched recipe still
+# accepts x86_64 unless a line below says otherwise, so its offline tests run
+# on either machine. Nothing here is validated or qualified on arm64.
+#
+# Why:
+# The runtime-provider check allows only the x86_64 dynamic loader name.
+--- a/takx/native-curl/build.py
++++ b/takx/native-curl/build.py
+@@ -160,7 +160,7 @@
+         run([tools['gcc']['path'],'-DCURL_STATICLIB','-I'+str(prefix/'include'),HERE/'CurlProbe.c',shared,'-Wl,-rpath,'+str(out),'-ldl','-o',probe],'probe-compile')
+         text=run([probe],'probe',True).decode()
+         if not text.startswith('curl_8.23.0_escape_free_backend_feature_controls=true\n'):raise ValueError('Curl actual controls incomplete')
+-        loaded={line[9:] for line in text.splitlines() if line.startswith('provider=')};allowed=re.compile(r'^(?:libc|libm|libdl|libpthread|librt)\.so(?:\..*)?$|^ld-linux-x86-64\.so\.2$')
++        loaded={line[9:] for line in text.splitlines() if line.startswith('provider=')};allowed=re.compile(r'^(?:libc|libm|libdl|libpthread|librt)\.so(?:\..*)?$|^ld-linux-(?:x86-64\.so\.2|aarch64\.so\.1)$')
+         if str(shared) not in loaded or any(x!=str(shared) and not allowed.fullmatch(Path(x).name) for x in loaded):raise ValueError('foreign runtime provider')
+         if initial!=recipe() or inventory(source)!=post or providers(args.openssl_proof,args.zlib_proof)!=provider or any(native.digest(Path(t['path']))!=t['sha256'] for t in tools.values()):raise ValueError('recipe/source/provider/tool changed')
+         data={'schema_version':1,'profile':'public-core-curl','version':lock['version'],'openssl_version':'3.5.9','zlib_version':'1.3.1','recipe':initial,'tools':tools,'providers':provider,'flags':flags,'source_inventory_sha256':lock['source_inventory_sha256'],'installed':inventory(prefix),'objects':inventory(out/'build'),'strict_whole_archive_pic':True,'hidden_crypto_symbol_union':len(symbols),'escape_free_backend_feature_controls':True,'network_transfer_acceptance':False,'full_kernel_sdk_acceptance':False,'loaded_providers':sorted(loaded),'shared':{'bytes':shared.stat().st_size,'sha256':native.digest(shared)},'probe_sha256':native.digest(probe)}

@@ -12,10 +12,11 @@ here="$(cd "$(dirname "$0")" && pwd)"
 out="${WORK}/tak-bundle"
 mkdir -p "${out}"
 cd "${WORK}"
-bundle="$(ls "${out}"/uds-bundle-takx-proto-tak-amd64-*.tar.zst 2>/dev/null | head -1 || true)"
+pattern="${out}/uds-bundle-takx-proto-tak-amd64-*.tar.zst"
+bundle="$(compgen -G "${pattern}" | head -1 || true)"
 if [ -z "${bundle}" ]; then
   "${UDS}" create "${here}/tak" --confirm --no-color --output "${out}"
-  bundle="$(ls "${out}"/uds-bundle-takx-proto-tak-amd64-*.tar.zst | head -1)"
+  bundle="$(compgen -G "${pattern}" | head -1)"
 fi
 "${UDS}" deploy "${bundle}" --confirm --no-color "$@"
 kubectl get pods -n takserver

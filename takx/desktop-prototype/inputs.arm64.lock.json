@@ -1,0 +1,113 @@
+{
+ "copyright": "# Copyright 2026 uds-takserver authors",
+ "license": "# SPDX-License-Identifier: GPL-3.0-only",
+ "description": [
+  "Pins of the inputs the desktop prototype needs on Linux arm64 (aarch64) in",
+  "place of an amd64 input. Every entry is a NEW pin with its own source; no",
+  "amd64 pin of any recipe lock was changed to make it. Each file was downloaded",
+  "from the URL below and hashed on 2026-11-25 (see 'verified').",
+  "Consumers: Dockerfile (the ARG defaults must equal 'toolchain'; test_arch.py",
+  "checks that), client/build.py ('jdk_files'), fetch_inputs.py",
+  "('runtime_natives'), overrides/arm64/native-commoncommo.patch ('debian';",
+  "test_arch.py checks that the patch carries the same values)."
+ ],
+ "schema": 1,
+ "arch": "arm64",
+ "toolchain": {
+  "base_image": {
+   "reference": "mirror.gcr.io/library/debian:trixie@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6",
+   "note": "unchanged: the pinned digest is a multi-architecture index that holds linux/arm64/v8"
+  },
+  "temurin": {
+   "version": "17.0.21+9",
+   "url": "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jdk_aarch64_linux_hotspot_17.0.21_9.tar.gz",
+   "sha256": "3e4eca7ead088f080af1476007decf010a240a1eb4e1e78c54fa32fbcc347084",
+   "bytes": 192336814,
+   "verified": "downloaded and hashed; equals the .sha256.txt asset published next to it"
+  },
+  "wheels": {
+   "cmake": {
+    "requirement": "cmake==3.31.6",
+    "file": "cmake-3.31.6-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    "source": "https://pypi.org/project/cmake/3.31.6/#files",
+    "sha256": "42d9883b8958da285d53d5f69d40d9650c2d1bcf922d82b3ebdceb2b3a7d4521",
+    "bytes": 27155601,
+    "verified": "downloaded and hashed; equals the digest in the PyPI JSON API"
+   },
+   "ninja": {
+    "requirement": "ninja==1.11.1.4",
+    "file": "ninja-1.11.1.4-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    "source": "https://pypi.org/project/ninja/1.11.1.4/#files",
+    "sha256": "d3090d4488fadf6047d0d7a1db0c9643a8d391f0d94729554dbb89b5bdc769d7",
+    "bytes": 156965,
+    "verified": "downloaded and hashed; equals the digest in the PyPI JSON API"
+   }
+  }
+ },
+ "jdk_files": {
+  "description": "The four files client/build.py binds as the JDK identity, from the Temurin archive above (top directory jdk-17.0.21+9). On amd64 the same four names are pinned by takx/client-compiler/inputs.lock.json.",
+  "prefix": "tools:temurin-17.0.21_9/jdk-17.0.21+9/",
+  "files": {
+   "bin/java": "7ef33df66f5d7cc1f5c9b2984b3d62eecc67e42fd4347066e106b5b3734c5477",
+   "bin/javac": "c887896564b48d363c415c9e5fb581b645448c15a636c15f4cd84213842fe5ea",
+   "release": "365e1ef27100aa58f6e5ed2c65d600e1ad80cac7d242fc224b338d161400bfb5",
+   "lib/modules": "7288f729ef4c2aa49b41c71178f9de5f3742c4801462d6dd6f9588f0466de051"
+  },
+  "verified": "extracted from the hashed archive and hashed; 'release' says OS_ARCH=\"aarch64\", IMPLEMENTOR_VERSION=\"Temurin-17.0.21+9\""
+ },
+ "runtime_natives": {
+  "description": "Native classifier JARs of the TAKX runtime closure. The official gradle/binCreator.gradle declares only the amd64/x86_64 classifiers; these are the prototype's substitution on arm64. Keys are '<group>:<artifact>:<version>:<classifier>'.",
+  "jars": {
+   "org.jogamp.jogl:jogl-all:2.5.0:natives-linux-aarch64": {
+    "url": "https://jogamp.org/deployment/maven/org/jogamp/jogl/jogl-all/2.5.0/jogl-all-2.5.0-natives-linux-aarch64.jar",
+    "sha256": "e4b9e015a91fe5229d3d53848e28b86700a90fabd8e5fe85796f6b1d49b4266e",
+    "sha1": "7c1f7fff0b33bcc8fc4f5de4a0acd5d7745b2aa6",
+    "bytes": 247137
+   },
+   "org.jogamp.gluegen:gluegen-rt:2.5.0:natives-linux-aarch64": {
+    "url": "https://jogamp.org/deployment/maven/org/jogamp/gluegen/gluegen-rt/2.5.0/gluegen-rt-2.5.0-natives-linux-aarch64.jar",
+    "sha256": "1ae407f984337249e7cd9bf1f1e163773be05528b5562eca061bccf634b10daf",
+    "sha1": "fd2935836a47f91bc421ddd26f5f57e3d86f93bf",
+    "bytes": 4836
+   },
+   "org.jogamp.jocl:jocl:2.5.0:natives-linux-aarch64": {
+    "url": "https://jogamp.org/deployment/maven/org/jogamp/jocl/jocl/2.5.0/jocl-2.5.0-natives-linux-aarch64.jar",
+    "sha256": "a9e6e1233f3393787994ef54fb4c11a2a53d01efce23dc33717ce54179f33319",
+    "sha1": "c8114f4a94869404a6c8bbc8bff729f67d1bce0a",
+    "bytes": 21700
+   },
+   "org.bytedeco:ffmpeg:4.1.3-1.5.1:linux-arm64": {
+    "url": "https://repo1.maven.org/maven2/org/bytedeco/ffmpeg/4.1.3-1.5.1/ffmpeg-4.1.3-1.5.1-linux-arm64.jar",
+    "sha256": "c6871d47a91e8346f7c6395dbae5f814d3f93858efe6e6ac3271f0ae11536cec",
+    "sha1": "17f0907edeb1d8b23bfa8a88da4aa41a32ac8542",
+    "bytes": 14836027
+   }
+  },
+  "verified": "downloaded and hashed; each SHA-1 equals the .sha1 its repository publishes; the JogAmp jars hold natives/linux-aarch64/*.so. JogAmp publishes these only on jogamp.org and only under the classifier natives-linux-aarch64 (natives-linux-arm64 does not exist)."
+ },
+ "debian": {
+  "description": "Tool pins of the patched copy of takx/native-commoncommo (overrides/arm64/native-commoncommo.patch). They come from the same pinned, signed InRelease as the amd64 pins.",
+  "inrelease_sha256": "0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675",
+  "snapshot": "https://snapshot.debian.org/archive/debian/20260912T143000Z",
+  "packages_index": "dists/trixie/main/binary-arm64/Packages.xz",
+  "packages_sha256": "be16b37b2f740f066ea93d35d56f04f94d63693e5a3eb421b052bf86fae75bcd",
+  "packages_bytes": 9614192,
+  "packages": [
+   {
+    "Package": "ant",
+    "Version": "1.10.15-1",
+    "Filename": "pool/main/a/ant/ant_1.10.15-1_all.deb",
+    "Size": "2162676",
+    "SHA256": "bb011a7a3db4f1c74a87b8e2b29adb822fd79d795b0bad96e025b162f71790bf"
+   },
+   {
+    "Package": "dos2unix",
+    "Version": "7.5.2-1+b1",
+    "Filename": "pool/main/d/dos2unix/dos2unix_7.5.2-1+b1_arm64.deb",
+    "Size": "515556",
+    "SHA256": "94b7d3e4327d36f64d498bb0bc7be3a142adc68308679cd3708923fdfe4e0e5e"
+   }
+  ],
+  "verified": "InRelease, the arm64 Packages.xz and both packages downloaded from the snapshot and hashed; the Packages.xz digest and size are the InRelease line for main/binary-arm64/Packages.xz; the package records are those of that index"
+ }
+}

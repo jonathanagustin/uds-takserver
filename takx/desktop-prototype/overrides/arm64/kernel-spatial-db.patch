@@ -1,0 +1,37 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype architecture override for takx/kernel-spatial-db (Linux arm64).
+# Never applied to the tracked recipe: arch_tree.py applies it, with fuzz 0, to
+# the copy of the tree under <work root>/overrides/arm64/tree, and only on an
+# arm64 host. On amd64 the unmodified recipe is used. The patched recipe still
+# accepts x86_64 unless a line below says otherwise, so its offline tests run
+# on either machine. Nothing here is validated or qualified on arm64.
+#
+# Why:
+# main() refuses every machine but x86_64, and the config.guess shipped in
+# libspatialite-4.3.0a (timestamp 2009-11-20) has no aarch64 case, so its
+# configure cannot guess the build type there. Its config.sub accepts
+# aarch64, so the build type is passed explicitly, on aarch64 only.
+--- a/takx/kernel-spatial-db/build.py
++++ b/takx/kernel-spatial-db/build.py
+@@ -221,8 +221,8 @@
+         parser.add_argument('--' + name, type=Path, required=True)
+     parser.add_argument('--fetch-dependencies', action='store_true')
+     args = parser.parse_args()
+-    if (platform.system(), platform.machine()) != ('Linux', 'x86_64'):
+-        raise ValueError('only Linux amd64 component integration selected')
++    if platform.system() != 'Linux' or platform.machine() not in ('x86_64', 'aarch64'):
++        raise ValueError('only Linux amd64 component integration selected (arm64: desktop-prototype override, unvalidated)')
+     validate_lock(json.loads((HERE / 'inputs.lock.json').read_text()))
+     output, cache = paths(args.output, args.cache)
+     output.mkdir(parents=True, mode=0o700); cache.mkdir(parents=True, exist_ok=True)
+@@ -335,7 +335,7 @@
+         'LIBS':' '.join('-L'+str(p / 'lib') for p in (xp,ip,zp,gp,pp,sp,cp)) + ' -lxml2 -liconv -lz -lgeos_c -lgeos -lproj -lsqlite3 -lcrypto -lstdc++ -ldl -pthread -lm',
+         'LIBXML2_CFLAGS':'-I'+str(xp / 'include/libxml2'), 'LIBXML2_LIBS':'-L'+str(xp / 'lib')+' -lxml2 -L'+str(ip / 'lib')+' -liconv',
+         'PKG_CONFIG_LIBDIR':str(xp / 'lib/pkgconfig')}
+-    run([srcs['libspatialite'] / 'configure', '--disable-shared', '--enable-static', '--enable-geos', '--enable-proj', '--enable-iconv', '--enable-libxml2', '--disable-freexl', '--disable-examples', '--with-geosconfig='+str(gp / 'bin/geos-config'), '--prefix='+str(lp)], 'spatialite-configure', builds['libspatialite'], 120, extra=spatial_env)
++    run([srcs['libspatialite'] / 'configure', '--disable-shared', '--enable-static', '--enable-geos', '--enable-proj', '--enable-iconv', '--enable-libxml2', '--disable-freexl', '--disable-examples', '--with-geosconfig='+str(gp / 'bin/geos-config'), '--prefix='+str(lp), *(['--build=aarch64-unknown-linux-gnu'] if platform.machine() == 'aarch64' else [])], 'spatialite-configure', builds['libspatialite'], 120, extra=spatial_env)
+     run([tools['make']['path'], '-j1'], 'spatialite-build', builds['libspatialite'], 600, extra=spatial_env)
+     run([tools['make']['path'], '-j1', 'install'], 'spatialite-install', builds['libspatialite'], 60, extra=spatial_env)
+     archive_members = {str(p): archive_objects(p) for p in libs}

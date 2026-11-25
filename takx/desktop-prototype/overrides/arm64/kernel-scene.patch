@@ -1,0 +1,34 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype architecture override for takx/kernel-scene (Linux arm64).
+# Never applied to the tracked recipe: arch_tree.py applies it, with fuzz 0, to
+# the copy of the tree under <work root>/overrides/arm64/tree, and only on an
+# arm64 host. On amd64 the unmodified recipe is used. The patched recipe still
+# accepts x86_64 unless a line below says otherwise, so its offline tests run
+# on either machine. Nothing here is validated or qualified on arm64.
+#
+# Why:
+# The runtime-provider check allows only the x86_64 dynamic loader and only
+# system libraries directly under /usr/lib/x86_64-linux-gnu. On aarch64 the
+# loader is ld-linux-aarch64.so.1 and the directory /usr/lib/aarch64-linux-gnu.
+--- a/takx/kernel-scene/build.py
++++ b/takx/kernel-scene/build.py
+@@ -139,7 +139,7 @@
+ def runtime_providers(text, library, core):
+     expected = {library.resolve(), core.resolve()}
+     found = {}
+-    system = re.compile(r'^(?:libc|libm|libpthread|libdl|librt|libstdc\+\+|libgcc_s)\.so(?:\..*)?$|^ld-linux-x86-64\.so\.2$')
++    system = re.compile(r'^(?:libc|libm|libpthread|libdl|librt|libstdc\+\+|libgcc_s)\.so(?:\..*)?$|^ld-linux-(?:x86-64\.so\.2|aarch64\.so\.1)$')
+     for line in text.splitlines():
+         if not line.startswith('provider='):
+             continue
+@@ -152,7 +152,7 @@
+         path = path.resolve()
+         if path in found:
+             raise ValueError('duplicate runtime provider')
+-        if path not in expected and not (path.parent == Path('/usr/lib/x86_64-linux-gnu') and system.fullmatch(path.name)):
++        if path not in expected and not (path.parent == Path('/usr/lib/' + os.uname().machine + '-linux-gnu') and system.fullmatch(path.name)):
+             raise ValueError('foreign runtime provider')
+         found[path] = native.digest(path)
+     if not expected.issubset(found):

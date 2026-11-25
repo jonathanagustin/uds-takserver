@@ -1,0 +1,46 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype architecture override for takx/native-sqlcipher (Linux arm64).
+# Never applied to the tracked recipe: arch_tree.py applies it, with fuzz 0, to
+# the copy of the tree under <work root>/overrides/arm64/tree, and only on an
+# arm64 host. On amd64 the unmodified recipe is used. The patched recipe still
+# accepts x86_64 unless a line below says otherwise, so its offline tests run
+# on either machine. Nothing here is validated or qualified on arm64.
+#
+# Why:
+# main() refuses every machine but x86_64, OpenSSL 3.5.9 is configured for
+# the fixed target linux-x86_64, and the probe closure allows only the
+# x86_64 dynamic loader. OpenSSL names its targets linux-<uname -m> for both
+# machines (linux-x86_64, linux-aarch64).
+--- a/takx/native-sqlcipher/build.py
++++ b/takx/native-sqlcipher/build.py
+@@ -139,7 +139,7 @@
+ 
+ 
+ def runtime_closure(text):
+-    allowed = {'libc.so.6', 'libm.so.6', 'libdl.so.2', 'libpthread.so.0', 'ld-linux-x86-64.so.2'}
++    allowed = {'libc.so.6', 'libm.so.6', 'libdl.so.2', 'libpthread.so.0', 'ld-linux-x86-64.so.2', 'ld-linux-aarch64.so.1'}
+     result = {}
+     for line in text.splitlines():
+         if not line.strip() or 'linux-vdso.so.1' in line:
+@@ -190,8 +190,8 @@
+                           ('ranlib', 'ranlib'), ('readelf', 'readelf'), ('ldd', 'ldd')]:
+         parser.add_argument('--' + name, default=default)
+     args = parser.parse_args()
+-    if (platform.system(), platform.machine()) != ('Linux', 'x86_64'):
+-        raise ValueError('only Linux amd64 is validated')
++    if platform.system() != 'Linux' or platform.machine() not in ('x86_64', 'aarch64'):
++        raise ValueError('only Linux amd64 is validated (arm64: desktop-prototype override, unvalidated)')
+     lock = json.loads((HERE / 'inputs.lock.json').read_text())
+     validate_lock(lock)
+     start_recipe = recipe()
+@@ -266,7 +266,7 @@
+         obuild, oprefix = output / 'openssl-build', output / 'openssl-install'
+         obuild.mkdir()
+         command('openssl-configure', [tools['perl']['path'], roots['openssl'] / 'Configure',
+-                'linux-x86_64', 'no-shared', 'no-tests', '--prefix=' + str(oprefix), '--libdir=lib', '-O2', '-fPIC'], obuild)
++                'linux-' + platform.machine(), 'no-shared', 'no-tests', '--prefix=' + str(oprefix), '--libdir=lib', '-O2', '-fPIC'], obuild)
+         command('openssl-build', [tools['make']['path'], '-j' + str(args.jobs), 'build_libs'], obuild)
+         command('openssl-install', [tools['make']['path'], 'install_dev'], obuild)
+         crypto, inc = oprefix / 'lib/libcrypto.a', oprefix / 'include'

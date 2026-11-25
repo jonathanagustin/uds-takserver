@@ -1,0 +1,25 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype architecture override for takx/native-proj (Linux arm64).
+# Never applied to the tracked recipe: arch_tree.py applies it, with fuzz 0, to
+# the copy of the tree under <work root>/overrides/arm64/tree, and only on an
+# arm64 host. On amd64 the unmodified recipe is used. The patched recipe still
+# accepts x86_64 unless a line below says otherwise, so its offline tests run
+# on either machine. Nothing here is validated or qualified on arm64.
+#
+# Why:
+# main() refuses every machine but x86_64; nothing else is architecture-specific.
+--- a/takx/native-proj/build.py
++++ b/takx/native-proj/build.py
+@@ -101,8 +101,8 @@
+         parser.add_argument('--' + name, default=default)
+     parser.add_argument('--fetch-dependencies', action='store_true')
+     args = parser.parse_args()
+-    if (platform.system(), platform.machine()) != ('Linux', 'x86_64'):
+-        raise ValueError('only Linux amd64 historical component profile validated')
++    if platform.system() != 'Linux' or platform.machine() not in ('x86_64', 'aarch64'):
++        raise ValueError('only Linux amd64 historical component profile validated (arm64: desktop-prototype override, unvalidated)')
+     lock = json.loads((HERE / 'inputs.lock.json').read_text())
+     validate_lock(lock)
+     initial = recipe()
