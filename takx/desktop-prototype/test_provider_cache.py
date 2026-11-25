@@ -1563,8 +1563,10 @@ class Tamper(ServiceCase):
         self.assert_refused('connection reset')
 
     def test_file_content_differs_from_the_manifest(self):
-        self.reseal(members=self.edit_file('base/install/lib/lib.a', lambda member, data: bytes([data[0] ^ 1]) + data[1:]))
-        self.assert_refused('unpacked files differ from the recorded manifest: changed install/lib/lib.a (1 differences)')
+        self.reseal(members=self.edit_file('base/install/lib/lib.a',
+                                           lambda member, data: bytes([data[0] ^ 1]) + data[1:]))
+        self.assert_refused('base: unpacked files differ from the recorded manifest: '
+                            'changed install/lib/lib.a (1 differences)')
 
     def test_file_size_differs_from_the_manifest(self):
         for what, change in (('longer', lambda member, data: data + b'\0'), ('shorter', lambda member, data: data[:-1]),
@@ -1661,8 +1663,9 @@ class Tamper(ServiceCase):
                 ('entry added', lambda entries: entries + [self.file_entry('install/more', b'more')],
                  'missing install/more (1 differences)'),
                 ('entry twice', lambda entries: entries + [dict(entries[-1])], 'twice'),
-                ('no entries', lambda entries: [], 'unexpected complete.json, unexpected empty, unexpected install, '
-                                                   'unexpected install/lib, unexpected install/lib/.libs (9 differences)'),
+                ('no entries', lambda entries: [],
+                 'unexpected complete.json, unexpected empty, unexpected install, unexpected install/lib, '
+                 'unexpected install/lib/.libs (9 differences)'),
                 ('escaping link', lambda entries: entries + [{'path': 'out', 'type': 'link', 'target': '../x'}],
                  'leaves the provider directory'),
                 ('absolute link', lambda entries: entries + [{'path': 'out', 'type': 'link', 'target': '/etc'}],
@@ -1676,7 +1679,8 @@ class Tamper(ServiceCase):
                 ('no type', lambda entries: entries + [{'path': 'dev'}], 'device or other special file'),
                 ('dot-dot path', lambda entries: entries + [self.file_entry('../x', b'')], '".."'),
                 ('absolute path', lambda entries: entries + [self.file_entry('/x', b'')], 'empty, "." or ".."'),
-                ('entry that is no object', lambda entries: entries + ['install/more'], 'malformed file manifest entry'),
+                ('entry that is no object', lambda entries: entries + ['install/more'],
+                 'malformed file manifest entry'),
                 ('entry without path', lambda entries: entries + [{'type': 'file'}], 'malformed file manifest entry'),
                 ('path that is no text', lambda entries: entries + [{'path': 7, 'type': 'file'}],
                  'malformed file manifest entry'),
@@ -1726,7 +1730,8 @@ class Tamper(ServiceCase):
                 ('directory', self.member('base/complete.json', tarfile.DIRTYPE, mode=0o755),
                  {'path': 'complete.json', 'type': 'dir', 'mode': '0755'})):
             self.reseal(
-                members=lambda items: self.without_marker(items) + [(member, None), (self.member('base/real.json'), marker)],
+                members=lambda items: self.without_marker(items) + [
+                    (member, None), (self.member('base/real.json'), marker)],
                 entries=lambda entries: [e for e in entries if e['path'] != 'complete.json'] + [
                     entry, self.file_entry('real.json', marker)])
             with self.subTest(what=what):
@@ -2430,7 +2435,8 @@ class OffAndLogin(ServiceCase):
     def test_not_logged_in_is_a_skip(self):
         self.registry.logged_in = False
         ref = 'reg.example/cache/base:' + self.service.key('base')
-        with self.assertRaisesRegex(PC.Skip, r'^docker is not logged in to the cache registry \(%s\)$' % re.escape(ref)):
+        with self.assertRaisesRegex(
+                PC.Skip, r'^docker is not logged in to the cache registry \(%s\)$' % re.escape(ref)):
             self.service.restore('base')
         with self.assertRaisesRegex(PC.Skip, '^docker is not logged in to the cache registry$'):
             self.service.push('side')
@@ -2886,7 +2892,8 @@ exit 0
         self.assertEqual((registry.timeout, registry.docker), (3600, 'docker'))
 
     def test_commands_get_no_input_and_their_output_is_captured(self):
-        self.script('image', 'if read -r -t 1 line; then echo "got input"; else echo "sha256:abc  "; fi; echo noise >&2')
+        self.script('image', 'if read -r -t 1 line; then echo "got input"; else echo "sha256:abc  "; fi\n'
+                             'echo noise >&2')
         (self.dir / 'input').write_text('a line the command must not get\n')
         saved = os.dup(0)
         try:
@@ -2930,7 +2937,8 @@ exit 0
         with self.assertRaisesRegex(PC.CacheError, '^docker manifest: .*timed out after 0.3 seconds'):
             slow.probe('reg/p:tag')
         self.script('import', 'cat > /dev/null; exec sleep 20')
-        with self.assertRaisesRegex(PC.CacheError, r'^docker import failed \(interrupted: .*timed out after 0.3 seconds'):
+        with self.assertRaisesRegex(
+                PC.CacheError, r'^docker import failed \(interrupted: .*timed out after 0.3 seconds'):
             slow.publish('reg/p:tag', self.context, ['p.tar'], {})
         self.assertEqual([call.split()[0] for call in self.calls()], ['manifest', 'import'])
 
@@ -2947,7 +2955,8 @@ exit 0
                                ('echo "No such manifest: x"', 'absent'), ('echo "NAME UNKNOWN: repo" >&2', 'absent'),
                                ('echo "name unknown"', 'absent'),
                                ('echo "UNAUTHORIZED" >&2', 'unauthorized'), ('echo "Unauthorized"', 'unauthorized'),
-                               ('echo "DENIED: requested access" >&2', 'unauthorized'), ('echo "denied"', 'unauthorized'),
+                               ('echo "DENIED: requested access" >&2', 'unauthorized'),
+                               ('echo "denied"', 'unauthorized'),
                                ('echo "Authentication Required" >&2', 'unauthorized'),
                                ('echo "authentication required"', 'unauthorized'),
                                ('echo "No Basic Auth Credentials" >&2', 'unauthorized'),
@@ -2985,7 +2994,8 @@ exit 0
         self.script('cp', 'echo "$2 $3" >> "$dir/copies"')
         self.registry.fetch('reg/p:tag', self.dir / 'target', ['p.tar', 'meta.json'])
         self.assertEqual((self.dir / 'copies').read_text().splitlines(),
-                         ['abc123:/p.tar %s/target/p.tar' % self.dir, 'abc123:/meta.json %s/target/meta.json' % self.dir])
+                         ['abc123:/p.tar %s/target/p.tar' % self.dir,
+                          'abc123:/meta.json %s/target/meta.json' % self.dir])
         self.assertEqual(self.calls()[-2:], ['rm -f abc123', 'rmi reg/p:tag'])
 
     def test_fetch_cleans_up_whatever_fails(self):
@@ -2993,7 +3003,8 @@ exit 0
                                   ('cp', ['pull', 'image', 'create', 'cp', 'rm', 'rmi'])):
             self.script(failing, 'echo broken >&2; exit 1')
             (self.dir / 'calls').unlink(missing_ok=True)
-            with self.subTest(failing=failing), self.assertRaisesRegex(PC.CacheError, 'docker %s failed: broken' % failing):
+            with self.subTest(failing=failing), self.assertRaisesRegex(
+                    PC.CacheError, 'docker %s failed: broken' % failing):
                 self.registry.fetch('reg/p:tag', self.dir, ['p.tar'])
             self.assertEqual([call.split()[0] for call in self.calls()], expected)
             (self.dir / ('script-' + failing)).unlink()
@@ -3047,8 +3058,9 @@ class MoreDetails(ServiceCase):
         self.assertEqual(snapshot(top), good)
         many = [{'path': 'f%d' % number, 'type': 'dir', 'mode': '0755'} for number in range(300)]
         self.assertEqual(PC.compare_entries(many, copy.deepcopy(many)), [])
-        self.assertEqual(PC.compare_entries(many + many[:1], copy.deepcopy(many)), ['a file manifest lists a path twice'])
-        self.assertEqual(PC.compare_entries(many, copy.deepcopy(many) + many[-1:]), ['a file manifest lists a path twice'])
+        twice = ['a file manifest lists a path twice']
+        self.assertEqual(PC.compare_entries(many + many[:1], copy.deepcopy(many)), twice)
+        self.assertEqual(PC.compare_entries(many, copy.deepcopy(many) + many[-1:]), twice)
 
     def test_decisions_fail_closed_on_unknown_registry_answers(self):
         for remote in ('error', 'ERROR', '', 'Zzz', 'zzz', 'absent ', 'Absent', 'presently', None, 0):
@@ -3092,27 +3104,26 @@ class MoreDetails(ServiceCase):
 
         def with_label(label, value):
             return dict(labels=dict(good['labels'], **{'dev.uds.takx.' + label: value}))
-        lower, higher = 'a' * 64, 'e' * 64
         cases = []
-        for low, high in ((lower, higher),):
-            for other in (low, high):
-                cases += [
-                    (dict(tar_sha256=other), 'mm: archive digest differs from the recorded one'),
-                    (dict(recorded_tar_sha256=other), 'mm: archive digest differs from the recorded one'),
-                    (with_label('tar-sha256', other), 'mm: archive digest differs from the image label'),
-                    (with_label('key', other), 'mm: image is labelled with another key'),
-                    (with_meta(key=other), 'mm: bundle is for another provider or key'),
-                    (with_meta(tar_sha256=other), 'mm: bundle metadata names another archive'),
-                    (with_meta(files_sha256=other), 'mm: file manifest differs from the recorded one'),
-                    (dict(files_sha256=other), 'mm: file manifest differs from the recorded one'),
-                    (dict(local_markers={'dep': other}), 'mm: it was built against other prerequisite outputs than '
-                                                         'the ones present here'),
-                ]
+        for other in ('a' * 64, 'e' * 64):  # one that sorts before every digest used here, one after
+            cases += [
+                (dict(tar_sha256=other), 'mm: archive digest differs from the recorded one'),
+                (dict(recorded_tar_sha256=other), 'mm: archive digest differs from the recorded one'),
+                (with_label('tar-sha256', other), 'mm: archive digest differs from the image label'),
+                (with_label('key', other), 'mm: image is labelled with another key'),
+                (with_meta(key=other), 'mm: bundle is for another provider or key'),
+                (with_meta(tar_sha256=other), 'mm: bundle metadata names another archive'),
+                (with_meta(files_sha256=other), 'mm: file manifest differs from the recorded one'),
+                (dict(files_sha256=other), 'mm: file manifest differs from the recorded one'),
+                (dict(local_markers={'dep': other}), 'mm: it was built against other prerequisite outputs than '
+                                                     'the ones present here'),
+            ]
         for other in ('aa', 'zz', 'm', 'mmm', ''):
             cases += [
                 (with_label('provider', other), 'mm: image is labelled for another provider'),
                 (with_meta(provider=other), 'mm: bundle is for another provider or key'),
-                (dict(status={'stage': other, 'status': 'ok'}), 'mm: bundled status is not an ok status of this provider'),
+                (dict(status={'stage': other, 'status': 'ok'}),
+                 'mm: bundled status is not an ok status of this provider'),
             ]
         for other in ('a', 'zz', 'o', 'okay', 'OK', ''):
             cases.append((dict(status={'stage': 'mm', 'status': other}),
@@ -3125,7 +3136,8 @@ class MoreDetails(ServiceCase):
             cases.append((dict(recorded_tar_sha256=other, tar_sha256=other, labels=dict(
                 good['labels'], **{'dev.uds.takx.tar-sha256': other}), meta=dict(good['meta'], tar_sha256=other)),
                 'mm: the image records no archive digest'))
-        cases += [(dict(meta=None), 'mm: unsupported bundle schema'), (dict(meta='{}'), 'mm: unsupported bundle schema'),
+        cases += [(dict(meta=None), 'mm: unsupported bundle schema'),
+                  (dict(meta='{}'), 'mm: unsupported bundle schema'),
                   (dict(status=None), 'mm: bundled status is not an ok status of this provider'),
                   (dict(status='ok'), 'mm: bundled status is not an ok status of this provider'),
                   (dict(labels={}), 'mm: archive digest differs from the image label')]

@@ -9,7 +9,7 @@ It is a prototype, not a supported product build. The client runs on substitutes
 
 | TAKX 5.7 declares (private) | The prototype uses (public) |
 | --- | --- |
-| TAK Kernel 8.57.11 | Kernel 8.30.5 (atak-civ `9f6893dd`) plus project patches (`takx/kernel-texture`, `takx/kernel-render-context`, feature and elevation JNI patches), unqualified, plus a three-patch Java overlay (below) |
+| TAK Kernel 8.57.11 | Kernel 8.30.5 (atak-civ `9f6893dd`) plus project patches (`takx/kernel-texture`, `takx/kernel-render-context`, feature and elevation JNI patches), unqualified, plus a Java overlay (two patches and a recipe refresh, below) |
 | CommonCommo 1.20.0 | CommonCommo 1.17.2 with the project JNI patch |
 | WorldWind 2.2.1-TAKX-4 | NASA WorldWind Java v2.2.1 with the interop profile of `takx/worldwind-java` |
 | DockingFrames 1.1.3p1, colorchooser 1.1, swing-toast 1.0.3, NetBeans wizard, svgSalamander | source rebuilds by `takx/ui-java` |
@@ -38,7 +38,7 @@ Every stage runs in the `takx-desktop-proto` images through `run-in-toolchain.sh
 
 `stages/assemble.sh` runs three steps:
 
-1. `assemble/kernel_overlay.py` applies `assemble/kernel-overlay/*.patch` with fuzz 0 to a copy of the Kernel Java sources the Kernel stage compiled, compiles only those files against the composed Kernel classes, and writes `P/kernel-overlay/kernel-8.30.5-prototype-java-overlay.jar` with a receipt. The Kernel JAR is not changed, so the Kernel controls were run without the overlay.
+1. `assemble/kernel_overlay.py` applies `assemble/kernel-overlay/*.patch` with fuzz 0 to a copy of the Kernel Java sources the Kernel stage compiled, compiles only those files against the composed Kernel classes, and writes `P/kernel-overlay/kernel-8.30.5-prototype-java-overlay.jar` with a receipt. It also refreshes the Java sources of `takx/kernel-render-context` when that recipe's locked image is newer than the source the Kernel stage compiled (see below). The Kernel JAR is not changed, so the Kernel controls were run without the overlay.
 2. The unmodified `takx/compat/build-system-clock.py` builds `libuds_desktop_clock.so`, which the Kernel build's `android.os.SystemClock` loads.
 3. `assemble/assemble.py` copies everything into `dist/takx57` and writes `manifest.json` with the source and SHA-256 of every file.
 
@@ -64,13 +64,16 @@ The official build generates one JBoss module per Maven artifact with a plugin t
 
 ### Kernel Java overlay
 
-Each patch fixes one place where booting the real client failed. All three are candidates to move into the recipes that own the code.
+Each patch fixes one place where booting the real client failed. Both are candidates to move into the recipes that own the code.
 
 | Patch | Problem found at boot | Change |
 | --- | --- | --- |
-| `01-render-surface-identity.patch` | TAKX casts `getRenderContext().getRenderSurface()` to its own component types; the project render-context binding returned a forwarding wrapper, so the globe component was never created (`ClassCastException` in `ApplicationGlobe.makeWwd`) | the binding returns the client's surface object when it implements the legacy interface |
 | `02-glutils-buffer-position.patch` | the upstream desktop `GLUtils` uploads a pixel buffer at the position `Bitmap.copyPixelsToBuffer` left it; the `takx/compat` Bitmap advances the position as Android does, so every widget texture upload failed | `rewind()` before the upload |
 | `03-asset-root-module-loader.patch` | the `takx/compat` `AssetManager` serves assets only from `URLClassLoader` URLs or `java.class.path`; under JBoss Modules the Kernel JAR is neither | the JAR that holds the desktop classes is a declared root |
+
+The former `01-render-surface-identity.patch` is gone: `takx/kernel-render-context` now returns the client's own surface object itself (and checks the real current GL context when a client rebinds after a GL context re-creation).
+
+Recipe refresh: a composed Kernel built before that recipe change still holds the old `RenderContextBinding` and `GLMapView`. `kernel_overlay.py` compares the Java images the recipe's lock pins with the sources the Kernel stage compiled. For each one that differs it runs the recipe's `prepare.py`, takes the locked image from its output and compiles it into the overlay JAR; the receipt lists these files under `recipe_refresh`. It stops, asking for a Kernel lane rebuild, if the Kernel stage had changed such a file after the recipe or if a regenerated JNI header differs from the one the native libraries were built with. Once the Kernel lane is rebuilt from the current recipe the refresh finds nothing to do.
 
 ## Boot
 

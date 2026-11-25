@@ -32,6 +32,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -169,7 +170,7 @@ def main():
     command += [os.path.join(stage, relative) for relative in list(targets) + sorted(refreshed)]
     subprocess.run(command, check=True)
     # The native libraries were built against the Kernel stage's JNI headers.
-    for name in sorted(os.listdir(headers)) if refreshed else ():
+    for name in sorted(os.listdir(headers)) if os.path.isdir(headers) else ():
         built_with = os.path.join(composed, 'jni-headers', name)
         if not os.path.isfile(built_with) or sha256(built_with) != sha256(os.path.join(headers, name)):
             raise SystemExit('kernel_overlay: JNI header %s changed with the recipe; rebuild the Kernel lane' % name)
@@ -182,7 +183,7 @@ def main():
         known = set(archive.namelist())
     # A patch may not introduce a class the Kernel does not already have. A
     # refreshed recipe source may add nested classes of its own class.
-    owners = tuple(relative.split('/src/main/java/', 1)[1][:-len('.java')] + '$' for relative in refreshed)
+    owners = tuple(re.split(r'/src/[^/]+/java/', relative, maxsplit=1)[1][:-len('.java')] + '$' for relative in refreshed)
     added = [name for name in produced if name not in known]
     unknown = [name for name in added if not name.startswith(owners)]
     if unknown:

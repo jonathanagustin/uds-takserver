@@ -208,7 +208,7 @@ def build(args):
         record.update(completed=True, source_count=1239, jni_header_syntax_checked=2,
                       classes={str(path.relative_to(classes)): sha(path) for path in classes.rglob('*.class')},
                       jni_headers={path.name: sha(path) for path in headers.glob('*.h')})
-        require(len(record['classes']) == 2702 and len(record['jni_headers']) == 119, 'complete output membership differs')
+        require(len(record['classes']) == 2703 and len(record['jni_headers']) == 119, 'complete output membership differs')
         write()
     except BaseException:
         record['failed'] = True
