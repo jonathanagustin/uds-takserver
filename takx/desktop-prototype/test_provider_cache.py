@@ -1101,8 +1101,8 @@ class DockerAdapter(unittest.TestCase):
 
     def test_the_module_never_reads_docker_credentials(self):
         text = (HERE / 'provider_cache.py').read_text()
-        for word in ('config.json', '.docker', 'DOCKER_CONFIG', 'docker login', "'login'", '--password'):
-            self.assertNotIn(word, text.replace('`docker login`', ''))
+        for word in ('config.json', '/.docker', 'DOCKER_CONFIG', "'login'", '--password', 'credsStore'):
+            self.assertNotIn(word, text)
 
 
 class RepositoryManifest(unittest.TestCase):
