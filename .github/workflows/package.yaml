@@ -70,6 +70,7 @@ on:
       - ".github/workflows/gles-cache.yaml"
       - ".github/workflows/mdbtools-cache.yaml"
       - ".github/workflows/takx-native-caches.yaml"
+      - ".github/workflows/takx-desktop-prototype.yaml"
       - ".github/scripts/migrate-ghcr.py"
       - ".github/workflows/test-aks.yaml"
       - ".github/workflows/test-eks.yaml"
