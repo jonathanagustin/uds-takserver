@@ -388,6 +388,17 @@ class Materialize(Fixture):
             self.run_set(opener)
         self.assertEqual(([], []), (opener.urls, list((self.root / "elsewhere").iterdir())))
 
+    def test_path_command_accepts_the_file_after_an_option(self):
+        # The order every workflow call uses. Python 3.12, the runner's
+        # version, rejected it as an unrecognized argument.
+        self.store.mkdir()
+        self.final.write_bytes(PAYLOAD)
+        result = subprocess.run(
+            [sys.executable, "-B", str(HERE / "upstream_inputs.py"), "path", "--lock", str(self.root / "lock.json"),
+             "--store", str(self.store), "depends/payload.tar.gz"], capture_output=True, text=True, check=False)
+        self.assertEqual((0, ""), (result.returncode, result.stderr))
+        self.assertEqual(str(self.final), result.stdout.strip())
+
     def test_command_line_fails_closed_offline(self):
         result = subprocess.run(
             [sys.executable, "-B", str(HERE / "upstream_inputs.py"), "materialize", "--set", "minizip",

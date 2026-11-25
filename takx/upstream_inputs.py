@@ -231,7 +231,10 @@ def main():
     parser.add_argument("--store", type=Path, help="materialize, path: the content-addressed directory")
     parser.add_argument("--source", type=Path, help="materialize: pinned checkout to check the pointers in")
     parser.add_argument("--offline", action="store_true", help="materialize: fail instead of downloading")
-    args = parser.parse_args()
+    # The workflow writes "path --store DIR FILE". Before Python 3.13 plain
+    # parse_args binds the optional positional as soon as it sees the command,
+    # then rejects FILE after an option.
+    args = parser.parse_intermixed_args()
     lock = load_lock(args.lock)
     if args.command == "path":
         if args.store is None or args.upstream_path is None:
