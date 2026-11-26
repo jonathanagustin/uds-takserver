@@ -49,5 +49,9 @@
 #        and the client job downloads the JAR from Maven Central and checks its
 #        pin. Also: an arm64 assembly or boot failure fails the leg unless the
 #        assembler patch was skipped. From the provider cache.
+# run 12: the whole workflow as a first-time user starts it (providers=build),
+#        with every provider already in the cache: the three provider waves
+#        have to restore and build nothing. ci/inputs-seeds.json now names the
+#        objects run 11 stored without the files of ci/inputs-not-stored.json.
 arches=amd64,arm64
-providers=cached
+providers=build

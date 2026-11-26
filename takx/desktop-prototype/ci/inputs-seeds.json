@@ -8,16 +8,18 @@
   "it names existing bytes and is never edited to make something pass. A seed",
   "only saves downloads: fetch.sh compares every file with the pin of the recipe",
   "that consumes it, and a file that does not match is downloaded again.",
-  "amd64 and arm64: stored by run 45714468510 (2026-11-25), restored by run",
-  "45721036467 (status/inputs.json of its jobs)."
+  "amd64 and arm64: stored by the inputs jobs of run 45743705418 (2026-11-26,",
+  "status/inputs.ref), the first objects written without the files of",
+  "inputs-not-stored.json. The seeds named here before (20b4e333..., 63c1651a...,",
+  "run 45714468510) held those files and are no longer referred to."
  ],
  "schema": 1,
  "seeds": {
   "amd64": [
-   "ghcr.io/jonathanagustin/uds-takserver/takx-desktop-proto-ci/inputs@sha256:20b4e3339e6914c8652e6040824efae3b28eff211da39d58b18d0e3b63fda148"
+   "ghcr.io/jonathanagustin/uds-takserver/takx-desktop-proto-ci/inputs@sha256:6df11780f34fa6f35d5739e488257a2d8d856a3072ec558d9002d66854179070"
   ],
   "arm64": [
-   "ghcr.io/jonathanagustin/uds-takserver/takx-desktop-proto-ci/inputs@sha256:63c1651a909d601920ad201e73c6f21bc90275a03ed4246b138a41dc69cc5d90"
+   "ghcr.io/jonathanagustin/uds-takserver/takx-desktop-proto-ci/inputs@sha256:0ee0c8def21ab03a84c8f18de9d535432b94fb78d4bad8cc45ba207cc3695ceb"
   ]
  }
 }
