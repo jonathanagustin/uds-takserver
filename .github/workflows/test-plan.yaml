@@ -1,0 +1,70 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+name: Plan runtime validation
+
+on:
+  workflow_call:
+    inputs:
+      trust_bundle:
+        description: Run the private gateway CA validation
+        type: boolean
+        default: false
+      diagnostic_case:
+        description: Focus runtime validation on a specific diagnostic case
+        type: string
+        default: none
+      runner_profile:
+        description: Override the hosted runner profile for a diagnostic
+        type: string
+        default: ''
+    outputs:
+      upgrade-flavors:
+        description: Upgradeable package flavors
+        value: ${{ jobs.plan.outputs.upgrade-flavors }}
+      install-matrix:
+        description: Native install and air-gap matrix
+        value: ${{ jobs.plan.outputs.install-matrix }}
+      upgrade-matrix:
+        description: Native released-package upgrade matrix
+        value: ${{ jobs.plan.outputs.upgrade-matrix }}
+      pg15-matrix:
+        description: Native PostgreSQL 15 upgrade matrix
+        value: ${{ jobs.plan.outputs.pg15-matrix }}
+      diagnostic-case:
+        description: Selected diagnostic case
+        value: ${{ jobs.plan.outputs.diagnostic-case }}
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Plan validation mode
+        id: validation-mode
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TRUST_BUNDLE: ${{ inputs.trust_bundle && 'true' || 'false' }}
+          DIAGNOSTIC_CASE: ${{ inputs.diagnostic_case }}
+          # Temporary older-kernel comparison for #300; keep the override.
+          RUNNER_PROFILE: ${{ inputs.runner_profile }}
+          TEST_RUNNER: ${{ vars.TEST_RUNNER || 'ubuntu-22.04' }}
+        run: python3 .github/scripts/test-validation-mode.py plan
+
+      - name: test-flavor
+        uses: defenseunicorns/uds-common/.github/actions/test-flavor@807de6f4efca9f51ee5e8d3e466d5f089c9eaab8 # v1.34.1
+        id: test-flavor
+    outputs:
+      upgrade-flavors: ${{ steps.test-flavor.outputs.upgrade-flavors }}
+      install-matrix: ${{ steps.validation-mode.outputs.install-matrix }}
+      upgrade-matrix: ${{ steps.validation-mode.outputs.upgrade-matrix }}
+      pg15-matrix: ${{ steps.validation-mode.outputs.pg15-matrix }}
+      diagnostic-case: ${{ steps.validation-mode.outputs.diagnostic-case }}

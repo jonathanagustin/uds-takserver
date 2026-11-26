@@ -167,10 +167,13 @@ class TestValidationMode(unittest.TestCase):
     def test_workflow_consumes_planned_matrices_and_preserves_pg15_trigger(self):
         workflow = (SCRIPT.parents[1] / "workflows/test.yaml").read_text()
         self.assertIn("options: [none, upgrade-amd64, pg15-amd64, pg15-both, airgap-amd64]", workflow)
-        planner = workflow.split("  check-flavor:", 1)[1].split("  validate-install:", 1)[0]
-        self.assertIn("DIAGNOSTIC_CASE: ${{ inputs.diagnostic_case || 'none' }}", planner)
+        self.assertIn("uses: ./.github/workflows/test-plan.yaml", workflow)
+        self.assertIn("diagnostic_case: ${{ inputs.diagnostic_case || 'none' }}", workflow)
+        planner = (SCRIPT.parents[1] / "workflows/test-plan.yaml").read_text()
+        self.assertIn("DIAGNOSTIC_CASE: ${{ inputs.diagnostic_case }}", planner)
         for key in ("install-matrix", "upgrade-matrix", "pg15-matrix", "diagnostic-case"):
             self.assertIn(f"{key}: ${{{{ steps.validation-mode.outputs.{key} }}}}", planner)
+            self.assertIn(f"value: ${{{{ jobs.plan.outputs.{key} }}}}", planner)
         sections = {}
         names = ("validate-install", "validate-upgrade", "validate-upgrade-pg15")
         for index, name in enumerate(names):

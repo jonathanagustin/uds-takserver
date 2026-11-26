@@ -156,8 +156,9 @@ class RunnerWedgeProbeTests(unittest.TestCase):
         full = yaml.safe_load((ROOT / ".github/workflows/full-core.yaml").read_text())["jobs"]
         bench = yaml.safe_load((ROOT / ".github/workflows/benchmark.yaml").read_text())["jobs"]
         expected = "${{ vars.TEST_RUNNER || 'ubuntu-22.04' }}"
-        planner = next(step for step in test["check-flavor"]["steps"]
-                       if "TEST_RUNNER" in step.get("env", {}))
+        plan = yaml.safe_load((ROOT / ".github/workflows/test-plan.yaml").read_text())["jobs"]["plan"]
+        self.assertEqual(test["check-flavor"]["uses"], "./.github/workflows/test-plan.yaml")
+        planner = next(step for step in plan["steps"] if "TEST_RUNNER" in step.get("env", {}))
         self.assertEqual(planner["env"]["TEST_RUNNER"], expected)
         # Test's upgrade matrices are planned at runtime. Exercise that actual
         # planner, retaining the runner override and native ARM contracts.
@@ -210,7 +211,7 @@ class RunnerWedgeProbeTests(unittest.TestCase):
             self.assertTrue(guarded)
             for step in guarded:
                 self.assertIn("vars.TEST_RUNNER == 'ubuntu-22.04'", step["if"])
-        self.assertEqual(test["check-flavor"]["runs-on"], "ubuntu-24.04")
+        self.assertEqual(plan["runs-on"], "ubuntu-24.04")
         # Native image producers retain their existing 24.04 labels.
         for name in ("cloudtak-image", "postgis-image"):
             rows = test[name]["strategy"]["matrix"]["include"]

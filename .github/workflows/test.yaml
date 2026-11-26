@@ -492,34 +492,13 @@ jobs:
         run: python3 .github/scripts/candidate-consumer.py ready --group postgis
 
   check-flavor:
-    timeout-minutes: 10
-    runs-on: ubuntu-24.04
+    uses: ./.github/workflows/test-plan.yaml
     permissions:
       contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Plan validation mode
-        id: validation-mode
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          TRUST_BUNDLE: ${{ inputs.trust_bundle && 'true' || 'false' }}
-          DIAGNOSTIC_CASE: ${{ inputs.diagnostic_case || 'none' }}
-          # Temporary older-kernel comparison for #300; keep the override.
-          RUNNER_PROFILE: ${{ inputs.runner_profile }}
-          TEST_RUNNER: ${{ vars.TEST_RUNNER || 'ubuntu-22.04' }}
-        run: python3 .github/scripts/test-validation-mode.py plan
-
-      - name: test-flavor
-        uses: defenseunicorns/uds-common/.github/actions/test-flavor@807de6f4efca9f51ee5e8d3e466d5f089c9eaab8 # v1.34.1
-        id: test-flavor
-    outputs:
-      upgrade-flavors: ${{ steps.test-flavor.outputs.upgrade-flavors }}
-      install-matrix: ${{ steps.validation-mode.outputs.install-matrix }}
-      upgrade-matrix: ${{ steps.validation-mode.outputs.upgrade-matrix }}
-      pg15-matrix: ${{ steps.validation-mode.outputs.pg15-matrix }}
-      diagnostic-case: ${{ steps.validation-mode.outputs.diagnostic-case }}
+    with:
+      trust_bundle: ${{ inputs.trust_bundle || false }}
+      diagnostic_case: ${{ inputs.diagnostic_case || 'none' }}
+      runner_profile: ${{ inputs.runner_profile || '' }}
 
   # Install and upgrade do not need each other, so they run at the same time.
   # Upgrade must resolve a released baseline; the first-release bootstrap is reported explicitly.
