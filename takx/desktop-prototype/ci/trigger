@@ -36,5 +36,8 @@
 #        ok only for a JVM that has been up for more than 120 seconds) and the
 #        frame of the attempt kept as an artifact. Replaces run 7 while that
 #        was still queued.
+# run 9: repeat of run 8, which was the first run with every job green on
+#        both architectures. Adds the ELF machine record of the assembled
+#        tree and the tree receipt under a name the artifact upload keeps.
 arches=amd64,arm64
 providers=cached

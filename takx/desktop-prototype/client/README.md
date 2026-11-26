@@ -116,9 +116,11 @@ tracked because JAR manifests carry the build date.
 
 The compile is the same on Linux `amd64` and `arm64`; `../arch.sh` holds the
 names that differ. On arm64 it has run on GitHub-hosted `ubuntu-24.04-arm`
-runners only (workflow runs 45702964185 and 45714468510, 2026-11-25): compile
-and packaging with zero compiler errors and the expected class names. No GUI
-was started on arm64.
+runners only (workflow runs 45702964185 and 45714468510, 2026-11-25, and four
+later ones): compile and packaging with zero compiler errors and the expected
+class names. The only GUI start on arm64 is the unattended one of the
+workflow's boot step under Xvfb and Mesa llvmpipe (run 45730520989;
+`../ci/ARCH-CACHE-NOTE.md`), which is not an acceptance of the client.
 
 - **JDK identity.** The specification lock pins four files of the x64 Temurin
   17.0.21+9. On arm64 `build.py` checks the same four files of the aarch64

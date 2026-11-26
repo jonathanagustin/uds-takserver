@@ -23,7 +23,8 @@
       stage scripts restore and push their own providers themselves.
       Afterwards it records, in the same file under 'elf', the machine type
       of every ELF object in the directories the group built ('builds', plus
-      'audit' of groups.json), including the members of static archives. This
+      'audit' and 'audit_root' of groups.json), including the members of static
+      archives. This
       is a record, not a gate: it shows that an arm64 job produced aarch64
       objects, and lists any object of another machine.
   pipeline.py summary [ROOT]
@@ -361,6 +362,11 @@ def run_group(name, root, proto):
         if (root / 'P' / directory).is_dir():
             record['elf'][directory] = elf_audit(root / 'P' / directory, MACHINE_OF[arch])
             print('ci: ELF objects in P/%-22s %s%s' % (directory, record['elf'][directory]['objects'] or 'none', ''.join(
+                '; not %s: %s' % (MACHINE_OF[arch], item) for item in record['elf'][directory]['not_expected'])), flush=True)
+    for directory in config.get('audit_root', []):  # below the work root, not below P/ (the assembled tree)
+        if (root / directory).is_dir():
+            record['elf'][directory] = elf_audit(root / directory, MACHINE_OF[arch])
+            print('ci: ELF objects in %-24s %s%s' % (directory, record['elf'][directory]['objects'] or 'none', ''.join(
                 '; not %s: %s' % (MACHINE_OF[arch], item) for item in record['elf'][directory]['not_expected'])), flush=True)
     record['seconds'] = round(time.time() - started)
     target = root / 'status' / ('ci-%s.json' % name)

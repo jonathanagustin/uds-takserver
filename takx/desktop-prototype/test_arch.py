@@ -805,6 +805,9 @@ class PipelineRun(Fixture):
 
     def test_group_records_the_machine_of_the_elf_objects_it_built(self):
         self.groups['groups']['first']['audit'] = ['extra', 'absent']
+        self.groups['groups']['first']['audit_root'] = ['dist/tree', 'dist/absent']
+        (self.root / 'dist/tree/native').mkdir(parents=True)
+        (self.root / 'dist/tree/native/libjni.so').write_bytes(elf(183))
         (self.root / 'P/base/lib').mkdir(parents=True)
         (self.root / 'P/extra').mkdir()
         (self.root / 'P/base/lib/libone.so').write_bytes(elf(183))
@@ -815,7 +818,9 @@ class PipelineRun(Fixture):
         self.assertEqual(code, 0)
         self.assertEqual(record['elf'], {
             'base': {'expected': 'aarch64', 'objects': {'aarch64': 3}, 'not_expected': []},
-            'extra': {'expected': 'aarch64', 'objects': {'x86_64': 1}, 'not_expected': ['tool']}})
+            'extra': {'expected': 'aarch64', 'objects': {'x86_64': 1}, 'not_expected': ['tool']},
+            'dist/tree': {'expected': 'aarch64', 'objects': {'aarch64': 1}, 'not_expected': []}})
+        self.assertEqual(PIPELINE.groups()['groups']['boot']['audit_root'], ['dist/takx57'])
 
 
 def elf(machine, order=1):

@@ -19,7 +19,8 @@
 # Each job restores its prerequisites from the provider cache on GHCR, builds
 # its own providers and pushes them, so later jobs and reruns do not rebuild.
 # amd64 is the control: it uses the hand-built reference images when they can
-# be pulled and then restores every provider from the existing cache. arm64
+# be pulled and then restores every provider from the existing cache; when
+# they cannot, it builds its own images and providers once, like arm64. arm64
 # runs from a patched copy of the tree (takx/desktop-prototype/arch_tree.py);
 # no recipe or lock under takx/ is edited.
 name: TAKX desktop prototype
@@ -372,11 +373,15 @@ jobs:
       - name: Restore every provider, build the Kernel and compile the client
         run: takx/desktop-prototype/ci/run-group.sh client
 
-      # On arm64 this step fails until the assembler, which is amd64-only
-      # today, is ported (takx/desktop-prototype/ci/ARCH-CACHE-NOTE.md). The
-      # failure is kept visible (step outcome, warning, status table) but does
-      # not turn the arm64 leg red: the leg's result is the Kernel and client
-      # build above. No arm64 boot is claimed.
+      # The tracked assembler is amd64-only. On arm64 this step works from
+      # overrides/arm64/prototype/assemble.patch, which is applied to the tree
+      # copy only while it still matches the tracked file
+      # (takx/desktop-prototype/ci/ARCH-CACHE-NOTE.md); when it is skipped the
+      # step fails. Such a failure is kept visible (step outcome, warning,
+      # status table) but does not turn the arm64 leg red: the leg's result is
+      # the Kernel and client build above. The boot here is one unattended
+      # start under Xvfb and Mesa llvmpipe with boot.sh's automatic check; it
+      # is not an acceptance of the client on either architecture.
       - name: Assemble and boot
         id: boot
         continue-on-error: ${{ matrix.arch == 'arm64' }}
@@ -401,6 +406,8 @@ jobs:
       - name: Collect receipts
         if: always()
         shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           sudo mkdir -p "${TAKX_PROTO_ROOT}/ci-receipts"
@@ -411,7 +418,12 @@ jobs:
               sudo cp "${TAKX_PROTO_ROOT}/${file}" "${TAKX_PROTO_ROOT}/ci-receipts/${file//\//--}"
             fi
           done
-          sudo cp "${TAKX_PROTO_ROOT}"/overrides/*/tree/.takx-arch-tree.json "${TAKX_PROTO_ROOT}/ci-receipts/" 2>/dev/null || true
+          # Under a visible name: the artifact upload leaves hidden files out.
+          for receipt in "${TAKX_PROTO_ROOT}"/overrides/*/tree/.takx-arch-tree.json; do
+            if sudo test -f "${receipt}"; then
+              sudo cp "${receipt}" "${TAKX_PROTO_ROOT}/ci-receipts/takx-arch-tree-${ARCH}.json" || true
+            fi
+          done
           # The output of each Kernel control and any JVM crash report.
           sudo mkdir -p "${TAKX_PROTO_ROOT}/ci-receipts/kernel-controls"
           sudo find "${TAKX_PROTO_ROOT}/P/kernel-composed/controls" "${TAKX_PROTO_ROOT}/P/kernel-composed" -maxdepth 2 \
