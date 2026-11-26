@@ -110,8 +110,8 @@ https.get({host: '127.0.0.1', servername: 'localhost', port: +process.argv[1]},
                     ).returncode == 0
 
                 def assemble(bundle, tak_ca=None):
-                    if output.exists():
-                        output.chmod(0o644)
+                    # No chmod first: the init container reruns over its own
+                    # read-only output after a node restart and must replace it.
                     subprocess.run([
                         "node", "--input-type=module", "-e", merge_script,
                         "merge-trust", str(tak_ca or (root / "tak.pem")),
