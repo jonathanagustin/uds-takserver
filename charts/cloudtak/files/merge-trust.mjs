@@ -19,5 +19,8 @@ const parts = [takBytes, Buffer.from("\n")];
 if (bundle && fs.existsSync(bundle) && fs.statSync(bundle).isFile()) {
   parts.push(fs.readFileSync(bundle), Buffer.from("\n"));
 }
+// The volume outlives a container restart, so a second run finds the read-only
+// file of the first. Writing over it fails for a non-root user; replace it.
+fs.rmSync(output, { force: true });
 fs.writeFileSync(output, Buffer.concat(parts), { mode: 0o444 });
 fs.chmodSync(output, 0o444);
