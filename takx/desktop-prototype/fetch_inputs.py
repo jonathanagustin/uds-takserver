@@ -63,6 +63,12 @@ TAKX_REPOSITORY = 'https://github.com/TAK-Product-Center/TAKX.git'
 TAKX_REVISION = '0b59a9bb2d0e90dc35c9edfff1c2056daab2b713'
 LFS_MEDIA = 'https://media.githubusercontent.com/media/TAK-Product-Center/atak-civ/'
 MAVEN = 'https://repo1.maven.org/maven2/'
+# Maven Central answers shared addresses (hosted CI runners) with HTTP 429 at
+# times. Its Google-hosted mirror is then asked for the same path. It is only
+# another location: every file from it is checked against the same pin, and the
+# record of the input names it (fetched_from).
+MAVEN_HOSTS = (MAVEN, 'https://repo.maven.apache.org/maven2/')
+MAVEN_MIRROR = 'https://maven-central.storage-download.googleapis.com/maven2/'
 JOGAMP = 'https://jogamp.org/deployment/maven/'
 # Dated copy of the Debian archive that still serves the pinned trixie 13.7
 # InRelease after a point release replaced it on deb.debian.org. It is only
@@ -79,6 +85,8 @@ SKIP_LOCKS = {'native-cesium/metadata.lock.json'}
 SAFE_COORDINATE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.+-]*')
 LOCK = threading.Lock()
 RECORDS = []
+# {URL that was asked for: mirror URL the bytes really came from}
+MIRRORED = {}
 
 
 def arch_names():
@@ -110,6 +118,12 @@ def digest(path, algorithm='sha256'):
 def record(**fields):
     fields.setdefault('verified', False)
     with LOCK:
+        mirror = MIRRORED.get(fields.get('source'))
+        if mirror:
+            fields['fetched_from'] = mirror
+        mirror = MIRRORED.get('%s.sha1' % fields.get('source'))
+        if mirror and 'expected_sha1' in fields:
+            fields['sha1_fetched_from'] = mirror
         RECORDS.append(fields)
     if not fields['verified']:
         log('NOT VERIFIED', fields.get('name'), fields.get('note', ''))
@@ -153,20 +167,31 @@ def rate_limit_pause(failure, earlier):
     return pause
 
 
+def maven_mirror(url):
+    """The same path on the Maven Central mirror, or None for a URL of another source."""
+    for host in MAVEN_HOSTS:
+        if url.startswith(host):
+            return MAVEN_MIRROR + url[len(host):]
+    return None
+
+
 def download(url, target, limit=None, attempts=4):
     """Stream url into target (temporary name, then rename). Returns None or an error string.
 
     An HTTP 429 is the server asking for a pause, not a failed attempt at the
     file: it is answered with the longer waits of rate_limit_pause and does not
-    use up `attempts`.
+    use up `attempts`. When Maven Central answers 429, its mirror is asked once
+    for the same path first (MAVEN_MIRROR); the caller verifies the bytes
+    against the pin either way.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     error = None
     attempt = limited = 0
+    mirror, asked, refused = maven_mirror(url), url, None
     while attempt < attempts:
         descriptor, name = tempfile.mkstemp(prefix='.partial-', dir=target.parent)
         try:
-            request = urllib.request.Request(url, headers={'User-Agent': 'takx-desktop-prototype-fetch/1'})
+            request = urllib.request.Request(asked, headers={'User-Agent': 'takx-desktop-prototype-fetch/1'})
             with os.fdopen(descriptor, 'wb') as stream, urllib.request.urlopen(request, timeout=60) as response:
                 count = 0
                 while block := response.read(1 << 20):
@@ -175,12 +200,21 @@ def download(url, target, limit=None, attempts=4):
                         raise ValueError('download exceeds locked size')
                     stream.write(block)
             os.replace(name, target)
+            if asked != url:
+                with LOCK:
+                    MIRRORED[url] = asked
             return None
         except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as failure:
+            if asked != url:
+                # The mirror did not help; back to the source, which still wants its pause.
+                asked, failure = url, refused
             error = f'{type(failure).__name__}: {failure}'
             if isinstance(failure, urllib.error.HTTPError) and failure.code in (401, 403, 404, 410):
                 break
             if isinstance(failure, urllib.error.HTTPError) and failure.code == 429:
+                if mirror:
+                    asked, mirror, refused = mirror, None, failure
+                    continue
                 pause = rate_limit_pause(failure, limited)
                 if pause is None:
                     break
@@ -712,6 +746,31 @@ def pom_dependencies(repository, group, artifact, version, memo):
     return result
 
 
+def published_sha1(url):
+    """The SHA-1 a Maven repository publishes next to url.
+
+    When Maven Central refuses with HTTP 429 its mirror is asked once for the
+    same file (MAVEN_MIRROR). MIRRORED then names it, so the record of the JAR
+    says where its checksum came from (sha1_fetched_from).
+    """
+    def ask(location):
+        with urllib.request.urlopen(location + '.sha1', timeout=60) as response:
+            return response.read().decode().split()[0].lower()
+    try:
+        return ask(url)
+    except urllib.error.HTTPError as refused:
+        mirror = maven_mirror(url)
+        if refused.code != 429 or not mirror:
+            raise
+        try:
+            value = ask(mirror)
+        except (urllib.error.URLError, http.client.HTTPException, OSError, IndexError):
+            raise refused from None
+        with LOCK:
+            MIRRORED[url + '.sha1'] = mirror + '.sha1'
+        return value
+
+
 def fetch_runtime_extras(root, takx, closure_names):
     """Runtime-only artifacts TAKX's Gradle build adds outside the compile closure.
 
@@ -763,8 +822,7 @@ def fetch_runtime_extras(root, takx, closure_names):
         target = directory / file_name
         note, published, actual = '', None, None
         try:
-            with urllib.request.urlopen(url + '.sha1', timeout=60) as response:
-                published = response.read().decode().split()[0].lower()
+            published = published_sha1(url)
         except (urllib.error.URLError, http.client.HTTPException, OSError, IndexError) as failure:
             note = f'no published SHA-1: {failure}'
         if published and not (target.is_file() and digest(target, 'sha1') == published):
@@ -948,7 +1006,9 @@ def main():
                                             'jars', 'src/atak-civ', 'src/atak-civ-lfs', 'src/takx57', 'src/WorldWindJava')],
         'notes': (f'{sum(c["verified"] for c in counts.values())} of {len(RECORDS)} records verified; '
                   f'{len(failed_required)} required and {len(failed_optional)} optional inputs unverified; '
-                  f'{sum(1 for r in RECORDS if r.get("built_by_prototype"))} client-compiler JARs are build products, not fetched'),
+                  f'{sum(1 for r in RECORDS if r.get("built_by_prototype"))} client-compiler JARs are build products, not fetched'
+                  + (f'; {len(MIRRORED)} files came from the Maven Central mirror after HTTP 429 (fetched_from), each '
+                     f'checked against the same pin' if MIRRORED else '')),
         'counts': counts,
         'failed_required': [r['name'] for r in failed_required],
         'failed_optional': [r['name'] for r in failed_optional],

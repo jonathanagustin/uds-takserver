@@ -417,17 +417,11 @@ jobs:
           sudo find "${TAKX_PROTO_ROOT}/P/kernel-composed/controls" "${TAKX_PROTO_ROOT}/P/kernel-composed" -maxdepth 2 \
             -type f \( -name '*.log' -o -name 'hs_err*' \) -size -8M \
             -exec cp -t "${TAKX_PROTO_ROOT}/ci-receipts/kernel-controls" {} + 2>/dev/null || true
-          # Diagnostics for the open amd64 failure "real GDAL JNI unavailable"
-          # (ci/ARCH-CACHE-NOTE.md): what the stock loader unpacked, and the
-          # GDAL binding class the controls ran with.
-          sudo find "${TAKX_PROTO_ROOT}/P/kernel-composed/controls/runtime" -maxdepth 8 -printf '%y %s %p\n' 2>/dev/null \
-            | sort -k3 | head -n 400 | sudo tee "${TAKX_PROTO_ROOT}/ci-receipts/kernel-controls/runtime-tree.txt" >/dev/null || true
-          gdal_jar="${TAKX_PROTO_ROOT}/P/kernel-java/classpath/gdal-2.4.4-mod-java.jar"
-          if sudo test -f "${gdal_jar}"; then
-            sudo unzip -l "${gdal_jar}" | sudo tee "${TAKX_PROTO_ROOT}/ci-receipts/kernel-controls/gdal-jar-listing.txt" >/dev/null || true
-            sudo unzip -p "${gdal_jar}" org/gdal/gdal/gdalJNI.class \
-              | sudo tee "${TAKX_PROTO_ROOT}/ci-receipts/kernel-controls/gdalJNI.class" >/dev/null || true
-          fi
+          # When a Kernel control did not pass: which gdalJNI class the JVM
+          # loads, what the extracted natives lack in the runtime image, and a
+          # probe JVM with the flags of the control (ci/diagnose-controls.sh).
+          # It records only and always exits 0.
+          takx/desktop-prototype/ci/diagnose-controls.sh "${TAKX_PROTO_ROOT}/ci-receipts/kernel-controls" || true
           sudo chmod -R a+rX "${TAKX_PROTO_ROOT}/logs" "${TAKX_PROTO_ROOT}/status" "${TAKX_PROTO_ROOT}/ci-receipts" || true
 
       - name: Retain logs, status files and receipts

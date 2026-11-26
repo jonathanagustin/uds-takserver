@@ -130,6 +130,7 @@ class Case(unittest.TestCase):
         self.records, self.sleeps, self.logs, self.net, self.run_envs = [], [], [], Net(), []
         Body.sizes.clear()
         self.patch(F, 'RECORDS', self.records)
+        self.patch(F, 'MIRRORED', {})
         self.clock = types.SimpleNamespace(sleep=self.sleeps.append, time=time.time, strftime=time.strftime)
         self.patch(F, 'time', self.clock)
         self.patch(F, 'log', lambda *parts: self.logs.append(parts))
@@ -466,6 +467,54 @@ class Download(Case):
         self.patch(F, 'RATE_LIMIT_BUDGET', [0])
         self.assertIsNotNone(F.download(self.URL, self.target))
         self.assertEqual((self.sleeps, len(self.net.calls)), ([], 1))
+
+    def test_maven_central_rate_limit_is_answered_by_its_mirror(self):
+        self.patch(F, 'RATE_LIMIT_BUDGET', [1200])
+        for host in ('https://repo1.maven.org/maven2/', 'https://repo.maven.apache.org/maven2/'):
+            with self.subTest(host=host):
+                self.net.calls.clear()
+                F.MIRRORED.clear()
+                url = host + 'g/a/1/a-1.jar'
+                mirror = 'https://maven-central.storage-download.googleapis.com/maven2/g/a/1/a-1.jar'
+                self.net.routes[url] = [http_error(429)]
+                self.net.routes[mirror] = [b'mirrored']
+                self.assertIsNone(F.download(url, self.target))
+                self.assertEqual((self.target.read_bytes(), self.net.calls, self.sleeps), (b'mirrored', [url, mirror], []))
+                self.assertEqual((F.MIRRORED, F.RATE_LIMIT_BUDGET), ({url: mirror}, [1200]))
+                self.assertEqual(F.record(name='a', source=url, verified=True)['fetched_from'], mirror)
+        self.assertNotIn('fetched_from', F.record(name='b', source='https://example.invalid/b', verified=True))
+
+    def test_maven_central_mirror_is_asked_once_and_only_after_a_rate_limit(self):
+        self.patch(F, 'RATE_LIMIT_BUDGET', [1200])
+        url = 'https://repo1.maven.org/maven2/g/a/1/a-1.jar'
+        mirror = 'https://maven-central.storage-download.googleapis.com/maven2/g/a/1/a-1.jar'
+        # The mirror fails too: the source gets its pauses, the mirror is not asked again.
+        self.net.routes[url] = [http_error(429), http_error(429), b'from the source']
+        self.net.routes[mirror] = [urllib.error.URLError('mirror down')]
+        self.assertIsNone(F.download(url, self.target))
+        self.assertEqual((self.net.calls, self.sleeps), ([url, mirror, url, url], [20, 45]))
+        self.assertEqual((self.target.read_bytes(), F.MIRRORED), (b'from the source', {}))
+        # A mirror that does not have the file does not end the download either.
+        self.net.calls.clear()
+        self.sleeps.clear()
+        del self.net.routes[mirror]
+        self.net.routes[url] = [http_error(429), b'again']
+        self.assertIsNone(F.download(url, self.target))
+        self.assertEqual((self.net.calls, self.sleeps), ([url, mirror, url], [20]))
+        # Persisting refusal: the error names the source's answer, not the mirror's.
+        self.net.calls.clear()
+        self.net.routes[url] = [http_error(429)]
+        self.assertEqual(F.download(url, self.target), 'HTTPError: HTTP Error 429: status 429')
+        self.assertEqual(self.net.calls.count(mirror), 1)
+        # Any other failure of Maven Central never asks the mirror.
+        for failure in (http_error(404), http_error(503), urllib.error.URLError('boom')):
+            with self.subTest(failure=repr(failure)):
+                self.net.calls.clear()
+                self.net.routes[url] = [failure]
+                self.assertIsNotNone(F.download(url, self.target, attempts=1))
+                self.assertEqual(self.net.calls, [url])
+        self.assertIsNone(F.maven_mirror('https://example.invalid/maven2/g/a/1/a-1.jar'))
+        self.assertIsNone(F.maven_mirror('https://jogamp.org/deployment/maven/g/a/1/a-1.jar'))
 
     def test_success_after_failures_returns_none(self):
         self.net.routes[self.URL] = [urllib.error.URLError('one'), http_error(502), b'payload']
@@ -2355,6 +2404,32 @@ class RuntimeExtras(Case):
         self.fetch(closure={'other.jar', 'xmpcore-6.1.11.jar'})
         self.assertEqual(self.results(), [self.expected(url, 'com.adobe.xmp:xmpcore:6.1.11', b'jar', also_in_compile_closure=True)])
         self.assertEqual(self.net.calls, [url + '.sha1', url[:-4] + '.pom'])
+
+    def test_rate_limited_maven_central_is_answered_by_its_mirror_and_the_record_says_so(self):
+        self.patch(F, 'RATE_LIMIT_BUDGET', [1200])
+        self.versions(xmpcoreVersion='6.1.11')
+        url = self.publish('M', 'com.adobe.xmp', 'xmpcore', '6.1.11', b'jar')
+        self.assertTrue(url.startswith('https://repo1.maven.org/maven2/'))
+        mirror = 'https://maven-central.storage-download.googleapis.com/maven2/' + url[len('https://repo1.maven.org/maven2/'):]
+        self.net.routes[url + '.sha1'] = [http_error(429)]
+        self.net.routes[url] = [http_error(429)]
+        self.net.routes[mirror + '.sha1'] = sha(b'jar', 'sha1').encode()
+        self.net.routes[mirror] = b'jar'
+        self.fetch()
+        self.assertEqual(self.results(), [self.expected(url, 'com.adobe.xmp:xmpcore:6.1.11', b'jar', fetched_from=mirror,
+                                                        sha1_fetched_from=mirror + '.sha1')])
+        self.assertEqual(self.net.calls[:4], [url + '.sha1', mirror + '.sha1', url, mirror])
+        self.assertEqual(self.sleeps, [])
+        # A mirror without the checksum leaves the answer of Maven Central as the reason.
+        self.records.clear()
+        F.MIRRORED.clear()
+        shutil.rmtree(self.directory)
+        del self.net.routes[mirror + '.sha1']
+        self.fetch()
+        self.assertEqual(self.results(), [self.failed(url, 'com.adobe.xmp:xmpcore:6.1.11', b'', expected_sha1=None,
+                                                      note='no published SHA-1: HTTP Error 429: status 429')])
+        # JogAmp has no mirror: its 429 is reported as it is.
+        self.assertEqual(F.maven_mirror(F.JOGAMP + 'org/jogamp/jocl/jocl/2.5/jocl-2.5.jar'), None)
 
     def test_bytes_that_differ_from_the_published_sha1_are_deleted(self):
         self.versions(xmpcoreVersion='6.1.11')

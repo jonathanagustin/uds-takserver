@@ -710,6 +710,34 @@ class InputsStore(unittest.TestCase):
             done = self.call('restore', 'registry.invalid/ci/inputs:x', TAKX_PROTO_ROOT=root)
             self.assertEqual(done.returncode, 1)
             self.assertIn('restored into an empty work root only', done.stderr)
+            done = self.call('seed', 'registry.invalid/ci/inputs:x', TAKX_PROTO_ROOT=root)
+            self.assertEqual(done.returncode, 1)
+            self.assertIn('restored into an empty work root only', done.stderr)
+
+    def test_a_fetch_may_start_from_the_latest_tag_and_then_from_tracked_digest_references(self):
+        tracked = json.loads((HERE / 'ci/inputs-seeds.json').read_text())
+        self.assertEqual(sorted(tracked['seeds']), ['amd64', 'arm64'])
+        for arch in ('amd64', 'arm64'):
+            done = self.call('seeds', arch)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            lines = done.stdout.splitlines()
+            self.assertEqual(lines[0], 'registry.invalid/ci/inputs:%s-latest' % arch)
+            self.assertEqual(lines[1:], tracked['seeds'][arch])
+            self.assertEqual(self.call('latest', arch).stdout.splitlines(), lines[:1])
+            for reference in lines[1:]:
+                # A tracked seed names existing bytes by digest, never a tag that can move.
+                self.assertRegex(reference, r'\Aghcr\.io/[a-z0-9./_-]+/takx-desktop-proto-ci/inputs@sha256:[0-9a-f]{64}\Z')
+        self.assertNotEqual(self.call('seeds', 'riscv64').returncode, 0)
+        self.assertEqual(self.call('seed').returncode, 2)
+        self.assertEqual(self.call('save').returncode, 2)
+
+    def test_a_seed_takes_only_the_stores_the_fetch_verifies_itself(self):
+        text = self.SCRIPT.read_text()
+        self.assertIn("unpack_stored \"${reference}\" 'takx-inputs/cache/*' 'takx-inputs/jars/runtime-extras/*'", text)
+        # The inputs job fetches after a seed and stores what that fetch produced.
+        enter = (HERE / 'ci/enter.sh').read_text()
+        self.assertLess(enter.index('inputs.sh" seed '), enter.index('"${proto}/fetch.sh"'))
+        self.assertLess(enter.index('"${proto}/fetch.sh"'), enter.index('inputs.sh" save '))
 
 
 class ElfAudit(unittest.TestCase):

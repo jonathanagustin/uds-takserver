@@ -1,0 +1,23 @@
+{
+ "copyright": "# Copyright 2026 uds-takserver authors",
+ "license": "# SPDX-License-Identifier: GPL-3.0-only",
+ "description": [
+  "Stored inputs a fetch of the opt-in workflow may start from when no object is",
+  "stored for its key and the architecture has no 'latest' tag yet (ci/inputs.sh",
+  "seeds, seed). Each is the registry digest of one object an inputs job stored;",
+  "it names existing bytes and is never edited to make something pass. A seed",
+  "only saves downloads: fetch.sh compares every file with the pin of the recipe",
+  "that consumes it, and a file that does not match is downloaded again.",
+  "amd64 and arm64: stored by run 45714468510 (2026-11-25), restored by run",
+  "45721036467 (status/inputs.json of its jobs)."
+ ],
+ "schema": 1,
+ "seeds": {
+  "amd64": [
+   "ghcr.io/jonathanagustin/uds-takserver/takx-desktop-proto-ci/inputs@sha256:20b4e3339e6914c8652e6040824efae3b28eff211da39d58b18d0e3b63fda148"
+  ],
+  "arm64": [
+   "ghcr.io/jonathanagustin/uds-takserver/takx-desktop-proto-ci/inputs@sha256:63c1651a909d601920ad201e73c6f21bc90275a03ed4246b138a41dc69cc5d90"
+  ]
+ }
+}

@@ -13,6 +13,10 @@
 #   --provide-inputs     the inputs job, once per architecture and run: restore
 #                        the inputs stored for these pins (ci/inputs.sh) or, when
 #                        none are stored, fetch them (fetch.sh) and store them.
+#                        Such a fetch starts from the files of the newest stored
+#                        inputs of the architecture (ci/inputs.sh seed), each of
+#                        which fetch.sh verifies against its pin, so only what
+#                        changed is downloaded.
 #                        Writes status/inputs.ref for the job output.
 #   --inputs REFERENCE   every other job: restore exactly REFERENCE, the output
 #                        of the inputs job. No public source is asked. An empty
@@ -151,9 +155,24 @@ reference="$("${proto}/ci/inputs.sh" restore "${tag}")" || status=$?
 if ((status == 0)); then
   record_inputs "${reference}" "restored (stored by an earlier run) from"
 elif ((status == 3)); then
+  seeded=""
+  while read -r candidate; do
+    status=0
+    seeded="$("${proto}/ci/inputs.sh" seed "${candidate}")" || status=$?
+    if ((status == 0)); then break; fi
+    seeded=""
+    ((status == 3)) || exit "${status}"
+  done < <("${proto}/ci/inputs.sh" seeds "${arch}")
+  if [[ -n "${seeded}" ]]; then
+    say "the fetch starts from the files of ${seeded}"
+    how="fetched in this job, starting from the verified files of ${seeded}, and stored as"
+  else
+    say "no stored inputs to start from; everything is fetched from the public sources"
+    how="fetched from the public sources in this job and stored as"
+  fi
   "${proto}/fetch.sh"
-  reference="$("${proto}/ci/inputs.sh" save "${tag}")"
-  record_inputs "${reference}" "fetched from the public sources in this job and stored as"
+  reference="$("${proto}/ci/inputs.sh" save "${tag}" "$("${proto}/ci/inputs.sh" latest "${arch}")")"
+  record_inputs "${reference}" "${how}"
 else
   exit "${status}"
 fi

@@ -15,5 +15,11 @@
 #        the native engine failed on amd64 in run 2; arm64 client lock tracked.
 # run 4: amd64 only, from the cache, with diagnostics for the amd64 Kernel
 #        control failure "real GDAL JNI unavailable" (ci/ARCH-CACHE-NOTE.md).
-arches=amd64
+# run 5: run 4 never reached the Kernel: its inputs key was new (a JSON file
+#        was added below takx/), so it fetched everything again and Maven
+#        Central answered HTTP 429. A fetch now starts from the stored inputs
+#        (ci/inputs.sh seed) and asks the Maven Central mirror after a 429.
+#        Both architectures from the provider cache; ci/diagnose-controls.sh
+#        records why a Kernel control fails.
+arches=amd64,arm64
 providers=cached
