@@ -41,6 +41,7 @@ def node_agent_field_owners(managed_fields):
 REVIEWED_HELPERS = ('tests/ephemeral-cluster.py', 'tests/velero-ownership/drive.py',
                          'tests/velero-ownership/transfer.py', 'tests/velero-ownership/observe.py',
                          'tests/backup-restore.sh', 'tests/backup-names.sh', 'tests/api-smoke.sh',
+                         'tests/velero-controller-restore-policy.yaml', '.github/scripts/velero-controller-state.py',
                          'tests/extract-certs.sh', 'tests/keystore-pass.sh', 'tests/db-dump-secret.sh',
                          'tests/ensure-tak-group.py', 'tasks.yaml', 'tasks/test.yaml',
                          '.github/scripts/checked-pipe.sh', '.github/scripts/redact-then-filter.sh',
