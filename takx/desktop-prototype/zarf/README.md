@@ -43,7 +43,7 @@ One Deployment, one replica, one image, three containers. The image's own [READM
 | Container | User | Does | Sees |
 | --- | --- | --- | --- |
 | `identity` (init) | 10001 | validates the copied Secret, stages `client.p12`, `truststore.p12`, `truststore-java.p12`, `password.txt`, `package.zip` and `takx-package.zip` | the Secret (read-only), the identity volume |
-| `desktop` | 10001 | Xtigervnc on a Unix socket, openbox, the TAKX JVM. No TCP port | `/tmp`, the session volume, the socket volume, the identity volume (read-only) |
+| `desktop` | 10001 | Xtigervnc on a Unix socket, openbox, the TAKX JVM. The display has no TCP listener; the JVM itself listens on TCP 4242, 8087 and one ephemeral port (CommonCommo), which only the network policy keeps unreachable | `/tmp`, the session volume, the socket volume, the identity volume (read-only) |
 | `web` | 10002 | websockify: noVNC on TCP 6080, bridged to the socket | the socket volume (read-only), nothing else |
 
 Every container has a read-only root filesystem, drops all capabilities and cannot gain privileges. The service account has no token and no RoleBinding. There is no login in the pod: **whoever reaches port 6080 controls the desktop**, so the only way in is the tenant gateway with Authservice, and the chart has no switch for that.
