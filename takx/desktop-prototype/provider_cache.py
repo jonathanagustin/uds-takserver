@@ -35,9 +35,10 @@ Outside the key, deliberately or because nothing here can see it:
     and archives below the work root are named by what the locks and
     status/fetch.json pin (the recipes compare them with their locks), they
     are not read again here;
-  * Debian package revisions below the gated versions (the probe records a
-    digest of the package list in status/toolchain.json, outside the
-    fingerprint), the host kernel, CPU model and docker version;
+  * Debian package revisions below the gated versions, unless
+    TAKX_PROTO_CACHE_PACKAGES=key puts them in (see 'Toolchain packages');
+    in every mode they are recorded with each bundle and compared on restore;
+  * the host kernel, CPU model and docker version;
   * a non-default lane invocation (TAKX_LANE*_FETCH=0, another gis-java
     directory): the lanes switch the cache off for it instead.
 
@@ -64,6 +65,37 @@ probed again, and a fingerprint other than the recorded one is a refusal until
 `provider_cache.py toolchain --record` accepts the new toolchain on purpose.
 Outputs that were already ok before such a change are not pushed.
 
+Toolchain packages. The base image is pinned, but the Dockerfile installs
+with apt, so two builds of the same Dockerfile can differ in Debian revisions
+that no gate sees (libc6-dev and linux-libc-dev between two builds six days
+apart). The probe therefore lists every installed package. Two digests are
+recorded in status/toolchain.json: packages_sha256 over the whole list, and
+build_packages_sha256 over the packages that can change compiled output,
+selected by 'toolchain.build_packages' in providers.json (sections devel and
+libdevel, and name patterns for the compiler's and the link editor's
+libraries, further -dev packages, and the interpreters and generators the
+recipes run). That list, its digest and the image id go into the meta.json of
+every bundle pushed ('toolchain'), and restore compares them with the local
+toolchain. TAKX_PROTO_CACHE_PACKAGES says what follows from a difference:
+
+  report   (default) the bundle is used; the log line and the status file of
+           the restored provider name the packages that differ. Keys do not
+           change when the image is rebuilt on another day.
+  enforce  a bundle built with other build packages, or one that records
+           none, is not used; the lane builds. The refusal is no judgement of
+           the entry: nothing is noted and nothing is replaced.
+  key      the build packages digest is part of the toolchain identity in
+           every key, so another package list is another set of keys and a
+           routine Debian update of the image rebuilds every provider. A
+           changed list is then a refusal until `toolchain --record`.
+
+A bundle saved before package lists were recorded counts as built with the
+local packages only when its provenance names the toolchain image that is
+here (the image id its schema-1 key was derived from). When the build
+packages of the local image change, outputs that were already ok are not
+pushed, in every mode: their record would name packages they were not built
+with.
+
 Usage:
   provider_cache.py key [--explain] [NAME...]   print the key (or its inputs)
   provider_cache.py restore [--no-verify] [NAME...]
@@ -72,8 +104,11 @@ Usage:
                                                 the same, and COMMAND must
                                                 accept the restored tree
   provider_cache.py push [NAME...]              save P/<name> when it is ok
+  provider_cache.py push NAME --verify-with COMMAND [ARG...]
+                                                the same; COMMAND is the check
+                                                the lane gave restore
   provider_cache.py status [--remote] [--write-index [FILE]]
-  provider_cache.py toolchain [--record|--probe-script]
+  provider_cache.py toolchain [--record|--probe-script|--packages]
   provider_cache.py migrate [--from-toolchain-id ID] [NAME...]
 
 Environment:
@@ -82,13 +117,16 @@ Environment:
   TAKX_PROTO_CACHE_TIMEOUT seconds allowed for one docker command (3600)
   TAKX_PROTO_CACHE_VERIFY  'off' skips the post-restore checks of a provider
   TAKX_PROTO_CACHE_VERIFY_TIMEOUT  seconds allowed for each such check (900)
+  TAKX_PROTO_CACHE_PACKAGES  report (default), enforce or key: what a
+                           difference in the toolchain's build packages means
   TAKX_PROTO_TOOLCHAIN_ID  only for migrate: the toolchain image id that keys
                            of schema 1 were derived from; default: the id
                            recorded in status/images.json. It no longer
                            changes a key.
 
 Exit status: 0 done, 3 cleanly skipped (cache off, not logged in, nothing
-cached under this key, provider not ok, or already present and ok), 1 anything
+cached under this key, provider not ok, already present and ok, or a provider
+that providers.json keeps out of the cache with 'unpublished'), 1 anything
 else. A restore that does not exit 0 has changed nothing, so the caller builds
 instead; a provider directory that exists is never overwritten.
 
@@ -105,27 +143,45 @@ rejects the entry, anything else means the check could not be run and judges
 nothing. `--no-verify` and TAKX_PROTO_CACHE_VERIFY=off skip both. A provider
 with neither is trusted on the digests of its bundle alone.
 
-Replacing an entry. An entry under a key is never overwritten, with one
-exception. When restore pulls an entry and has to refuse it, it notes the
-registry digest of exactly that entry in <root>/cache-state/refused.json. A
-later push of the same provider from this work root, after a successful
-build, replaces the entry when the tag still names that digest and
-  * the entry was refused for what it is (digests, labels, metadata, archive
-    members, completion marker, file manifest, or the recipe's own check), or
-  * it was refused because it is bound to other prerequisite outputs than the
+Replacing an entry. An entry under a key is never overwritten, with these
+exceptions. When restore pulls an entry and has to refuse it, it notes the
+registry digest of exactly that entry in <root>/cache-state/refused.json,
+with the kind of refusal. A later push of the same provider from this work
+root, after a successful build, replaces the entry when the tag still names
+that digest and
+  * kind 'bundle': the entry was refused for what it is (digests, labels,
+    metadata, archive members, completion marker, file manifest). Nothing on
+    this machine can make such an entry usable; or
+  * kind 'prerequisites': it is bound to other prerequisite outputs than the
     local ones, and the local prerequisites are the cached ones (restored
     from the cache under their current keys, or the very outputs this work
     root last pushed there) and are still the ones restore saw. Otherwise the
-    entry may be healthy for everyone else and stays.
+    entry may be healthy for everyone else and stays; or
+  * kind 'check': a post-restore check (the recipe's or the lane's) exited 1
+    on the restored tree. That may be the entry or this machine, so the note
+    also keeps the digest of the entry's file manifest and names the check,
+    and push decides on the rebuilt output: when it is file for file the
+    cached entry, the entry stays and the note is dropped (the check judged
+    the machine); otherwise the same check is run on the rebuilt output, and
+    only when it passes there is the entry replaced. When it rejects the
+    rebuilt output too, the entry stays and the note is dropped; when it
+    cannot be run (checks switched off, the lane's command not given to push
+    or given with other words, exit status other than 0 and 1, a timeout),
+    the entry stays and the note with it.
 A refusal that is no judgement of the entry (registry or docker errors, a
-full disk, a local race) is not noted. The registry has no compare-and-swap
-for tags, so two machines replacing at once is last-writer-wins.
+full disk, a local race, a check that could not run or timed out, another
+toolchain package list with TAKX_PROTO_CACHE_PACKAGES=enforce) is not noted.
+The registry has no compare-and-swap for tags, so two machines replacing at
+once is last-writer-wins.
 
-Migration. `migrate` makes bundles saved under schema-1 keys (toolchain image
-id in the key) addressable under the current key without uploading their
-archive again: it derives the old key from the same local inputs, pulls and
-fully verifies the old bundle, and pushes an image that reuses its layer and
-adds one small layer with the new meta.json and labels.
+Migration. `migrate` makes bundles saved under an earlier key addressable
+under the current key without uploading their archive again: it derives the
+old key from the same local inputs, pulls and fully verifies the old bundle,
+and pushes an image that reuses its layers and adds one small layer with the
+new meta.json and labels. Earlier keys are the schema-1 key (toolchain image
+id in the key) and, with TAKX_PROTO_CACHE_PACKAGES=key, the key of the other
+modes; a key that names the build packages only takes a bundle known to be
+built with the local ones.
 
 Layout (light hexagonal): the functions up to 'Adapters' are the pure core
 (no I/O); WorkTree, DockerRegistry and ToolchainRunner are the adapters behind
@@ -164,6 +220,7 @@ LEGACY_SCHEMA = 1   # key documents that named the toolchain by image id
 FILES_SCHEMA = 1    # files.json, unchanged since schema 1
 TOOLCHAIN_SCHEMA = 1
 ARCHES = ('amd64', 'arm64')
+PACKAGE_MODES = ('report', 'enforce', 'key')
 DONE, FAILED, SKIPPED = 0, 1, 3
 HEX = re.compile(r'\b(?:[0-9a-f]{128}|[0-9a-f]{64}|[0-9a-f]{40})\b')
 NAME = re.compile(r'^[a-z0-9][a-z0-9-]*\Z')
@@ -193,7 +250,12 @@ class MissingFile(CacheError):
 
 
 class Rejected(CacheError):
-    """A restored tree that the recipe's own check does not accept."""
+    """A restored tree that the recipe's own check does not accept; `check`
+    names that check (check_identity)."""
+
+    def __init__(self, message, check=None):
+        super().__init__(message)
+        self.check = check
 
 
 class Skip(Exception):
@@ -238,6 +300,9 @@ def validate_manifest(manifest):
                             ('fetched', list), ('marker', str), ('invocation', dict)):
             if not isinstance(entry.get(field), kind):
                 raise CacheError('%s: missing or malformed %s' % (name, field))
+        unpublished = entry.get('unpublished')
+        if unpublished is not None and (not isinstance(unpublished, str) or not unpublished.strip()):
+            raise CacheError('%s: unpublished must say why the provider is not kept in the cache' % name)
         if entry['recipe'] not in recipes:
             raise CacheError('%s: unknown recipe %s' % (name, entry['recipe']))
         _relative(entry['marker'])
@@ -280,6 +345,13 @@ def _validate_toolchain(toolchain):
         raise CacheError('toolchain environment must map variable names to one-line values')
     if not isinstance(gated, list) or not gated:
         raise CacheError('toolchain needs its gated tools')
+    selection = toolchain.get('build_packages')
+    if not isinstance(selection, dict) or sorted(selection) != ['names', 'sections'] \
+            or not _strings(selection['names']) or not _strings(selection['sections']) \
+            or not selection['names'] + selection['sections'] \
+            or not all(item.strip() for item in selection['names'] + selection['sections']):
+        raise CacheError('toolchain needs build_packages: the sections and the name patterns of the packages '
+                         'that feed compilation and linking')
     names = set()
     for gate in gated:
         if not isinstance(gate, dict) or sorted(gate) != ['argv', 'expect', 'name'] \
@@ -396,8 +468,10 @@ def probe_script(toolchain):
     """The bash program that reports what a toolchain image is.
 
     One line per fact, fields separated by tabs: 'arch', 'env NAME value',
-    'tool name <first three output lines>' and 'packages <sha256>'. Like the
-    Dockerfile's own assertions it reads standard output and standard error.
+    'tool name <first three output lines>', 'packages <sha256>' (the whole
+    package list) and one 'pkg status name version architecture section' per
+    package dpkg knows. Like the Dockerfile's own assertions it reads standard
+    output and standard error.
     """
     lines = ['set -u', 'printf \'arch\\t%s\\n\' "$(dpkg --print-architecture)"']
     for name in sorted(toolchain['environment']):
@@ -408,12 +482,16 @@ def probe_script(toolchain):
                      % (gate['name'], command))
     lines.append('printf \'packages\\t%s\\n\' "$(dpkg-query -W -f \'${Package} ${Version} ${Architecture}\\n\''
                  ' | sha256sum | cut -d\' \' -f1)"')
+    lines.append('dpkg-query -W -f \'pkg\\t${db:Status-Abbrev}\\t${Package}\\t${Version}\\t${Architecture}'
+                 '\\t${Section}\\n\'')
     return '\n'.join(lines) + '\n'
 
 
 def parse_probe(text):
-    """{'arch', 'environment', 'tools', 'packages'} from the probe's output."""
-    facts = {'arch': None, 'environment': {}, 'tools': {}, 'packages': None}
+    """{'arch', 'environment', 'tools', 'packages', 'package_list'} from the
+    probe's output; package_list holds (status, name, version, architecture,
+    section) of every package."""
+    facts = {'arch': None, 'environment': {}, 'tools': {}, 'packages': None, 'package_list': []}
     for line in text.split('\n'):
         fields = line.split('\t')
         if fields[0] == 'arch' and len(fields) == 2:
@@ -424,6 +502,8 @@ def parse_probe(text):
             facts['tools'][fields[1]] = fields[2]
         elif fields[0] == 'packages' and len(fields) == 2:
             facts['packages'] = fields[1]
+        elif fields[0] == 'pkg' and len(fields) == 6:
+            facts['package_list'].append(tuple(fields[1:]))
         elif line:
             raise CacheError('unexpected line in the toolchain probe output: %r' % (line[:80],))
     return facts
@@ -469,6 +549,125 @@ def recorded_toolchain(toolchain, record):
             or record.get('fingerprint') != derive_key(document):
         return None
     return record['fingerprint'], document['arch'], image_id
+
+
+def build_packages(toolchain, package_list):
+    """The installed packages that can change compiled output, as sorted
+    'name version architecture' lines: those of the sections and name
+    patterns in toolchain['build_packages']. CacheError when there is none
+    or a field could not be one line of such a list."""
+    selection = toolchain['build_packages']
+    chosen = set()
+    for status, name, version, arch, section in package_list:
+        if status[:2] != 'ii':
+            continue  # removed, or only its configuration is left
+        if any(not field or ' ' in field for field in (name, version, arch)):
+            raise CacheError('the toolchain probe names a package that is no plain name, version and '
+                             'architecture: %r' % ((name, version, arch),))
+        if section.rsplit('/', 1)[-1] in selection['sections'] \
+                or any(fnmatch.fnmatchcase(name, pattern) for pattern in selection['names']):
+            chosen.add('%s %s %s' % (name, version, arch))
+    if not chosen:
+        raise CacheError('the toolchain probe names no installed build package')
+    return sorted(chosen)
+
+
+def packages_digest(lines):
+    return sha256_bytes(''.join(line + '\n' for line in lines).encode())
+
+
+def packages_attribute(toolchain, observed):
+    """What a probed image is built from, beside the fingerprint: the digest
+    of its whole package list, and the build packages with their digest."""
+    if not isinstance(observed.get('packages'), str) or not KEY.match(observed['packages']):
+        raise CacheError('the toolchain probe gave no digest of the package list')
+    lines = build_packages(toolchain, observed['package_list'])
+    return {'packages_sha256': observed['packages'], 'build_packages': lines,
+            'build_packages_sha256': packages_digest(lines)}
+
+
+def valid_attribute(value):
+    """`value` when it is a packages attribute whose list has its digest, else None."""
+    if not isinstance(value, dict) or not _strings(value.get('build_packages')) or not value['build_packages'] \
+            or value.get('build_packages_sha256') != packages_digest(value['build_packages']):
+        return None
+    return value
+
+
+def recorded_packages(toolchain, record):
+    """The packages attribute of a status/toolchain.json record that was
+    taken with this manifest's selection, else None."""
+    if not isinstance(record, dict) or record.get('build_selection') != toolchain['build_packages']:
+        return None
+    value = valid_attribute(record)
+    if value is None or not isinstance(record.get('packages_sha256'), str):
+        return None
+    return {field: value[field] for field in ('packages_sha256', 'build_packages', 'build_packages_sha256')}
+
+
+def package_changes(before, after):
+    """What differs between two build package lists, one phrase per package."""
+    def table(lines):
+        result = {}
+        for line in lines:
+            name, version, arch = (line.split(' ') + ['', ''])[:3]
+            result[(name, arch)] = version
+        return result
+
+    old, new = table(before), table(after)
+    changes = []
+    for name, arch in sorted(set(old) | set(new)):
+        was, now = old.get((name, arch)), new.get((name, arch))
+        if was == now:
+            continue
+        label = '%s:%s' % (name, arch)
+        changes.append('%s %s -> %s' % (label, was, now) if was is not None and now is not None
+                       else '%s %s only here' % (label, now) if was is None
+                       else '%s %s not here' % (label, was))
+    return changes
+
+
+def key_fingerprint(fingerprint, attribute, mode):
+    """The toolchain identity a key names: the fingerprint, and with mode
+    'key' the fingerprint together with the build packages digest."""
+    if mode not in PACKAGE_MODES:
+        raise CacheError('unknown package mode %r (one of %s)' % (mode, ', '.join(PACKAGE_MODES)))
+    if mode != 'key':
+        return fingerprint
+    if valid_attribute(attribute) is None:
+        raise CacheError('no build package list of the toolchain is recorded, so a key cannot name it')
+    return derive_key({'schema': TOOLCHAIN_SCHEMA, 'toolchain': fingerprint,
+                       'build_packages_sha256': attribute['build_packages_sha256']})
+
+
+def judge_packages(bundle, built_by, local, image_id, mode):
+    """(verdict, detail, refuse) for the toolchain packages of a bundle.
+
+    bundle: the 'toolchain' block of its meta.json (or None), built_by: the
+    toolchain image id its provenance names (or None), local: the packages
+    attribute of the toolchain here, image_id: the id of that image. verdict:
+    'same', 'other' or 'unknown'. Only mode 'report' uses a bundle whose
+    packages are not known to be the local ones.
+    """
+    recorded = valid_attribute(bundle)
+    if recorded is not None:
+        if recorded['build_packages_sha256'] == local['build_packages_sha256']:
+            verdict, detail = 'same', 'built with the build packages of the toolchain here'
+        else:
+            changes = package_changes(recorded['build_packages'], local['build_packages'])
+            verdict, detail = 'other', 'built with other toolchain build packages than the ones here (%d): %s' % (
+                len(changes), ', '.join(changes[:8]) + (' ...' if len(changes) > 8 else ''))
+    elif isinstance(built_by, str) and built_by and built_by == image_id:
+        verdict, detail = 'same', 'records no package list, but was built by the toolchain image that is here'
+    else:
+        verdict, detail = 'unknown', 'records no toolchain package list (saved before it was recorded%s)' % (
+            ', by toolchain image %s' % built_by if isinstance(built_by, str) and built_by else '')
+    return verdict, detail, mode != 'report' and verdict != 'same'
+
+
+def check_identity(whose, words):
+    """A name for one post-restore check: whose it is and its exact words."""
+    return sha256_bytes(canonical({'whose': whose, 'words': list(words)}))
 
 
 def key_document(manifest, name, facts, prerequisite_keys):
@@ -684,14 +883,24 @@ def decide_push(enabled, status, marker_present, remote):
     return 'refuse', 'the registry could not be queried'
 
 
-def decide_replace(refusal, key, remote_digest, markers, prerequisites_cached):
-    """('replace'|'keep'|'forget', reason) for an entry already cached under `key`.
+def decide_replace(refusal, key, remote_digest, markers, prerequisites_cached, rebuilt_files=None, recheck=None):
+    """('replace'|'keep'|'forget'|'compare'|'recheck', reason) for an entry
+    already cached under `key`.
 
     refusal: what restore noted when it refused the entry under this
-    reference here ({key, digest, kind, reason, markers}), or None.
-    remote_digest: the registry digest the reference names now. markers: the
-    local prerequisite markers now. 'forget' keeps the entry and drops a note
-    that no longer describes it.
+    reference here ({key, digest, kind, reason, markers, and for kind 'check'
+    files_sha256 and check}), or None. remote_digest: the registry digest the
+    reference names now. markers: the local prerequisite markers now.
+    'forget' keeps the entry and drops a note that no longer describes it.
+
+    Kind 'bundle' is a judgement of the entry itself (digests, labels,
+    metadata, archive members, marker, file manifest) and replaces. Kind
+    'check' is the verdict of a post-restore check, which may be about this
+    machine: the caller is asked for the file manifest digest of the rebuilt
+    output ('compare', then rebuilt_files) and, when that differs from the
+    entry's, for the outcome of the same check on the rebuilt output
+    ('recheck', then recheck: 'passed', 'rejected' or why it could not run).
+    Only 'passed' replaces.
     """
     present = 'already cached under this key'
     if not isinstance(refusal, dict) or refusal.get('key') != key \
@@ -710,6 +919,26 @@ def decide_replace(refusal, key, remote_digest, markers, prerequisites_cached):
             return 'keep', present + '; it is bound to other prerequisite outputs, and the ones here are not ' \
                                      'the cached ones, so it may be usable elsewhere and is not replaced'
         return 'replace', 'the cached entry is bound to other prerequisite outputs than the cached ones'
+    if refusal.get('kind') == 'check':
+        recorded, check = refusal.get('files_sha256'), refusal.get('check')
+        if not isinstance(recorded, str) or not KEY.match(recorded) or not isinstance(check, str) \
+                or not KEY.match(check):
+            return 'keep', present + '; the note of its rejection names no check and no file manifest'
+        if rebuilt_files is None:
+            return 'compare', present + '; a check rejected it here'
+        if rebuilt_files == recorded:
+            return 'forget', present + '; the output rebuilt here is file for file the cached entry, so the ' \
+                                       'check that rejected it judged this machine, not the entry'
+        if recheck is None:
+            return 'recheck', present + '; a check rejected it here and the rebuilt output differs from it'
+        if recheck == 'passed':
+            return 'replace', 'the check that rejected the cached entry accepts the output rebuilt here, ' \
+                              'which differs from it (%s)' % refusal.get('reason')
+        if recheck == 'rejected':
+            return 'forget', present + '; the check that rejected it rejects the output rebuilt here as well, ' \
+                                       'so it does not judge the entry'
+        return 'keep', present + '; a check rejected it here, but that check could not judge the rebuilt ' \
+                                 'output (%s), so the entry is not replaced' % recheck
     return 'keep', present
 
 
@@ -1327,39 +1556,54 @@ class LaneCheck:
 # ---------------------------------------------------------------------------
 class ProviderCache:
     def __init__(self, manifest, tree, registry, registry_prefix, legacy_toolchain='', log=None, runner=None,
-                 verify=True):
+                 verify=True, packages='report'):
         self.manifest = validate_manifest(manifest)
         self.tree, self.registry, self.runner = tree, registry, runner
         self.prefix = registry_prefix or DEFAULT_REGISTRY
         self.enabled = self.prefix != 'off'
         self.legacy_id = legacy_toolchain
         self.verify, self.rerecord, self.lane_check = verify, False, None
+        if packages not in PACKAGE_MODES:
+            raise CacheError('TAKX_PROTO_CACHE_PACKAGES is %r, not one of %s' % (packages, ', '.join(PACKAGE_MODES)))
+        self.packages = packages
         self.log = log or (lambda message: print(message, file=sys.stderr))
-        self._keys, self._context, self._legacy = {}, None, {}
+        self._keys, self._context, self._legacy, self._plain, self._local = {}, None, {}, {}, None
 
     # -- toolchain --------------------------------------------------------------
     def toolchain(self, local=False):
-        """(fingerprint, architecture) of the toolchain the keys name.
+        """(fingerprint, architecture) of the toolchain the keys name; with
+        TAKX_PROTO_CACHE_PACKAGES=key the fingerprint also names the build
+        packages (key_fingerprint).
 
         Without `local` a record that still describes the manifest's toolchain
         is taken as it is. With it the local image must be that toolchain:
         the recorded image id is accepted, any other image is probed.
         """
+        fingerprint, arch, attribute, _ = self.identity(local)
+        return key_fingerprint(fingerprint, attribute, self.packages), arch
+
+    def identity(self, local=False):
+        """(fingerprint, architecture, packages attribute, image id) of the
+        recorded toolchain. The attribute is None for a record taken before
+        package lists were recorded, which only a call without `local` and
+        without mode 'key' accepts; every other call probes the image."""
         want = self.manifest['toolchain']
         raw = self.tree.toolchain_record()
         known = recorded_toolchain(want, raw)
-        if known and not local and not self.rerecord:
-            return known[:2]
+        listed = recorded_packages(want, raw) if known else None
+        if known and not local and not self.rerecord and (listed or self.packages != 'key'):
+            return known[0], known[1], listed, known[2]
         if not self.registry.available():
             raise CacheError('no toolchain fingerprint is recorded for this manifest (status/toolchain.json) '
                              'and docker is not available to probe %s' % TOOLCHAIN)
         image_id = self.registry.image_id(TOOLCHAIN)
         if not image_id:
             raise CacheError('there is no local %s image to fingerprint' % TOOLCHAIN)
-        if known and known[2] == image_id and not self.rerecord:
-            return known[:2]
+        if known and listed and known[2] == image_id and not self.rerecord:
+            return known[0], known[1], listed, image_id
         observed = parse_probe(self.registry.probe_toolchain(TOOLCHAIN, probe_script(want)))
         document = toolchain_document(want, observed, self.registry.base_layer(TOOLCHAIN))
+        attribute = packages_attribute(want, observed)
         fingerprint = derive_key(document)
         previous = raw.get('fingerprint') if raw else None
         changed = bool(previous) and previous != fingerprint
@@ -1367,24 +1611,53 @@ class ProviderCache:
             raise CacheError('the local %s image (%s) has toolchain fingerprint %s, not the recorded %s; '
                              'if the toolchain was changed on purpose, accept it with '
                              '`provider_cache.py toolchain --record`' % (TOOLCHAIN, image_id, fingerprint, previous))
+        # Build packages: a record with a list is compared by it; an older
+        # record only has the digest of the whole list to compare.
+        earlier = recorded_packages(want, raw)
+        drift = None
+        if earlier is not None:
+            if earlier['build_packages_sha256'] != attribute['build_packages_sha256']:
+                drift = package_changes(earlier['build_packages'], attribute['build_packages'])
+        elif previous and raw.get('packages_sha256') != attribute['packages_sha256']:
+            drift = ['the earlier record lists no build packages and the whole package list differs']
+        if drift is not None:
+            told = '%s (%d)' % (', '.join(drift[:8]) + (' ...' if len(drift) > 8 else ''), len(drift))
+            if self.packages == 'key' and not self.rerecord:
+                raise CacheError('the local %s image (%s) has other build packages than the recorded toolchain: %s; '
+                                 'with TAKX_PROTO_CACHE_PACKAGES=key that changes every key. Accept it with '
+                                 '`provider_cache.py toolchain --record`' % (TOOLCHAIN, image_id, told))
+            self.log('provider-cache: the toolchain image %s has other build packages than the recorded one: %s; '
+                     'outputs that were ok before are not pushed' % (image_id, told))
         before = raw.get('outputs_before') if raw else None
         self.tree.record_toolchain({
             'stage': 'toolchain', 'status': 'ok', 'outputs': [TOOLCHAIN], 'seconds': 0,
-            'notes': 'toolchain fingerprint of the provider cache keys (provider_cache.py toolchain); '
-                     'observed and packages_sha256 are what the probe saw and are not part of it',
+            'notes': 'toolchain fingerprint of the provider cache keys (provider_cache.py toolchain); observed '
+                     'is what the probe saw and is not part of it; build_packages are the installed packages '
+                     'build_selection chose, in the keys only with TAKX_PROTO_CACHE_PACKAGES=key',
             'image': TOOLCHAIN, 'image_id': image_id, 'fingerprint': fingerprint, 'document': document,
-            'observed': observed['tools'], 'packages_sha256': observed['packages'],
-            'outputs_before': int(time.time()) + 1 if changed else before})
-        self.log('provider-cache: toolchain fingerprint %s (%s, image %s)' % (fingerprint, document['arch'], image_id))
-        return fingerprint, document['arch']
+            'observed': observed['tools'], 'packages_sha256': attribute['packages_sha256'],
+            'build_packages': attribute['build_packages'],
+            'build_packages_sha256': attribute['build_packages_sha256'], 'build_selection': want['build_packages'],
+            'outputs_before': int(time.time()) + 1 if changed or drift is not None else before})
+        self.log('provider-cache: toolchain fingerprint %s (%s, image %s, build packages %s)'
+                 % (fingerprint, document['arch'], image_id, attribute['build_packages_sha256']))
+        return fingerprint, document['arch'], attribute, image_id
 
     def _check_toolchain(self):
         """The local image must be the recorded toolchain before the cache is
         read or written; keys derived earlier from another record are dropped."""
-        value = self.toolchain(local=True)
+        fingerprint, arch, attribute, image_id = self.identity(local=True)
+        value = key_fingerprint(fingerprint, attribute, self.packages), arch
         if self._context is not None and self._context[1] != value:
-            self._keys, self._context = {}, None
+            self._keys, self._context, self._plain = {}, None, {}
+        self._local = (attribute, image_id)
         return value
+
+    def _unpublished(self, name):
+        """Skip a provider that providers.json keeps out of the cache."""
+        why = self.manifest['providers'][name].get('unpublished')
+        if why is not None:
+            raise Skip('not kept in the provider cache (%s)' % why)
 
     # -- keys -----------------------------------------------------------------
     def _facts(self, records, recipes, toolchain, arch):
@@ -1420,6 +1693,16 @@ class ProviderCache:
 
     def ref(self, name):
         return image_ref(self.prefix, name, self.key(name))
+
+    def plain_keys(self, names=None):
+        """{name: (key, document)} as derived without the build packages in
+        the toolchain identity (every mode but 'key')."""
+        fingerprint, arch = self.identity()[:2]
+        self.keys(names)
+        records, _, recipes = self._context
+        self._plain = derive_keys(self.manifest, self._facts(records, recipes, fingerprint, arch), names,
+                                  self._plain)
+        return self._plain
 
     def legacy_keys(self, names=None):
         """{name: (key, document)} as schema 1 derived them from the same inputs."""
@@ -1470,17 +1753,39 @@ class ProviderCache:
                 self.tree.marker_sha256(name, entry['marker']) != marker:
             raise CacheError('%s: status or marker changed while it was archived' % name)
         tar_sha = sha256_file(tar)
-        files_text = json.dumps({'schema': FILES_SCHEMA, 'provider': name, 'entries': entries},
-                                sort_keys=True, separators=(',', ':')) + '\n'
+        files_text = self._files_text(name, entries)
         meta = {'schema': SCHEMA, 'provider': name, 'key': key, 'root': str(self.tree.root),
                 'repo': str(self.tree.repo), 'marker': entry['marker'], 'marker_sha256': marker,
                 'tar_sha256': tar_sha, 'files_sha256': sha256_bytes(files_text.encode()),
-                'prerequisite_markers': markers, 'key_inputs': self.explain(name)}
+                'prerequisite_markers': markers, 'key_inputs': self.explain(name),
+                'toolchain': dict(self._local[0], image_id=self._local[1])}
         (context / 'files.json').write_text(files_text)
         (context / 'meta.json').write_text(json.dumps(meta, sort_keys=True, indent=1) + '\n')
         (context / 'status.json').write_bytes(status_bytes)
         (context / 'tar.sha256').write_text(tar_sha + '\n')
         return entries, tar_sha
+
+    @staticmethod
+    def _files_text(name, entries):
+        return json.dumps({'schema': FILES_SCHEMA, 'provider': name, 'entries': entries},
+                          sort_keys=True, separators=(',', ':')) + '\n'
+
+    def _files_digest(self, name):
+        """The digest a bundle of the local P/<name> would record for its files.json."""
+        entries = self.tree.entries(self.tree.provider_dir(name))
+        return sha256_bytes(self._files_text(name, entries).encode())
+
+    def _recheck(self, name, identity):
+        """'passed', 'rejected' or why not: the check `identity` on the local P/<name>."""
+        chosen = [run for _, known, run in self._checks(name) if known == identity]
+        if not chosen:
+            return 'it is not among the checks this push can run'
+        (self.tree.root / 'logs').mkdir(exist_ok=True)
+        try:
+            code = chosen[0]()
+        except CacheError as error:
+            return str(error)
+        return 'passed' if code == 0 else 'rejected' if code == 1 else 'exit %s' % code
 
     @staticmethod
     def _labels(name, key, tar_sha):
@@ -1495,6 +1800,7 @@ class ProviderCache:
             raise CacheError('unknown provider ' + name)
         if not self.enabled:
             raise Skip('cache is off')
+        self._unpublished(name)
         status_bytes = self.tree.status_bytes(name)
         state = self.tree.status_of(name)
         marker = self.tree.marker_sha256(name, entry['marker'])
@@ -1513,12 +1819,18 @@ class ProviderCache:
                              'the toolchain its key would name; rebuild it or restore it' % name)
         key, ref = self.key(name), self.ref(name)
         action, reason = decide_push(True, state, True, self.registry.probe(ref))
-        replaced = None
+        replaced, compared = None, None
         if action == 'present':
             refusal = self.tree.refusals().get(ref)
             if refusal is not None:
-                action, reason = decide_replace(refusal, key, self.registry.digest(ref), self._markers(name),
-                                                self._prerequisites_cached(name))
+                judge = (refusal, key, self.registry.digest(ref), self._markers(name),
+                         self._prerequisites_cached(name))
+                action, reason = decide_replace(*judge)
+                if action == 'compare':
+                    compared = self._files_digest(name)
+                    action, reason = decide_replace(*judge, compared)
+                if action == 'recheck':
+                    action, reason = decide_replace(*judge, compared, self._recheck(name, refusal['check']))
                 if action == 'forget':
                     self.tree.note_refusal(ref, None)
             if action != 'replace':
@@ -1536,6 +1848,8 @@ class ProviderCache:
         context = self.tree.scratch('.push-%s.' % name)
         try:
             entries, tar_sha = self._bundle(name, key, entry, context, markers, status_bytes, marker)
+            if compared is not None and sha256_file(context / 'files.json') != compared:
+                raise CacheError('%s changed after it was compared with the cached entry' % name)
             self.registry.publish(ref, context, [name + '.tar', *IMAGE_FILES], self._labels(name, key, tar_sha))
         finally:
             shutil.rmtree(context, ignore_errors=True)
@@ -1596,19 +1910,20 @@ class ProviderCache:
                              % (name, ', '.join(problems[:5]), len(problems)))
         return meta, status, expected, out / name
 
-    def _refused(self, name, key, ref, digest, kind, markers, error):
+    def _refused(self, name, key, ref, digest, kind, markers, error, **more):
         """Note that the entry `ref` names now was judged unusable here."""
         if digest is None:
             self.log('provider-cache: %s: docker named no registry digest for %s, so the refusal is not noted '
                      'and a later push will not replace the entry' % (name, ref))
             return
-        self.tree.note_refusal(ref, {'name': name, 'key': key, 'digest': digest, 'kind': kind, 'markers': markers,
-                                     'reason': str(error)[:300], 'at': int(time.time())})
+        self.tree.note_refusal(ref, dict(more, name=name, key=key, digest=digest, kind=kind, markers=markers,
+                                         reason=str(error)[:300], at=int(time.time())))
 
-    def _checker(self, name):
-        """(callable or None, what passed) for the checks of a restored
+    def _checks(self, name):
+        """[(whose, identity, callable)] of the checks that can run on
         P/<name>: the recipe's own re-check (providers.json 'verify'), then
-        the command a lane gave with --verify-with."""
+        the command a lane gave with --verify-with. Each callable returns the
+        exit status."""
         log = self.tree.root / 'logs' / (name + '-verify.log')
         checks = []
         call = self.manifest['providers'][name].get('verify')
@@ -1616,23 +1931,31 @@ class ProviderCache:
             values = dict(self.manifest['variables'], root=str(self.tree.root), repo=str(self.tree.repo))
             env = [render(token, values) for token in call['env']]
             argv = [render(token, values) for token in call['argv']]
-            checks.append(('the recipe\'s own check', lambda: self.runner.run(name, env, argv, log)))
+            checks.append(('the recipe\'s own check', check_identity('recipe', env + ['--'] + argv),
+                           lambda: self.runner.run(name, env, argv, log)))
         if self.lane_check is not None and self.verify:
-            checks.append(('the lane\'s own check', lambda: self.lane_check.run(name, log)))
+            checks.append(('the lane\'s own check', check_identity('lane', self.lane_check.command),
+                           lambda: self.lane_check.run(name, log)))
+        return checks
+
+    def _checker(self, name):
+        """(callable or None, what passed) for the checks of a restored P/<name>."""
+        checks = self._checks(name)
         if not checks:
             return None, ''
 
         def check():
             (self.tree.root / 'logs').mkdir(exist_ok=True)
-            for whose, run in checks:
+            for whose, identity, run in checks:
                 code = run()
                 if code == 1:
-                    raise Rejected('%s: %s rejects the restored output; see logs/%s-verify.log' % (name, whose, name))
+                    raise Rejected('%s: %s rejects the restored output; see logs/%s-verify.log'
+                                   % (name, whose, name), identity)
                 if code != 0:
                     raise CacheError('%s: %s could not be run here (exit %s); see logs/%s-verify.log'
                                      % (name, whose, code, name))
 
-        return check, ''.join(', %s passed' % whose for whose, _ in checks)
+        return check, ''.join(', %s passed' % whose for whose, _, _ in checks)
 
     def restore(self, name):
         entry = self.manifest['providers'].get(name)
@@ -1640,6 +1963,7 @@ class ProviderCache:
             raise CacheError('unknown provider ' + name)
         if not self.enabled:
             raise Skip('cache is off')
+        self._unpublished(name)
         if self.tree.status_of(name) == 'ok' and self.tree.marker_sha256(name, entry['marker']):
             raise Skip('already present and ok here')
         markers = self._markers(name)
@@ -1665,7 +1989,7 @@ class ProviderCache:
                 self._refused(name, key, ref, error.digest, 'bundle', markers, error)
                 raise
             try:
-                _, status, expected, tree = self._examine(name, key, work, labels, markers)
+                meta, status, expected, tree = self._examine(name, key, work, labels, markers)
             except OtherPrerequisites as error:
                 self._refused(name, key, ref, digest, 'prerequisites', markers, error)
                 raise
@@ -1674,30 +1998,58 @@ class ProviderCache:
                 raise
             if self._markers(name) != markers:
                 raise CacheError('%s: a prerequisite changed during the restore' % name)
+            # Not a judgement of the entry: it may be right for the toolchain it names.
+            verdict, packages, refuse = judge_packages(meta.get('toolchain'), self._built_by(meta), *self._local,
+                                                       self.packages)
+            if refuse:
+                raise CacheError('%s: the cached entry %s, and TAKX_PROTO_CACHE_PACKAGES=%s does not use such '
+                                 'an entry' % (name, packages, self.packages))
             status['restored_from'] = ref
             status['cache_key'] = key
+            drift = '' if verdict == 'same' else '; ' + packages
+            if drift:  # said in the status of the provider too, where the build reports are written from
+                status['toolchain_packages'] = packages
             check, passed = self._checker(name)
             try:
                 self.tree.install(tree, name, json.dumps(status, indent=1) + '\n', check)
             except FileExistsError:
                 raise CacheError('%s: the provider directory appeared meanwhile; not overwritten' % name)
             except Rejected as error:
-                self._refused(name, key, ref, digest, 'bundle', markers, error)
+                self._refused(name, key, ref, digest, 'check', markers, error, check=error.check,
+                              files_sha256=meta.get('files_sha256'))
                 raise
         finally:
             shutil.rmtree(work, ignore_errors=True)
-        self.log('provider-cache: restored %s from %s (%d entries verified%s)' % (name, ref, len(expected), passed))
+        self.log('provider-cache: restored %s from %s (%d entries verified%s%s)'
+                 % (name, ref, len(expected), passed, drift))
         return ref
+
+    @staticmethod
+    def _built_by(meta):
+        """The toolchain image id the provenance of a bundle names, or None:
+        its own record, else the image id its schema-1 key was derived from."""
+        for block, field in (('toolchain', 'image_id'), ('adopted_from', 'toolchain_image_id')):
+            value = meta.get(block)
+            if isinstance(value, dict) and isinstance(value.get(field), str) and value[field]:
+                return value[field]
+        return None
 
     # -- migrate ----------------------------------------------------------------
     def migrate(self, name):
-        """Make the bundle saved under the schema-1 key of `name` addressable
-        under its current key, without uploading its archive again."""
+        """Make a bundle saved under an earlier key of `name` addressable
+        under its current key, without uploading its archive again.
+
+        Earlier keys, in this order: with TAKX_PROTO_CACHE_PACKAGES=key the
+        key without the build packages (what every other mode derives), then
+        the schema-1 key. A key that names the build packages only takes a
+        bundle that is known to be built with the local ones.
+        """
         entry = self.manifest['providers'].get(name)
         if entry is None:
             raise CacheError('unknown provider ' + name)
         if not self.enabled:
             raise Skip('cache is off')
+        self._unpublished(name)
         markers = self._markers(name)
         if markers is None:
             raise Skip('a prerequisite provider is not ok here')
@@ -1712,27 +2064,43 @@ class ProviderCache:
             raise Skip('docker is not logged in to the cache registry')
         if state != 'absent':
             raise CacheError('%s: the registry could not be queried' % name)
-        old_key, old_document = self.legacy_keys([name])[name]
-        old_ref = image_ref(self.prefix, name, old_key)
-        state = self.registry.probe(old_ref)
-        if state == 'absent':
-            raise Skip('nothing cached under the schema-1 key (%s)' % old_ref)
-        if state != 'present':
-            raise CacheError('%s: the registry could not be queried for %s' % (name, old_ref))
+        sources = []
+        if self.packages == 'key':
+            sources.append(('the key without the build packages', SCHEMA) + self.plain_keys([name])[name])
+        sources.append(('the schema-1 key', LEGACY_SCHEMA) + self.legacy_keys([name])[name])
+        for what, schema, old_key, old_document in sources:
+            old_ref = image_ref(self.prefix, name, old_key)
+            state = self.registry.probe(old_ref)
+            if state == 'present':
+                break
+            if state != 'absent':
+                raise CacheError('%s: the registry could not be queried for %s' % (name, old_ref))
+        else:
+            raise Skip('nothing cached under %s (%s)' % (' or '.join(source[0] for source in sources), old_ref))
         work = self.tree.scratch('.migrate-%s.' % name)
         kept = False
         try:
             labels, digest = self.registry.fetch(old_ref, work, [name + '.tar', *IMAGE_FILES], keep=True)
             kept = True
-            meta, _, expected, _ = self._examine(name, old_key, work, labels, markers, LEGACY_SCHEMA)
+            meta, _, expected, _ = self._examine(name, old_key, work, labels, markers, schema)
             if meta.get('key_inputs') != old_document:
                 raise CacheError('%s: the bundle under %s records other key inputs than the ones derived here'
                                  % (name, old_ref))
             if self._markers(name) != markers:
                 raise CacheError('%s: a prerequisite changed during the migration' % name)
-            meta.update(schema=SCHEMA, key=key, key_inputs=self.explain(name),
-                        adopted_from={'schema': LEGACY_SCHEMA, 'key': old_key, 'ref': old_ref, 'digest': digest,
-                                      'toolchain_image_id': old_document['toolchain']})
+            origin = {'schema': schema, 'key': old_key, 'ref': old_ref, 'digest': digest}
+            if schema == LEGACY_SCHEMA:
+                meta['adopted_from'] = dict(origin, toolchain_image_id=old_document['toolchain'])
+            else:
+                meta['rekeyed_from'] = origin
+            verdict, packages, _ = judge_packages(meta.get('toolchain'), self._built_by(meta), *self._local,
+                                                  self.packages)
+            if verdict == 'same':
+                meta['toolchain'] = dict(self._local[0], image_id=self._built_by(meta))
+            elif self.packages == 'key':
+                raise CacheError('%s: the bundle under %s %s, so it cannot be addressed by a key that names '
+                                 'the build packages here' % (name, old_ref, packages))
+            meta.update(schema=SCHEMA, key=key, key_inputs=self.explain(name))
             context = work / 'adopt'
             context.mkdir()
             (context / 'meta.json').write_text(json.dumps(meta, sort_keys=True, indent=1) + '\n')
@@ -1744,8 +2112,8 @@ class ProviderCache:
         if self.registry.probe(ref) != 'present':
             raise CacheError('%s: adopted, but the registry does not show %s' % (name, ref))
         self.tree.record_push((name, key, ref, meta['tar_sha256'], meta['marker_sha256']))
-        self.log('provider-cache: %s is now also %s (was %s, %d entries verified, tar sha256 %s)'
-                 % (name, ref, old_ref, len(expected), meta['tar_sha256']))
+        self.log('provider-cache: %s is now also %s (was %s under %s, %d entries verified, tar sha256 %s; %s)'
+                 % (name, ref, old_ref, what, len(expected), meta['tar_sha256'], packages))
         return ref
 
     # -- status -----------------------------------------------------------------
@@ -1762,7 +2130,8 @@ class ProviderCache:
                                'tar_sha256': '-'})
                 continue
             ref = image_ref(self.prefix, name, key) if self.enabled else '-'
-            state = (self.registry.probe(ref) if remote and self.enabled
+            state = ('unpublished' if self.manifest['providers'][name].get('unpublished') is not None
+                     else self.registry.probe(ref) if remote and self.enabled
                      else 'pushed' if (name, key) in pushed else 'unknown')
             result.append({'name': name, 'key': key, 'ref': ref, 'local': local, 'remote': state,
                            'tar_sha256': pushed.get((name, key), '-')})
@@ -1781,7 +2150,8 @@ def build_service(environ=None):
     return ProviderCache(manifest, WorkTree(os.path.abspath(root), HERE.parent.parent),
                          DockerRegistry(timeout), environ.get('TAKX_PROTO_CACHE') or DEFAULT_REGISTRY,
                          environ.get('TAKX_PROTO_TOOLCHAIN_ID') or '', runner=runner,
-                         verify=environ.get('TAKX_PROTO_CACHE_VERIFY') != 'off')
+                         verify=environ.get('TAKX_PROTO_CACHE_VERIFY') != 'off',
+                         packages=environ.get('TAKX_PROTO_CACHE_PACKAGES') or 'report')
 
 
 def main(argv=None, service=None, out=None):
@@ -1798,7 +2168,9 @@ def main(argv=None, service=None, out=None):
     restore.add_argument('--no-verify', action='store_true', help='skip the post-restore checks')
     restore.add_argument('names', nargs='*', help='with one name: --verify-with COMMAND [ARG...] may follow; '
                                                   'that command must accept the restored tree')
-    commands.add_parser('push', help='save each named provider that is ok').add_argument('names', nargs='*')
+    commands.add_parser('push', help='save each named provider that is ok').add_argument(
+        'names', nargs='*', help='with one name: --verify-with COMMAND [ARG...] may follow, the check the lane '
+                                 'gave restore; push runs it only to decide about an entry that check rejected')
     migrate = commands.add_parser('migrate', help='re-address bundles saved under schema-1 keys')
     migrate.add_argument('--from-toolchain-id', metavar='ID', help='the image id those keys named')
     migrate.add_argument('names', nargs='*')
@@ -1810,9 +2182,12 @@ def main(argv=None, service=None, out=None):
     toolchain.add_argument('--record', action='store_true',
                            help='probe the local image and accept it as the toolchain of this work root')
     toolchain.add_argument('--probe-script', action='store_true', help='print the probe and do nothing else')
+    toolchain.add_argument('--packages', action='store_true',
+                           help='print what is recorded of the packages as JSON: both digests, the build '
+                                'package list and the fingerprint the keys of each mode name')
     args = parser.parse_args(argv)
-    if command is not None and (args.command != 'restore' or len(args.names) != 1 or not command):
-        parser.error('--verify-with needs `restore`, one NAME before it and a command after it')
+    if command is not None and (args.command not in ('restore', 'push') or len(args.names) != 1 or not command):
+        parser.error('--verify-with needs `restore` or `push`, one NAME before it and a command after it')
     try:
         service = service or build_service()
         providers = service.manifest['providers']
@@ -1821,6 +2196,12 @@ def main(argv=None, service=None, out=None):
                 out.write(probe_script(service.manifest['toolchain']))
                 return DONE
             service.rerecord = args.record
+            if args.packages:
+                fingerprint, arch, attribute, image_id = service.identity(local=True)
+                print(json.dumps(dict(attribute, image_id=image_id, arch=arch, mode=service.packages, fingerprints={
+                    mode: key_fingerprint(fingerprint, attribute, mode) for mode in PACKAGE_MODES}),
+                    indent=1, sort_keys=True), file=out)
+                return DONE
             fingerprint, arch = service.toolchain(local=args.record)
             print('%s\t%s' % (fingerprint, arch), file=out)
             return DONE
@@ -1849,7 +2230,8 @@ def main(argv=None, service=None, out=None):
                           'Providers cached under their input keys. Restore needs no index: it',
                           'derives the key and pulls <ref>. Keys are specific to:',
                           'work root ' + str(service.tree.root), 'repository ' + str(service.tree.repo),
-                          'toolchain fingerprint ' + fingerprint, 'architecture ' + arch]
+                          'toolchain fingerprint ' + fingerprint, 'architecture ' + arch,
+                          'toolchain packages mode ' + service.packages]
                 Path(args.write_index).write_text(index_text(listed, header))
             return DONE
     except CacheError as error:

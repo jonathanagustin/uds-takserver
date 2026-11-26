@@ -14,7 +14,10 @@
 #             that is meant to stay without a project.
 #   ready     'started', and the RFB socket for the web bridge exists.
 #   live      the JVM is running and the X server answers. Liveness probe.
-#   web       the bridge serves vnc.html on TCP 6080 (web container).
+#   web       the gate answers /healthz on TCP 6080 and websockify's socket
+#             exists (web container). /healthz needs no token and says "ok",
+#             nothing else: that the desktop is reachable for a signed-in
+#             user is not something a probe without a token can see.
 #
 # Whether the globe is drawn is not checked here; verify/selftest.sh reads a
 # frame for that.
@@ -59,9 +62,11 @@ case "${1:-ready}" in
     jvm_running
     xdpyinfo >/dev/null 2>&1 || fail "the X server on ${DISPLAY} does not answer";;
   web)
+    [[ -S "${run_dir}/web/websockify.sock" ]] || fail "no websockify socket at ${run_dir}/web/websockify.sock"
     python3 -I -c 'import sys, urllib.request
-with urllib.request.urlopen("http://127.0.0.1:6080/vnc.html", timeout=5) as reply:
-    sys.exit(0 if reply.status == 200 and b"noVNC" in reply.read() else 1)' ||
-      fail "the web bridge does not serve vnc.html on 127.0.0.1:6080";;
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+with opener.open("http://127.0.0.1:" + sys.argv[1] + "/healthz", timeout=5) as reply:
+    sys.exit(0 if reply.status == 200 and reply.read() == b"ok\n" else 1)' "${TAKX_WEB_PORT:-6080}" 2>/dev/null ||
+      fail "the gate does not answer /healthz on 127.0.0.1:${TAKX_WEB_PORT:-6080}";;
   *) echo "usage: healthcheck.sh started|ready|live|web" >&2; exit 64;;
 esac

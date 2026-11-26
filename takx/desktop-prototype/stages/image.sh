@@ -16,7 +16,9 @@
 #                 denied or unknown JAR, native library or asset; SPDX licence
 #                 texts are fetched once into pkg/licence-texts
 #   gate          the licence gate alone, on the context copy and the notices
-#   test          unit tests of the image scripts and of the licence gate (no
+#   test          unit tests of the image scripts, of the bridge's token
+#                 check and gate (web_auth.py, web_gate.py; tokens signed
+#                 with the openssl command) and of the licence gate (no
 #                 Docker), with every python3.11, 3.12 and 3.13 that is installed
 #   build         image/build.sh: docker buildx build with the tree and the
 #                 notices as named contexts and the build gates
@@ -24,8 +26,9 @@
 #   inspect       size, layers, 'docker history', labels, and a scan of every
 #                 layer for a proxy CA, private keys, key stores and build
 #                 paths (verify/scan_image.py) -> pkg/evidence/<run>/
-#   selftest STEP image/verify/selftest.sh STEP: start | wait | check | browser |
-#                 stats | supervision | audit | linker | identity | logs | stop
+#   selftest STEP image/verify/selftest.sh STEP: start | wait | check | auth |
+#                 browser | stats | supervision | audit | linker | identity |
+#                 logs | stop
 #   all           context, notices, test, build, inspect, then the self-test
 #                 steps in order with a five-minute soak before 'stats'
 #                 (about 12 minutes; run the steps one by one under a time limit)
@@ -39,11 +42,12 @@
 #   pkg/evidence/<run>/       frames, probes, transcripts (TAKX_SELFTEST_RUN,
 #                             default 'selftest')
 #
-# The self-test runs two containers of the one image, takx-img-desktop
-# (uid 10001) and takx-img-web (uid 10002), with a read-only root, all
-# capabilities dropped, --network none and at most 2 CPUs together. Writable
-# are tmpfs mounts for /tmp, /run/takx/session and /run/takx/identity and a
-# tmpfs volume for the RFB socket. X display :1.
+# The self-test runs containers of the one image: takx-img-desktop
+# (uid 10001), takx-img-web (uid 10002, token check on) and takx-img-jwks (a
+# stand-in for the realm's key endpoint), with a read-only root, all
+# capabilities dropped, --network none and at most 2.2 CPUs together.
+# Writable are tmpfs mounts for /tmp, /run/takx/session, /run/takx/identity
+# and /run/takx/web and a tmpfs volume for the RFB socket. X display :1.
 #
 # What is inside the image: TAKX 5.7 (0b59a9bb) built from public sources on
 # Kernel 8.30.5 + project patches, CommonCommo 1.17.2 patched and the NASA
@@ -95,16 +99,17 @@ do_gate() {
 
 do_test() {
   local python ran=0
+  local suites=(takx/desktop-prototype/image/test_image.py takx/desktop-prototype/image/test_web_auth.py
+    takx/desktop-prototype/image/test_web_gate.py takx/desktop-prototype/image/test_licence_gate.py
+    takx/desktop-prototype/assemble/test_derive_jar.py)
   for python in python3.11 python3.12 python3.13; do
     if command -v "${python}" >/dev/null; then
-      (cd "${repo}" && "${python}" -B -m unittest takx/desktop-prototype/image/test_image.py \
-        takx/desktop-prototype/image/test_licence_gate.py takx/desktop-prototype/assemble/test_derive_jar.py)
+      (cd "${repo}" && "${python}" -B -m unittest "${suites[@]}")
       ran=$((ran + 1))
     fi
   done
   if ((ran == 0)); then
-    (cd "${repo}" && python3 -B -m unittest takx/desktop-prototype/image/test_image.py \
-      takx/desktop-prototype/image/test_licence_gate.py takx/desktop-prototype/assemble/test_derive_jar.py)
+    (cd "${repo}" && python3 -B -m unittest "${suites[@]}")
   fi
 }
 
@@ -173,6 +178,7 @@ do_all() {
   "${selftest}" wait 480
   sleep 130
   "${selftest}" check
+  "${selftest}" auth
   "${selftest}" browser || echo "image: browser step did not pass or was not run"
   sleep 170
   "${selftest}" stats
@@ -190,6 +196,6 @@ case "${1:-}" in
   inspect) do_inspect;;
   selftest) shift; "${selftest}" "$@";;
   all) do_all;;
-  -h|--help|"") sed -n '5,50p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
+  -h|--help|"") sed -n '5,54p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
   *) echo "image.sh: unknown target '$1'" >&2; exit 2;;
 esac

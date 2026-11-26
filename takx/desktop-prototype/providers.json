@@ -23,7 +23,23 @@
   "a restored tree before the status file says ok. It is not part of the key.",
   "The four providers of lane1.sh have no 'verify': that lane hands its receipt",
   "check to restore itself (restore NAME --verify-with COMMAND). The other",
-  "eleven providers without 'verify' have no check of an existing output at all."
+  "eleven providers without 'verify' have no check of an existing output at all.",
+  "'toolchain.build_packages' selects, from the Debian packages installed in the",
+  "toolchain image, the ones that can change compiled output: every package of",
+  "the listed sections (devel: compilers, binutils, make, cmake, autotools, bison,",
+  "flex, the kernel headers; libdevel: the libc, libstdc++, libgcc and X11",
+  "development files) and every package matching a name pattern (development",
+  "packages filed under other sections such as the GL ones, the preprocessor, the",
+  "libraries the link editor reads or the compiler computes with, and the",
+  "interpreters and generators the recipes run: perl, python3, tcl, swig, m4, ant,",
+  "patch). Left out on purpose: what only fetches, signs or administers (curl,",
+  "git, gnupg, openssl and their libraries, apt, tzdata, ...); the recipes build",
+  "their own OpenSSL, zlib, curl and SQLite from pinned sources and the Dockerfile",
+  "asserts that no host header of those exists. The digest of the selected list is",
+  "recorded in status/toolchain.json and in every bundle; whether it only reports,",
+  "refuses or is part of the keys is TAKX_PROTO_CACHE_PACKAGES (provider_cache.py).",
+  "'unpublished', where a provider has it, says why its output is never saved to",
+  "or restored from the cache; the lanes build it where it is needed."
  ],
  "schema": 2,
  "toolchain": {
@@ -50,7 +66,20 @@
    {"name": "java", "expect": "Temurin-17.0.21+9",
     "argv": ["/tools/temurin-17.0.21_9/jdk-17.0.21+9/bin/java", "-version"]},
    {"name": "ant", "expect": "Apache Ant", "argv": ["/usr/bin/ant", "-version"]}
-  ]
+  ],
+  "build_packages": {
+   "sections": ["devel", "libdevel"],
+   "names": [
+    "*-dev", "cpp", "cpp-*", "gcc-*-base",
+    "libc6", "libgcc-s1", "libstdc++6", "libgomp1", "libatomic1", "libitm1", "libquadmath0", "lib*san[0-9]*",
+    "libcc1-0", "libisl[0-9]*", "libmpc[0-9]*", "libmpfr[0-9]*", "libgmp[0-9]*",
+    "libegl1", "libgl1", "libgles[0-9]*", "libglx0", "libopengl0", "libglvnd0", "libx11-6", "libxcb1",
+    "libxau6", "libxdmcp6",
+    "swig", "m4", "perl", "perl-base", "perl-modules-*", "libperl5*", "python3", "python3-minimal",
+    "python3.[0-9]*", "libpython3*", "tcl", "tcl[0-9]*", "libtcl[0-9]*", "ant", "patch", "dos2unix",
+    "gettext-base", "pkg-config", "libpkgconf[0-9]*", "rpcsvc-proto"
+   ]
+  }
  },
  "wrapper": {
   "env": ["TAKX_PROTO_ROOT={root}", "TAKX_PROTO_REPO={repo}", "HOME=/tmp"],
@@ -370,6 +399,7 @@
     "--failure-report", "{root}/logs/ui-original-failure-{timestamp}.json"]}
   },
   "ui-wizard-reference": {
+   "unpublished": "CDDL-only NetBeans wizard reference JAR: a build-time classpath entry of the client compile (its specification lock and status/java-classpath.json name the file; no class refers to it), absent from the assembled tree and the image, rebuilt in seconds",
    "lane": "lane4.sh", "recipe": "takx/ui-java", "prerequisites": [],
    "locks": ["takx/ui-java/inputs.lock.json"],
    "fetched": [{"consumer": "ui-java"}],

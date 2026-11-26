@@ -45,7 +45,8 @@ def toolchain_block():
             'environment': {'JAVA_HOME': '/jdk', 'TZ': 'UTC'},
             'gated': [{'name': 'gcc', 'argv': ['/usr/bin/gcc', '--version'], 'expect': ' 14.2.0'},
                       {'name': 'g++', 'argv': ['/usr/bin/g++', '--version'], 'expect': ' 14.2.0'},
-                      {'name': 'java', 'argv': ['/jdk/bin/java', '-version'], 'expect': 'Temurin-17.0.21+9'}]}
+                      {'name': 'java', 'argv': ['/jdk/bin/java', '-version'], 'expect': 'Temurin-17.0.21+9'}],
+            'build_packages': {'sections': ['devel', 'libdevel'], 'names': ['libc6', '*-dev']}}
 
 
 def wrapper_block():
@@ -60,9 +61,25 @@ def probe_text(arch='amd64', **changes):
              'gcc': 'tool\tgcc\tgcc (Debian 14.2.0-19) 14.2.0 Copyright (C) 2024 ',
              'g++': 'tool\tg++\tg++ (Debian 14.2.0-19) 14.2.0 Copyright (C) 2024 ',
              'java': 'tool\tjava\topenjdk version "17.0.21" OpenJDK Runtime Environment Temurin-17.0.21+9 ',
-             'packages': 'packages\t' + 'e' * 64}
+             'packages': 'packages\t' + 'e' * 64,
+             'gcc-14': 'pkg\tii \tgcc-14\t14.2.0-19\tamd64\tdevel',
+             'libc6': 'pkg\tii \tlibc6\t2.41-12+deb13u4\tamd64\tlibs',
+             'libc6-dev': 'pkg\tii \tlibc6-dev\t2.41-12+deb13u4\tamd64\tlibdevel',
+             'libegl-dev': 'pkg\tii \tlibegl-dev\t1.7.0-1+b2\tamd64\tlibs',
+             'linux-libc-dev': 'pkg\tii \tlinux-libc-dev\t6.12.117-1\tall\tdevel',
+             'openssl': 'pkg\tii \topenssl\t3.5.7-1~deb13u3\tamd64\tutils',
+             'oldpkg': 'pkg\trc \tlibold-dev\t1.0\tamd64\tlibdevel'}
     lines.update(changes)
     return ''.join(line + '\n' for line in lines.values() if line is not None)
+
+
+# The build packages toolchain_block() selects from probe_text(), and their digest.
+BUILD_PACKAGES = ['gcc-14 14.2.0-19 amd64', 'libc6 2.41-12+deb13u4 amd64', 'libc6-dev 2.41-12+deb13u4 amd64',
+                  'libegl-dev 1.7.0-1+b2 amd64', 'linux-libc-dev 6.12.117-1 all']
+BUILD_DIGEST = hashlib.sha256(''.join(line + '\n' for line in BUILD_PACKAGES).encode()).hexdigest()
+ATTRIBUTE = {'packages_sha256': 'e' * 64, 'build_packages': BUILD_PACKAGES, 'build_packages_sha256': BUILD_DIGEST}
+DRIFTED = dict(**{'libc6-dev': 'pkg\tii \tlibc6-dev\t2.41-12+deb13u5\tamd64\tlibdevel',
+                  'packages': 'packages\t' + 'f' * 64})
 
 
 def fingerprint(arch='amd64', layer=BASE_LAYER, block=None):
@@ -78,7 +95,9 @@ def toolchain_record(image_id=TOOLCHAIN_ID, arch='amd64', layer=BASE_LAYER, bloc
     document = PC.expected_toolchain(block or toolchain_block(), arch, layer)
     record = {'stage': 'toolchain', 'status': 'ok', 'outputs': [PC.TOOLCHAIN], 'seconds': 0, 'notes': 'n',
               'image': PC.TOOLCHAIN, 'image_id': image_id, 'fingerprint': PC.derive_key(document),
-              'document': document, 'observed': {}, 'packages_sha256': 'e' * 64, 'outputs_before': None}
+              'document': document, 'observed': {}, 'packages_sha256': 'e' * 64, 'outputs_before': None,
+              'build_packages': list(BUILD_PACKAGES), 'build_packages_sha256': BUILD_DIGEST,
+              'build_selection': (block or toolchain_block())['build_packages']}
     record.update(changes)
     return record
 
@@ -2411,7 +2430,7 @@ class Push(ServiceCase):
             'marker': 'complete.json', 'marker_sha256': marker_sha, 'tar_sha256': tar_sha,
             'files_sha256': hashlib.sha256(content['files.json']).hexdigest(),
             'prerequisite_markers': {'base': hashlib.sha256((top / 'complete.json').read_bytes()).hexdigest()},
-            'key_inputs': self.service.explain('top')})
+            'key_inputs': self.service.explain('top'), 'toolchain': dict(ATTRIBUTE, image_id=TOOLCHAIN_ID)})
         self.assertTrue(content['meta.json'].endswith(b'\n') and content['files.json'].endswith(b'\n'))
         listing = json.loads(content['files.json'])
         self.assertEqual((listing['schema'], listing['provider']), (1, 'top'))
@@ -2899,6 +2918,7 @@ class ExitCodes(ServiceCase):
                   '# Providers cached under their input keys. Restore needs no index: it\n'
                   '# derives the key and pulls <ref>. Keys are specific to:\n'
                   '# work root %s\n# repository %s\n# toolchain fingerprint %s\n# architecture amd64\n'
+                  '# toolchain packages mode report\n'
                   '# name\tkey\tref\ttar sha256\n' % (self.root, self.repo, FINGERPRINT))
         row = 'base\t%s\treg.example/cache/base:%s\t%s\n' % (key, key, tar_sha)
         self.assertEqual(self.run_cli('status', '--write-index', str(index))[0], 0)
@@ -2908,7 +2928,7 @@ class ExitCodes(ServiceCase):
         self.assertEqual(index.read_text(), header)  # the registry is asked, and it has nothing
         self.registry.state = 'present'
         self.assertEqual(self.run_cli('status', '--write-index', str(index), '--remote')[0], 0)
-        self.assertEqual(len(index.read_text().splitlines()), 10 + 3)
+        self.assertEqual(len(index.read_text().splitlines()), 11 + 3)
         os.unlink(self.root / 'status/toolchain.json')
         self.registry.docker = False
         index.write_text('kept')
@@ -4185,7 +4205,9 @@ class ToolchainCore(unittest.TestCase):
             """printf 'tool\\t%s\\t%s\\n' g++ "$(/usr/bin/g++ --version 2>&1 | head -n 3 | tr '\\n\\t' '  ')\"""",
             """printf 'tool\\t%s\\t%s\\n' java "$(/jdk/bin/java -version 2>&1 | head -n 3 | tr '\\n\\t' '  ')\"""",
             """printf 'packages\\t%s\\n' "$(dpkg-query -W -f '${Package} ${Version} ${Architecture}\\n'"""
-            """ | sha256sum | cut -d' ' -f1)\"""", '']))
+            """ | sha256sum | cut -d' ' -f1)\"""",
+            """dpkg-query -W -f 'pkg\\t${db:Status-Abbrev}\\t${Package}\\t${Version}\\t${Architecture}"""
+            """\\t${Section}\\n'""", '']))
 
     def test_probe_reports_what_the_commands_print(self):
         # The generated program, run by a real bash over stand-ins for dpkg and the gated tools.
@@ -4194,8 +4216,11 @@ class ToolchainCore(unittest.TestCase):
             tools.mkdir()
             scripts = {
                 'dpkg': 'echo arm64',
-                'dpkg-query': r"""[ "$*" = '-W -f ${Package} ${Version} ${Architecture}\n' ] && """
-                              r"""printf 'a 1 all\nb 2 arm64\n'""",
+                'dpkg-query': r"""if [ "$*" = '-W -f ${Package} ${Version} ${Architecture}\n' ]; then """
+                              r"""printf 'a 1 all\nb 2 arm64\n'; elif [ "$*" = '-W -f pkg\t${db:Status-Abbrev}"""
+                              r"""\t${Package}\t${Version}\t${Architecture}\t${Section}\n' ]; then """
+                              r"""printf 'pkg\tii \ta\t1\tall\tdevel\npkg\trc \tb\t2\tarm64\t\n'; """
+                              r"""else exit 9; fi""",
                 'plain': 'echo "plain 1.2"',
                 'stderr': 'echo "to stderr 3.4" >&2',
                 'long': r"""printf 'one\ntwo\tx\nthree\nfour\n'""",
@@ -4219,6 +4244,7 @@ class ToolchainCore(unittest.TestCase):
             self.assertEqual(facts['arch'], 'arm64')
             self.assertEqual(facts['environment'], {'SET': 'the value', 'UNSET': '', 'EMPTY': ''})
             self.assertEqual(facts['packages'], hashlib.sha256(b'a 1 all\nb 2 arm64\n').hexdigest())
+            self.assertEqual(facts['package_list'], [('ii ', 'a', '1', 'all', 'devel'), ('rc ', 'b', '2', 'arm64', '')])
             missing = facts['tools'].pop('missing')
             self.assertIn('No such file or directory', missing)
             self.assertEqual(facts['tools'], {
@@ -4230,14 +4256,25 @@ class ToolchainCore(unittest.TestCase):
             'arch': 'amd64', 'environment': {'JAVA_HOME': '/jdk', 'TZ': 'UTC'}, 'packages': 'e' * 64,
             'tools': {'gcc': 'gcc (Debian 14.2.0-19) 14.2.0 Copyright (C) 2024 ',
                       'g++': 'g++ (Debian 14.2.0-19) 14.2.0 Copyright (C) 2024 ',
-                      'java': 'openjdk version "17.0.21" OpenJDK Runtime Environment Temurin-17.0.21+9 '}})
-        self.assertEqual(PC.parse_probe(''), {'arch': None, 'environment': {}, 'tools': {}, 'packages': None})
+                      'java': 'openjdk version "17.0.21" OpenJDK Runtime Environment Temurin-17.0.21+9 '},
+            'package_list': [('ii ', 'gcc-14', '14.2.0-19', 'amd64', 'devel'),
+                             ('ii ', 'libc6', '2.41-12+deb13u4', 'amd64', 'libs'),
+                             ('ii ', 'libc6-dev', '2.41-12+deb13u4', 'amd64', 'libdevel'),
+                             ('ii ', 'libegl-dev', '1.7.0-1+b2', 'amd64', 'libs'),
+                             ('ii ', 'linux-libc-dev', '6.12.117-1', 'all', 'devel'),
+                             ('ii ', 'openssl', '3.5.7-1~deb13u3', 'amd64', 'utils'),
+                             ('rc ', 'libold-dev', '1.0', 'amd64', 'libdevel')]})
+        self.assertEqual(PC.parse_probe(''), {'arch': None, 'environment': {}, 'tools': {}, 'packages': None,
+                                              'package_list': []})
         self.assertEqual(PC.parse_probe('\n\narch\tarm64\n\n')['arch'], 'arm64')
-        self.assertEqual(PC.parse_probe('env\tA\t\nenv\tB\t b \ntool\tx\t\n'),
-                         {'arch': None, 'environment': {'A': '', 'B': ' b '}, 'tools': {'x': ''}, 'packages': None})
+        self.assertEqual(PC.parse_probe('env\tA\t\nenv\tB\t b \ntool\tx\t\npkg\tii \ta\t1\tall\t\n'),
+                         {'arch': None, 'environment': {'A': '', 'B': ' b '}, 'tools': {'x': ''}, 'packages': None,
+                          'package_list': [('ii ', 'a', '1', 'all', '')]})
         for line in ('arch', 'arch\tamd64\textra', 'env\tA', 'env\tA\tb\tc', 'tool\tgcc', 'tool\tgcc\ta\tb',
                      'packages', 'packages\ta\tb', 'warning: something', ' arch\tamd64', 'ARCH\tamd64', '\t',
-                     'tools\tgcc\t14', 'zzz\ta\tb', 'envy\tA\tb', 'archive\tx', 'packagess\tx', 'x' * 200):
+                     'tools\tgcc\t14', 'zzz\ta\tb', 'envy\tA\tb', 'archive\tx', 'packagess\tx', 'x' * 200,
+                     'pkg', 'pkg\tii \ta\t1\tall', 'pkg\tii \ta\t1\tall\tdevel\textra', 'pkgs\tii \ta\t1\tall\t',
+                     'package\tii \ta\t1\tall\tdevel'):
             with self.subTest(line=line), self.assertRaises(PC.CacheError) as caught:
                 PC.parse_probe('arch\tamd64\n' + line + '\n')
             self.assertEqual(str(caught.exception),
@@ -4463,12 +4500,15 @@ class Toolchain(ServiceCase):
         self.assertEqual(self.record(), {
             'stage': 'toolchain', 'status': 'ok', 'outputs': [PC.TOOLCHAIN], 'seconds': 0,
             'notes': 'toolchain fingerprint of the provider cache keys (provider_cache.py toolchain); observed '
-                     'and packages_sha256 are what the probe saw and are not part of it',
+                     'is what the probe saw and is not part of it; build_packages are the installed packages '
+                     'build_selection chose, in the keys only with TAKX_PROTO_CACHE_PACKAGES=key',
             'image': PC.TOOLCHAIN, 'image_id': TOOLCHAIN_ID, 'fingerprint': FINGERPRINT,
             'document': PC.expected_toolchain(toolchain_block(), 'amd64', BASE_LAYER),
-            'observed': PC.parse_probe(probe_text())['tools'], 'packages_sha256': 'e' * 64, 'outputs_before': None})
-        self.assertEqual(self.messages, ['provider-cache: toolchain fingerprint %s (amd64, image %s)'
-                                         % (FINGERPRINT, TOOLCHAIN_ID)])
+            'observed': PC.parse_probe(probe_text())['tools'], 'packages_sha256': 'e' * 64, 'outputs_before': None,
+            'build_packages': BUILD_PACKAGES, 'build_packages_sha256': BUILD_DIGEST,
+            'build_selection': {'sections': ['devel', 'libdevel'], 'names': ['libc6', '*-dev']}})
+        self.assertEqual(self.messages, ['provider-cache: toolchain fingerprint %s (amd64, image %s, build packages '
+                                         '%s)' % (FINGERPRINT, TOOLCHAIN_ID, BUILD_DIGEST)])
         self.assertEqual(sorted(os.listdir(self.root / 'status')), ['fetch.json', 'images.json', 'toolchain.json'])
         # From then on a key asks docker nothing, in this process or another.
         del self.registry.calls[:]
@@ -5164,13 +5204,22 @@ class PostRestoreCheck(ServiceCase):
         self.assertFalse(os.path.lexists(self.root / 'P/base'))
         self.assertEqual((self.root / 'status/base.json').read_text(), '{"stage": "base", "status": "failed"}\n')
         note = self.notes()[self.ref]
-        self.assertEqual((note['kind'], note['digest'], note['reason']), ('bundle', self.digest, str(caught.exception)))
-        # The lane builds; its push replaces what the check rejected.
+        self.assertEqual((note['kind'], note['digest'], note['reason']), ('check', self.digest, str(caught.exception)))
+        files = hashlib.sha256(self.bundle('base')[1]['files.json']).hexdigest()
+        self.assertEqual((note['files_sha256'], note['check']), (files, PC.check_identity('recipe', [
+            'PROOF=%s/P/base' % self.root, 'JDK=/jdk', '--', 'python3', '-B', '-m', 'unittest', 'discover', '-s',
+            '%s/takx/one' % self.repo, '-p', 'test_build.py'])))
+        # The lane builds; its push replaces what the check rejected, because the
+        # same check accepts the rebuilt output and that output is another one.
         os.unlink(self.root / 'status/base.json')
         self.make('base')
+        self.runner.code = 0
+        del self.runner.calls[:]
         self.service.push('base')
         self.assertEqual(self.registry.published, 2)
         self.assertNotEqual(self.registry.digests[self.ref], self.digest)
+        self.assertEqual(len(self.runner.calls), 1)
+        self.assertEqual(self.notes(), {})
 
     def test_check_that_could_not_run_is_no_judgement_of_the_entry(self):
         before = settled(self.tmp.name)
@@ -5390,8 +5439,8 @@ class Runner(unittest.TestCase):
 class FakeLaneCheck:
     """What `restore --verify-with` sets on the service: records the call, answers with a code."""
 
-    def __init__(self, root, code=0, events=None):
-        self.root, self.code, self.calls = Path(root), code, []
+    def __init__(self, root, code=0, events=None, command=('lane-check', 'side')):
+        self.root, self.code, self.calls, self.command = Path(root), code, [], list(command)
         self.events = [] if events is None else events
 
     def run(self, name, log):
@@ -5476,9 +5525,11 @@ class LaneSuppliedCheck(ServiceCase):
         after.pop('root/logs')
         self.assertEqual(after, before)           # no tree, no status, no scratch
         note = self.notes()[self.ref]
-        self.assertEqual((note['kind'], note['digest'], note['reason']), ('bundle', self.digest, str(caught.exception)))
+        self.assertEqual((note['kind'], note['digest'], note['reason']), ('check', self.digest, str(caught.exception)))
+        self.assertEqual(note['check'], PC.check_identity('lane', self.lane.command))
         published = self.registry.published
         self.make('base')
+        self.lane.code = 0
         self.service.push('base')
         self.assertEqual(self.registry.published, published + 1)
         self.assertNotEqual(self.registry.digests[self.ref], self.digest)
@@ -5559,7 +5610,7 @@ class LaneSuppliedCheck(ServiceCase):
         self.assertEqual((code, text), (1, "provider-cache: restore side failed: side: the lane's own check rejects "
                                            "the restored output; see logs/side-verify.log\n"))
         self.assertFalse(os.path.lexists(self.root / 'P/side'))
-        self.assertEqual(self.notes()[self.side]['kind'], 'bundle')
+        self.assertEqual(self.notes()[self.side]['kind'], 'check')
         code, text, service = self.cli('restore', 'side', '--verify-with', '/bin/sh', '-c', program,
                                        str(self.root), '7')
         self.assertEqual((code, text), (1, "provider-cache: restore side failed: side: the lane's own check could "
@@ -5576,8 +5627,9 @@ class LaneSuppliedCheck(ServiceCase):
         self.assertEqual(self.service.tree.status_of('side'), 'ok')
         self.assertFalse((self.root / 'logs').exists())
 
-    def test_verify_with_needs_restore_one_name_and_a_command(self):
-        for argv in (['push', 'side', '--verify-with', 'true'], ['restore', '--verify-with', 'true'],
+    def test_verify_with_needs_restore_or_push_one_name_and_a_command(self):
+        for argv in (['push', '--verify-with', 'true'], ['restore', '--verify-with', 'true'],
+                     ['push', 'base', 'side', '--verify-with', 'true'], ['push', 'side', '--verify-with'],
                      ['restore', 'base', 'side', '--verify-with', 'true'], ['restore', 'side', '--verify-with'],
                      ['key', 'side', '--verify-with', 'true'], ['migrate', 'side', '--verify-with', 'true'],
                      ['status', '--verify-with', 'true'], ['toolchain', '--verify-with', 'true'],
@@ -5682,10 +5734,13 @@ class Migrate(ServiceCase):
         entry = manifest()['providers'][name]
         old_key, old_document = service.legacy_keys([name])[name]
         context = Path(tempfile.mkdtemp(dir=self.tmp.name))
+        service._local, kept = (ATTRIBUTE, TOOLCHAIN_ID), service._local
         entries, tar_sha = service._bundle(name, old_key, entry, context, service._markers(name),
                                            service.tree.status_bytes(name),
                                            service.tree.marker_sha256(name, entry['marker']))
+        service._local = kept
         meta = json.loads((context / 'meta.json').read_text())
+        del meta['toolchain']  # schema 1 recorded nothing about the toolchain beside the key
         meta.update(schema=1, key_inputs=old_document)
         (context / 'meta.json').write_text(json.dumps(meta, sort_keys=True, indent=1) + '\n')
         files = [name + '.tar', *PC.IMAGE_FILES]
@@ -5732,12 +5787,13 @@ class Migrate(ServiceCase):
         meta, old_meta = json.loads(content['meta.json']), json.loads(old_content['meta.json'])
         self.assertEqual(meta, dict(old_meta, schema=2, key=key, key_inputs=self.service.explain('base'), adopted_from={
             'schema': 1, 'key': old_meta['key'], 'ref': self.old_ref, 'digest': old_digest,
-            'toolchain_image_id': TOOLCHAIN_ID}))
+            'toolchain_image_id': TOOLCHAIN_ID}, toolchain=dict(ATTRIBUTE, image_id=TOOLCHAIN_ID)))
         # Written like the meta.json of a pushed bundle: sorted, one space of indent, a final newline.
         self.assertEqual(content['meta.json'], (json.dumps(meta, sort_keys=True, indent=1) + '\n').encode())
         tar_sha = hashlib.sha256(content['base.tar']).hexdigest()
-        self.assertEqual(self.messages, ['provider-cache: base is now also %s (was %s, 9 entries verified, tar sha256 '
-                                         '%s)' % (ref, self.old_ref, tar_sha)])
+        self.assertEqual(self.messages, ['provider-cache: base is now also %s (was %s under the schema-1 key, 9 '
+                                         'entries verified, tar sha256 %s; records no package list, but was built '
+                                         'by the toolchain image that is here)' % (ref, self.old_ref, tar_sha)])
         self.assertEqual(self.service.tree.pushed(), {('base', key): tar_sha})
         self.assertEqual(self.leftovers(), [])
         self.assertEqual(snapshot(self.top), self.good)
@@ -6072,6 +6128,7 @@ class LaneHooks(unittest.TestCase):
         # Every step of lane1 restores through the same function.
         lane1 = (HERE / 'stages/lane1.sh').read_text()
         self.assertEqual(lane1.count('restore "$1" --verify-with "${check_command[@]}" "$1" "${P}"'), 1)
+        self.assertEqual(lane1.count('push "$1" --verify-with "${check_command[@]}" "$1" "${P}"'), 1)
         self.assertEqual(lane1.count('python3 -I "${cache}" restore'), 1)
         self.assertIn('\ncheck() { # name\n  "${check_command[@]}" "$1" "${P}"\n}\n', lane1)
 
@@ -6314,7 +6371,8 @@ class RepositoryManifest(unittest.TestCase):
                 # lane1 also hands over its receipt check; the other lanes' checks are in providers.json.
                 self.assertIn('restore "$1" --verify-with "${check_command[@]}" "$1" "${P}" \\\n    >>'
                               if lane == 'lane1.sh' else 'restore "$1" >>', text)
-                self.assertIn('push "$1" >>', text)
+                self.assertIn('push "$1" --verify-with "${check_command[@]}" "$1" "${P}" \\\n    >>'
+                              if lane == 'lane1.sh' else 'push "$1" >>', text)
                 self.assertEqual(text.count('[[ "${TAKX_PROTO_CACHE:-}" != off ]] || return'), 2)
                 # cache_push is the last word of its function and cannot fail it.
                 body = text[text.index('cache_push() {'):]
@@ -6616,6 +6674,1068 @@ class LaneInvocations(unittest.TestCase):
         differing = [value for value, token in zip(command, template)
                      if not re.match(r'\A%s\Z' % self.pattern(token, root), value)]
         self.assertEqual(differing, ['2'])
+
+
+class PackagesCore(unittest.TestCase):
+    """The build packages of the toolchain: selection, digest, comparison, policy."""
+
+    ROWS = [('ii ', 'gcc-14', '14.2.0-19', 'amd64', 'devel'), ('ii ', 'libc6-dev', '2.41-12+deb13u4', 'amd64', 'libdevel'),
+            ('ii ', 'libc6', '2.41-12+deb13u4', 'amd64', 'libs'), ('ii ', 'openssl', '3.5.7-1~deb13u3', 'amd64', 'utils'),
+            ('ii ', 'libegl-dev', '1.7.0-1+b2', 'amd64', 'libs'), ('rc ', 'libold-dev', '1.0', 'amd64', 'libdevel'),
+            ('ii ', 'linux-libc-dev', '6.12.117-1', 'all', 'devel')]
+
+    def test_selection_is_by_section_or_name_pattern_of_installed_packages(self):
+        block = toolchain_block()
+        self.assertEqual(PC.build_packages(block, self.ROWS), BUILD_PACKAGES)
+        self.assertEqual(PC.build_packages(block, list(reversed(self.ROWS)) + self.ROWS), BUILD_PACKAGES)
+        only_names = dict(block, build_packages={'sections': [], 'names': ['libc6']})
+        self.assertEqual(PC.build_packages(only_names, self.ROWS), ['libc6 2.41-12+deb13u4 amd64'])
+        only_sections = dict(block, build_packages={'sections': ['libdevel'], 'names': []})
+        self.assertEqual(PC.build_packages(only_sections, self.ROWS), ['libc6-dev 2.41-12+deb13u4 amd64'])
+        # The section is the last part of what dpkg prints; patterns match the whole name, case included.
+        area = [('ii ', 'tool', '1', 'amd64', 'non-free/devel'), ('ii ', 'other', '1', 'amd64', 'devel/x'),
+                ('ii ', 'xlibc6', '1', 'amd64', 'libs'), ('ii ', 'LIBC6', '1', 'amd64', 'libs'),
+                ('ii ', 'libc6x', '1', 'amd64', 'libs')]
+        self.assertEqual(PC.build_packages(block, area), ['tool 1 amd64'])
+        # Both architectures of one name are two packages.
+        both = [('ii ', 'libc6', '2', 'amd64', 'libs'), ('ii ', 'libc6', '2', 'i386', 'libs')]
+        self.assertEqual(PC.build_packages(block, both), ['libc6 2 amd64', 'libc6 2 i386'])
+
+    def test_only_fully_installed_packages_count(self):
+        block = toolchain_block()
+        for status in ('rc ', 'un ', 'iU ', 'pi ', 'hi ', 'i', ''):
+            rows = [(status, 'libc6', '2', 'amd64', 'libs'), ('ii ', 'gcc-14', '1', 'amd64', 'devel')]
+            with self.subTest(status=status):
+                self.assertEqual(PC.build_packages(block, rows), ['gcc-14 1 amd64'])
+        self.assertEqual(PC.build_packages(block, [('iiR', 'libc6', '2', 'amd64', 'libs')]), ['libc6 2 amd64'])
+
+    def test_selection_refuses_what_is_no_list(self):
+        block = toolchain_block()
+        for rows in ([], [('ii ', 'openssl', '3', 'amd64', 'utils')], [('rc ', 'libc6', '2', 'amd64', 'libs')]):
+            with self.subTest(rows=rows), self.assertRaisesRegex(
+                    PC.CacheError, '^the toolchain probe names no installed build package$'):
+                PC.build_packages(block, rows)
+        for row in (('ii ', '', '2', 'amd64', 'libs'), ('ii ', 'libc6', '', 'amd64', 'libs'),
+                    ('ii ', 'libc6', '2', '', 'libs'), ('ii ', 'lib c6', '2', 'amd64', 'libs'),
+                    ('ii ', 'libc6', '2 3', 'amd64', 'libs'), ('ii ', 'libc6', '2', 'amd 64', 'libs')):
+            with self.subTest(row=row), self.assertRaisesRegex(PC.CacheError, 'no plain name, version and architecture'):
+                PC.build_packages(block, [row])
+        # A package that is not installed is not looked at.
+        self.assertEqual(PC.build_packages(block, [('rc ', 'a b', '', '', 'devel'), self.ROWS[0]]), BUILD_PACKAGES[:1])
+
+    def test_digest_is_of_the_lines_and_pinned(self):
+        self.assertEqual(PC.packages_digest(['a 1 all', 'b 2 amd64']), hashlib.sha256(b'a 1 all\nb 2 amd64\n').hexdigest())
+        self.assertEqual(PC.packages_digest([]), hashlib.sha256(b'').hexdigest())
+        self.assertEqual(PC.packages_digest(BUILD_PACKAGES), BUILD_DIGEST)
+        self.assertEqual(BUILD_DIGEST, 'b32dd923b7f03f688f3cbd9a1535aa301ba92626159dcba6a961cdfc1d56cbdb')
+        self.assertNotEqual(PC.packages_digest(['a 1 all', 'b 2 amd64']), PC.packages_digest(['b 2 amd64', 'a 1 all']))
+
+    def test_attribute_is_both_digests_and_the_list(self):
+        observed = PC.parse_probe(probe_text())
+        self.assertEqual(PC.packages_attribute(toolchain_block(), observed), ATTRIBUTE)
+        for bad in (None, '', 'e' * 63, 'E' * 64, 5):
+            with self.subTest(bad=bad), self.assertRaisesRegex(PC.CacheError, 'no digest of the package list'):
+                PC.packages_attribute(toolchain_block(), dict(observed, packages=bad))
+        with self.assertRaisesRegex(PC.CacheError, 'no installed build package'):
+            PC.packages_attribute(toolchain_block(), dict(observed, package_list=[]))
+
+    def test_attribute_is_valid_only_with_the_digest_of_its_own_list(self):
+        self.assertIs(PC.valid_attribute(ATTRIBUTE), ATTRIBUTE)
+        more = dict(ATTRIBUTE, image_id='x')
+        self.assertIs(PC.valid_attribute(more), more)
+        for bad in (None, [], 'x', {}, dict(ATTRIBUTE, build_packages=[]), dict(ATTRIBUTE, build_packages=None),
+                    dict(ATTRIBUTE, build_packages=BUILD_PACKAGES[:-1]), dict(ATTRIBUTE, build_packages_sha256='0' * 64),
+                    dict(ATTRIBUTE, build_packages=BUILD_PACKAGES + [5]),
+                    {'build_packages': [], 'build_packages_sha256': PC.packages_digest([])},
+                    {'build_packages': 'ab', 'build_packages_sha256': PC.packages_digest(['a', 'b'])}):
+            with self.subTest(bad=bad):
+                self.assertIsNone(PC.valid_attribute(bad))
+
+    def test_record_counts_for_packages_only_with_this_manifests_selection(self):
+        block = toolchain_block()
+        self.assertEqual(PC.recorded_packages(block, toolchain_record()), ATTRIBUTE)
+        other = dict(block, build_packages={'sections': ['devel'], 'names': ['libc6', '*-dev']})
+        self.assertIsNone(PC.recorded_packages(other, toolchain_record()))
+        for change in ({'build_selection': None}, {'build_packages': BUILD_PACKAGES[1:]}, {'build_packages_sha256': None},
+                       {'packages_sha256': None}, {'build_packages': None}):
+            with self.subTest(change=change):
+                self.assertIsNone(PC.recorded_packages(block, toolchain_record(**change)))
+        for record in (None, [], 'x'):
+            self.assertIsNone(PC.recorded_packages(block, record))
+        old = toolchain_record()
+        for field in ('build_packages', 'build_packages_sha256', 'build_selection'):
+            del old[field]
+        self.assertIsNone(PC.recorded_packages(block, old))     # a record of before the lists were kept
+        self.assertIsNotNone(PC.recorded_toolchain(block, old))  # which still names the toolchain
+
+    def test_changes_are_named_package_by_package(self):
+        before = ['gcc-14 14.2.0-19 amd64', 'libc6-dev 2.41-12+deb13u4 amd64', 'gone 1 all', 'multi 1 amd64',
+                  'multi 1 i386']
+        after = ['gcc-14 14.2.0-19 amd64', 'libc6-dev 2.41-12+deb13u5 amd64', 'new 2 amd64', 'multi 1 amd64',
+                 'multi 2 i386']
+        self.assertEqual(PC.package_changes(before, after), [
+            'gone:all 1 not here', 'libc6-dev:amd64 2.41-12+deb13u4 -> 2.41-12+deb13u5', 'multi:i386 1 -> 2',
+            'new:amd64 2 only here'])
+        self.assertEqual(PC.package_changes(before, before), [])
+        self.assertEqual(PC.package_changes(before, list(reversed(before))), [])
+        self.assertEqual(PC.package_changes([], ['a 1 all']), ['a:all 1 only here'])
+        self.assertEqual(PC.package_changes(['a 1 all'], []), ['a:all 1 not here'])
+        self.assertEqual(PC.package_changes(['odd'], ['odd 1']), ['odd:  -> 1'])  # malformed lines do not raise
+
+    def test_key_fingerprint_names_the_packages_only_in_key_mode(self):
+        self.assertEqual(PC.PACKAGE_MODES, ('report', 'enforce', 'key'))
+        for mode in ('report', 'enforce'):
+            self.assertEqual(PC.key_fingerprint(FINGERPRINT, ATTRIBUTE, mode), FINGERPRINT)
+            self.assertEqual(PC.key_fingerprint(FINGERPRINT, None, mode), FINGERPRINT)
+        keyed = PC.key_fingerprint(FINGERPRINT, ATTRIBUTE, 'key')
+        self.assertEqual(keyed, PC.derive_key({'schema': 1, 'toolchain': FINGERPRINT,
+                                               'build_packages_sha256': BUILD_DIGEST}))
+        self.assertRegex(keyed, r'\A[0-9a-f]{64}\Z')
+        self.assertNotEqual(keyed, FINGERPRINT)
+        drifted = PC.packages_attribute(toolchain_block(), PC.parse_probe(probe_text(**DRIFTED)))
+        self.assertNotEqual(PC.key_fingerprint(FINGERPRINT, drifted, 'key'), keyed)
+        self.assertNotEqual(PC.key_fingerprint('0' * 64, ATTRIBUTE, 'key'), keyed)
+        # The whole-list digest is not in it: only what feeds a build is.
+        self.assertEqual(PC.key_fingerprint(FINGERPRINT, dict(ATTRIBUTE, packages_sha256='0' * 64), 'key'), keyed)
+        for bad in (None, {}, dict(ATTRIBUTE, build_packages_sha256='0' * 64)):
+            with self.subTest(bad=bad), self.assertRaisesRegex(PC.CacheError, 'no build package list'):
+                PC.key_fingerprint(FINGERPRINT, bad, 'key')
+        for mode in ('', 'Key', 'off', None, 'keys'):
+            with self.subTest(mode=mode), self.assertRaisesRegex(PC.CacheError, 'unknown package mode'):
+                PC.key_fingerprint(FINGERPRINT, ATTRIBUTE, mode)
+
+    def test_judgement_of_a_bundles_packages(self):
+        here, other_id = TOOLCHAIN_ID, 'sha256:' + '7' * 64
+        drifted = PC.packages_attribute(toolchain_block(), PC.parse_probe(probe_text(**DRIFTED)))
+        same = ('same', 'built with the build packages of the toolchain here')
+        by_image = ('same', 'records no package list, but was built by the toolchain image that is here')
+        other = ('other', 'built with other toolchain build packages than the ones here (1): '
+                          'libc6-dev:amd64 2.41-12+deb13u5 -> 2.41-12+deb13u4')
+        unknown = ('unknown', 'records no toolchain package list (saved before it was recorded)')
+        unknown_by = ('unknown', 'records no toolchain package list (saved before it was recorded, by toolchain '
+                                 'image %s)' % other_id)
+        cases = [(dict(ATTRIBUTE, image_id=other_id), other_id, same),   # the list decides, not the image id
+                 (ATTRIBUTE, None, same), (drifted, here, other), (dict(drifted, image_id=here), here, other),
+                 (None, here, by_image), ({}, here, by_image), (dict(ATTRIBUTE, build_packages_sha256='0' * 64), here, by_image),
+                 (None, None, unknown), (None, '', unknown), (None, 5, unknown), ('junk', None, unknown),
+                 (None, other_id, unknown_by), ({'image_id': other_id}, other_id, unknown_by)]
+        for bundle, built_by, (verdict, detail) in cases:
+            for mode in PC.PACKAGE_MODES:
+                with self.subTest(bundle=bundle, built_by=built_by, mode=mode):
+                    self.assertEqual(PC.judge_packages(bundle, built_by, ATTRIBUTE, here, mode),
+                                     (verdict, detail, mode != 'report' and verdict != 'same'))
+        # More than eight changed packages are counted and cut.
+        many = ['p%02d 1 all' % index for index in range(12)]
+        bundle = {'build_packages': many, 'build_packages_sha256': PC.packages_digest(many)}
+        detail = PC.judge_packages(bundle, None, ATTRIBUTE, here, 'report')[1]
+        self.assertIn('(17): ', detail)
+        self.assertTrue(detail.endswith(' ...'))
+        self.assertEqual(detail.count(', '), 7)
+
+    def test_check_identity_names_whose_check_and_its_exact_words(self):
+        one = PC.check_identity('recipe', ['A=1', '--', 'python3', 'x'])
+        self.assertRegex(one, r'\A[0-9a-f]{64}\Z')
+        self.assertEqual(one, PC.check_identity('recipe', ('A=1', '--', 'python3', 'x')))
+        self.assertEqual(one, PC.derive_key({'whose': 'recipe', 'words': ['A=1', '--', 'python3', 'x']}))
+        for whose, words in (('lane', ['A=1', '--', 'python3', 'x']), ('recipe', ['A=1', '--', 'python3', 'y']),
+                             ('recipe', ['--', 'A=1', 'python3', 'x']), ('recipe', ['A=1', '--', 'python3']),
+                             ('recipe', ['A=1 -- python3 x'])):
+            with self.subTest(whose=whose, words=words):
+                self.assertNotEqual(PC.check_identity(whose, words), one)
+
+    def test_manifest_needs_a_well_formed_selection_and_reason(self):
+        for selection in (None, [], {}, {'sections': ['devel']}, {'names': ['x']}, {'sections': [], 'names': []},
+                          {'sections': 'devel', 'names': []}, {'sections': ['devel'], 'names': [5]},
+                          {'sections': ['devel'], 'names': [], 'more': []}, {'sections': [''], 'names': []},
+                          {'sections': ['devel'], 'names': [' ']}):
+            value = manifest()
+            if selection is None:
+                del value['toolchain']['build_packages']
+            else:
+                value['toolchain']['build_packages'] = selection
+            with self.subTest(selection=selection), self.assertRaisesRegex(PC.CacheError, 'toolchain needs build_packages'):
+                PC.validate_manifest(value)
+        for selection in ({'sections': ['devel'], 'names': []}, {'sections': [], 'names': ['*-dev']}):
+            value = manifest()
+            value['toolchain']['build_packages'] = selection
+            self.assertIs(PC.validate_manifest(value), value)
+        for reason in ('', '  ', 5, [], True, False):
+            value = manifest()
+            value['providers']['side']['unpublished'] = reason
+            with self.subTest(reason=reason), self.assertRaisesRegex(
+                    PC.CacheError, '^side: unpublished must say why the provider is not kept in the cache$'):
+                PC.validate_manifest(value)
+        value = manifest()
+        value['providers']['side']['unpublished'] = 'a reason'
+        self.assertIs(PC.validate_manifest(value), value)
+
+    def test_selection_and_reason_are_not_part_of_fingerprint_or_key(self):
+        block = toolchain_block()
+        block['build_packages'] = {'sections': ['x'], 'names': []}
+        self.assertEqual(fingerprint(block=block), FINGERPRINT)
+        plain, marked = manifest(), manifest()
+        marked['providers']['side']['unpublished'] = 'a reason'
+        marked['toolchain'] = block
+        self.assertEqual(PC.key_document(plain, 'side', facts(), {}), PC.key_document(marked, 'side', facts(), {}))
+
+
+class CheckReplaceDecision(unittest.TestCase):
+    """decide_replace for an entry a post-restore check rejected (kind 'check')."""
+
+    KEY, DIGEST, FILES, CHECK = 'a' * 64, 'sha256:' + '1' * 64, 'f' * 64, 'c' * 64
+    PRESENT = 'already cached under this key'
+
+    def note(self, **changes):
+        value = {'key': self.KEY, 'digest': self.DIGEST, 'kind': 'check', 'reason': 'the reason', 'markers': {},
+                 'files_sha256': self.FILES, 'check': self.CHECK}
+        value.update(changes)
+        return value
+
+    def decide(self, note=None, digest=None, files=None, recheck=None, cached=True):
+        return PC.decide_replace(note or self.note(), self.KEY, digest or self.DIGEST, {}, cached, files, recheck)
+
+    def test_first_the_rebuilt_output_is_asked_for(self):
+        self.assertEqual(self.decide(), ('compare', self.PRESENT + '; a check rejected it here'))
+        self.assertEqual(self.decide(recheck='passed')[0], 'compare')   # never on the check alone
+        self.assertEqual(self.decide(cached=False)[0], 'compare')       # the prerequisites do not matter here
+
+    def test_same_files_as_the_entry_judges_the_machine(self):
+        for recheck in (None, 'passed', 'rejected', 'exit 2'):
+            with self.subTest(recheck=recheck):
+                self.assertEqual(self.decide(files=self.FILES, recheck=recheck), (
+                    'forget', self.PRESENT + '; the output rebuilt here is file for file the cached entry, so the '
+                                             'check that rejected it judged this machine, not the entry'))
+
+    def test_other_files_need_the_same_check_on_the_rebuilt_output(self):
+        other = 'e' * 64
+        self.assertEqual(self.decide(files=other), (
+            'recheck', self.PRESENT + '; a check rejected it here and the rebuilt output differs from it'))
+        self.assertEqual(self.decide(files=other, recheck='passed'), (
+            'replace', 'the check that rejected the cached entry accepts the output rebuilt here, which differs '
+                       'from it (the reason)'))
+        self.assertEqual(self.decide(files=other, recheck='rejected'), (
+            'forget', self.PRESENT + '; the check that rejected it rejects the output rebuilt here as well, so it '
+                                     'does not judge the entry'))
+        for why in ('exit 2', 'exit -9', 'the check of base did not finish in 900 s', 'Passed', 'PASSED', ''):
+            with self.subTest(why=why):
+                self.assertEqual(self.decide(files=other, recheck=why), (
+                    'keep', self.PRESENT + '; a check rejected it here, but that check could not judge the rebuilt '
+                                           'output (%s), so the entry is not replaced' % why))
+
+    def test_note_must_name_the_check_and_the_manifest(self):
+        for change in ({'files_sha256': None}, {'check': None}, {'files_sha256': 'f' * 63}, {'check': 'C' * 64},
+                       {'files_sha256': 5}, {'check': ['c' * 64]}):
+            for files, recheck in ((None, None), ('e' * 64, 'passed')):
+                with self.subTest(change=change, files=files):
+                    self.assertEqual(self.decide(self.note(**change), files=files, recheck=recheck), (
+                        'keep', self.PRESENT + '; the note of its rejection names no check and no file manifest'))
+        without = self.note()
+        del without['files_sha256'], without['check']
+        self.assertEqual(self.decide(without, files='e' * 64, recheck='passed')[0], 'keep')
+
+    def test_the_tag_must_still_name_the_rejected_entry(self):
+        other = 'sha256:' + '2' * 64
+        self.assertEqual(self.decide(digest=other, files='e' * 64, recheck='passed')[0], 'forget')
+        self.assertEqual(PC.decide_replace(self.note(), self.KEY, None, {}, True, 'e' * 64, 'passed')[0], 'keep')
+        self.assertEqual(PC.decide_replace(self.note(key='b' * 64), self.KEY, self.DIGEST, {}, True, 'e' * 64,
+                                           'passed'), ('keep', self.PRESENT))
+
+    def test_the_other_kinds_ignore_the_rebuilt_output(self):
+        for files, recheck in ((None, None), (self.FILES, 'rejected'), ('e' * 64, 'exit 2')):
+            with self.subTest(files=files):
+                self.assertEqual(self.decide(self.note(kind='bundle'), files=files, recheck=recheck),
+                                 ('replace', 'restore refused the cached entry (the reason)'))
+                self.assertEqual(self.decide(self.note(kind='prerequisites'), files=files, recheck=recheck)[0],
+                                 'replace')
+                self.assertEqual(self.decide(self.note(kind='other'), files='e' * 64, recheck='passed'),
+                                 ('keep', self.PRESENT))
+
+
+class PackagesService(ServiceCase):
+    """The toolchain's build packages in the record, in bundles, on restore and in the keys."""
+
+    OTHER_ID = 'sha256:' + '9' * 64
+    CHANGE = 'libc6-dev:amd64 2.41-12+deb13u4 -> 2.41-12+deb13u5'
+
+    def record(self):
+        return json.loads((self.root / 'status/toolchain.json').read_text())
+
+    def notes(self):
+        path = self.root / 'cache-state/refused.json'
+        return json.loads(path.read_text()) if path.exists() else None
+
+    def rebuilt_image(self):
+        """The local image becomes a rebuild with one newer build package."""
+        self.registry.toolchain, self.registry.probe_output = self.OTHER_ID, probe_text(**DRIFTED)
+
+    def cached(self, name='base'):
+        self.make(name)
+        ref = self.service.push(name)
+        self.set_aside(name)
+        del self.messages[:]
+        return ref
+
+    def test_bundle_records_the_packages_it_was_built_with(self):
+        self.make('base')
+        self.service.push('base')
+        meta = json.loads(self.bundle('base')[1]['meta.json'])
+        self.assertEqual(meta['toolchain'], dict(ATTRIBUTE, image_id=TOOLCHAIN_ID))
+        self.assertNotIn('build_packages', json.dumps(meta['key_inputs']))
+        self.assertEqual(meta['key_inputs']['toolchain'], FINGERPRINT)
+
+    def test_same_packages_restore_silently_in_every_mode(self):
+        ref = self.cached()
+        for mode in PC.PACKAGE_MODES[:2]:
+            with self.subTest(mode=mode):
+                self.assertEqual(self.new_service(packages=mode).restore('base'), ref)
+                self.assertEqual(self.messages, ['provider-cache: restored base from %s (9 entries verified)' % ref])
+                self.assertNotIn('toolchain_packages', json.loads((self.root / 'status/base.json').read_text()))
+                self.set_aside('base')
+                del self.messages[:]
+
+    def test_report_mode_uses_a_bundle_of_other_packages_and_says_so(self):
+        ref = self.cached()
+        key = self.service.key('base')
+        self.rebuilt_image()
+        service = self.new_service()
+        with mock.patch.object(PC.time, 'time', return_value=5000.2):
+            self.assertEqual(service.restore('base'), ref)
+        drifted = PC.packages_digest([line.replace('u4 amd64', 'u5 amd64') if line.startswith('libc6-dev') else line
+                                      for line in BUILD_PACKAGES])
+        detail = ('built with other toolchain build packages than the ones here (1): '
+                  'libc6-dev:amd64 2.41-12+deb13u4 -> 2.41-12+deb13u5')
+        self.assertEqual(self.messages, [
+            'provider-cache: the toolchain image %s has other build packages than the recorded one: %s (1); '
+            'outputs that were ok before are not pushed' % (self.OTHER_ID, self.CHANGE),
+            'provider-cache: toolchain fingerprint %s (amd64, image %s, build packages %s)'
+            % (FINGERPRINT, self.OTHER_ID, drifted),
+            'provider-cache: restored base from %s (9 entries verified; %s)' % (ref, detail)])
+        status = json.loads((self.root / 'status/base.json').read_text())
+        self.assertEqual(status['toolchain_packages'], detail)
+        self.assertEqual((status['restored_from'], status['cache_key']), (ref, key))
+        record = self.record()
+        self.assertEqual((record['fingerprint'], record['image_id'], record['build_packages_sha256'],
+                          record['packages_sha256'], record['outputs_before']),
+                         (FINGERPRINT, self.OTHER_ID, drifted, 'f' * 64, 5001))
+        self.assertEqual(service.key('base'), key)            # the keys did not move
+        self.assertEqual(self.new_service().key('base'), key)
+        self.assertIsNone(self.notes())
+
+    def test_enforce_mode_does_not_use_a_bundle_of_other_packages_and_judges_nothing(self):
+        ref = self.cached()
+        digest = self.registry.digests[ref]
+        self.rebuilt_image()
+        self.service = self.new_service(packages='enforce')
+        self.assertEqual(self.refused(), (
+            'base: the cached entry built with other toolchain build packages than the ones here (1): %s, and '
+            'TAKX_PROTO_CACHE_PACKAGES=enforce does not use such an entry' % self.CHANGE))
+        self.assertIsNone(self.notes())
+        # The lane builds; the healthy entry of the other toolchain stays.
+        self.make('base')
+        os.utime(self.root / 'status/base.json', (2 ** 31, 2 ** 31))
+        del self.messages[:]
+        self.assertEqual(self.service.push('base'), ref)
+        self.assertEqual((self.registry.published, self.registry.digests[ref]), (1, digest))
+        self.assertEqual(self.messages, ['provider-cache: base is already cached under this key: ' + ref])
+
+    def test_bundle_without_a_package_list_is_known_only_by_the_image_that_built_it(self):
+        ref = self.cached()
+        labels, content = self.bundle('base')
+        meta = json.loads(content['meta.json'])
+        del meta['toolchain']
+        cases = (({}, 'unknown', 'records no toolchain package list (saved before it was recorded)'),
+                 ({'adopted_from': {'toolchain_image_id': self.OTHER_ID}}, 'unknown',
+                  'records no toolchain package list (saved before it was recorded, by toolchain image %s)'
+                  % self.OTHER_ID),
+                 ({'adopted_from': {'toolchain_image_id': TOOLCHAIN_ID}}, 'same', None),
+                 ({'toolchain': {'image_id': TOOLCHAIN_ID}, 'adopted_from': {'toolchain_image_id': self.OTHER_ID}},
+                  'same', None))
+        for more, verdict, detail in cases:
+            content['meta.json'] = json.dumps(dict(meta, **more)).encode()
+            for mode in ('report', 'enforce'):
+                del self.messages[:]
+                self.service = self.new_service(packages=mode)
+                with self.subTest(more=more, mode=mode):
+                    if mode == 'enforce' and verdict != 'same':
+                        self.assertEqual(self.refused(), 'base: the cached entry %s, and TAKX_PROTO_CACHE_PACKAGES='
+                                                         'enforce does not use such an entry' % detail)
+                        self.assertIsNone(self.notes())
+                        continue
+                    self.assertEqual(self.service.restore('base'), ref)
+                    status = json.loads((self.root / 'status/base.json').read_text())
+                    self.assertEqual(status.get('toolchain_packages'), detail)
+                    self.assertEqual(self.messages, ['provider-cache: restored base from %s (9 entries verified%s)'
+                                                     % (ref, '; ' + detail if detail else '')])
+                    self.set_aside('base')
+
+    def test_outputs_from_before_the_packages_changed_are_not_pushed(self):
+        self.make('base')
+        status = self.root / 'status/base.json'
+        os.utime(status, (4000, 4000))
+        self.rebuilt_image()
+        for mode in ('report', 'enforce'):
+            self.write_json('status/toolchain.json', toolchain_record())
+            with self.subTest(mode=mode), mock.patch.object(PC.time, 'time', return_value=5000.2):
+                with self.assertRaisesRegex(PC.CacheError, '^base: it was ok before the toolchain record was replaced'):
+                    self.new_service(packages=mode).push('base')
+            self.assertEqual((self.registry.published, self.record()['outputs_before']), (0, 5001))
+        os.utime(status, (5001, 5001))
+        self.new_service().push('base')
+        meta = json.loads(self.bundle('base')[1]['meta.json'])
+        self.assertEqual((meta['toolchain']['image_id'], meta['toolchain']['packages_sha256']), (self.OTHER_ID, 'f' * 64))
+        self.assertIn('libc6-dev 2.41-12+deb13u5 amd64', meta['toolchain']['build_packages'])
+        # The same packages in yet another image move nothing.
+        self.registry.toolchain = 'sha256:' + '8' * 64
+        with mock.patch.object(PC.time, 'time', return_value=9000.0):
+            self.new_service().toolchain(local=True)
+        self.assertEqual((self.record()['outputs_before'], self.record()['image_id']), (5001, 'sha256:' + '8' * 64))
+
+    def test_key_mode_puts_the_packages_into_every_key(self):
+        plain = {name: self.service.key(name) for name in ('base', 'side', 'top')}
+        service = self.new_service(packages='key')
+        keyed = PC.key_fingerprint(FINGERPRINT, ATTRIBUTE, 'key')
+        self.assertEqual(service.toolchain(), (keyed, 'amd64'))
+        self.assertEqual(self.registry.calls, [])               # the record has the list: nothing is probed
+        self.assertEqual(service.explain('base')['toolchain'], keyed)
+        for name in plain:
+            self.assertNotEqual(service.key(name), plain[name])
+        self.assertEqual({name: key for name, (key, _) in service.plain_keys().items()}, plain)
+        self.assertEqual(self.new_service(packages='enforce').key('base'), plain['base'])
+        # A bundle saved under the plain key is not what the keyed key names.
+        self.cached()
+        with self.assertRaisesRegex(PC.Skip, r'^nothing cached under this key \(reg.example/cache/base:%s\)$'
+                                    % service.key('base')):
+            service.restore('base')
+        # Its own push and restore work under the keyed key.
+        self.make('base')
+        ref = service.push('base')
+        self.assertEqual(ref, 'reg.example/cache/base:' + service.key('base'))
+        self.set_aside('base')
+        self.assertEqual(service.restore('base'), ref)
+
+    def test_key_mode_refuses_other_packages_until_they_are_recorded_on_purpose(self):
+        old = self.new_service(packages='key').key('base')
+        self.rebuilt_image()
+        service = self.new_service(packages='key')
+        self.assertEqual(service.key('base'), old)              # reading the record asks nothing
+        for action in (service.restore, service.push, service.migrate):
+            self.make('base') if action == service.push else None
+            with self.subTest(action=action.__name__), self.assertRaises(PC.CacheError) as caught:
+                action('base')
+            self.assertEqual(str(caught.exception), (
+                'the local %s image (%s) has other build packages than the recorded toolchain: %s (1); with '
+                'TAKX_PROTO_CACHE_PACKAGES=key that changes every key. Accept it with `provider_cache.py toolchain '
+                '--record`' % (PC.TOOLCHAIN, self.OTHER_ID, self.CHANGE)))
+        self.assertEqual(self.record(), toolchain_record())
+        self.assertEqual(self.registry.published, 0)
+        out = io.StringIO()
+        recording = self.new_service(packages='key')
+        with mock.patch.object(PC.time, 'time', return_value=5000.2):
+            self.assertEqual(PC.main(['toolchain', '--record'], service=recording, out=out), 0)
+        drifted = PC.packages_attribute(toolchain_block(), PC.parse_probe(probe_text(**DRIFTED)))
+        self.assertEqual(out.getvalue(), PC.key_fingerprint(FINGERPRINT, drifted, 'key') + '\tamd64\n')
+        self.assertEqual((self.record()['outputs_before'], self.record()['fingerprint']), (5001, FINGERPRINT))
+        self.assertNotEqual(self.new_service(packages='key').key('base'), old)
+        self.assertEqual(self.new_service().key('base'), self.service.key('base'))   # report keys never moved
+
+    def test_keys_already_derived_follow_the_packages_the_local_check_accepted(self):
+        service = self.new_service(packages='key')
+        service.rerecord = True
+        old = service.key('base')
+        self.rebuilt_image()
+        self.make('base')
+        os.utime(self.root / 'status/base.json', (2 ** 31, 2 ** 31))
+        ref = service.push('base')
+        self.assertNotEqual(ref, 'reg.example/cache/base:' + old)
+        self.assertEqual(ref, 'reg.example/cache/base:' + self.new_service(packages='key').key('base'))
+
+    def test_record_without_a_package_list_is_completed_from_the_same_image(self):
+        old = toolchain_record()
+        for field in ('build_packages', 'build_packages_sha256', 'build_selection'):
+            del old[field]
+        self.write_json('status/toolchain.json', old)
+        # Deriving a key needs no list unless the list is in the key.
+        self.assertEqual(self.new_service().toolchain(), (FINGERPRINT, 'amd64'))
+        self.assertEqual(self.new_service(packages='enforce').toolchain(), (FINGERPRINT, 'amd64'))
+        self.assertEqual((self.registry.calls, self.record()), ([], old))
+        for mode in PC.PACKAGE_MODES:
+            self.write_json('status/toolchain.json', old)
+            del self.registry.calls[:], self.messages[:]
+            service = self.new_service(packages=mode)
+            with self.subTest(mode=mode):
+                self.assertEqual(service.toolchain(local=mode != 'key'),
+                                 (PC.key_fingerprint(FINGERPRINT, ATTRIBUTE, mode), 'amd64'))
+                self.assertEqual(self.registry.calls, [('image_id', PC.TOOLCHAIN), ('probe_toolchain', PC.TOOLCHAIN)])
+                self.assertEqual(PC.recorded_packages(toolchain_block(), self.record()), ATTRIBUTE)
+                self.assertIsNone(self.record()['outputs_before'])   # the same whole list: nothing changed
+                self.assertEqual(len(self.messages), 1)
+        # Another whole list under a record without one counts as other packages.
+        for mode in PC.PACKAGE_MODES:
+            self.write_json('status/toolchain.json', dict(old, packages_sha256='0' * 64))
+            del self.messages[:]
+            service = self.new_service(packages=mode)
+            told = 'the earlier record lists no build packages and the whole package list differs (1)'
+            with self.subTest(other_list=mode), mock.patch.object(PC.time, 'time', return_value=5000.2):
+                if mode == 'key':
+                    with self.assertRaisesRegex(PC.CacheError, re.escape(told)):
+                        service.toolchain(local=True)
+                    self.assertIsNone(self.record()['outputs_before'])
+                    continue
+                service.toolchain(local=True)
+                self.assertEqual(self.record()['outputs_before'], 5001)
+                self.assertIn(told, self.messages[0])
+
+    def test_another_selection_takes_the_list_again_without_calling_it_a_change(self):
+        value = manifest()
+        value['toolchain']['build_packages'] = {'sections': ['devel'], 'names': []}
+        service = PC.ProviderCache(value, PC.WorkTree(self.root, self.repo), self.registry, 'reg.example/cache', '',
+                                   self.messages.append)
+        self.assertEqual(service.toolchain(local=True), (FINGERPRINT, 'amd64'))
+        self.assertEqual(self.registry.calls, [('image_id', PC.TOOLCHAIN), ('probe_toolchain', PC.TOOLCHAIN)])
+        record = self.record()
+        self.assertEqual(record['build_packages'], ['gcc-14 14.2.0-19 amd64', 'linux-libc-dev 6.12.117-1 all'])
+        self.assertEqual((record['build_selection'], record['outputs_before']),
+                         ({'sections': ['devel'], 'names': []}, None))
+        self.assertEqual(len(self.messages), 1)
+
+    def test_unknown_mode_is_refused_before_anything_is_done(self):
+        for mode in ('', 'Key', 'off', 'strict', None):
+            with self.subTest(mode=mode), self.assertRaisesRegex(
+                    PC.CacheError, '^TAKX_PROTO_CACHE_PACKAGES is %s, not one of report, enforce, key$'
+                    % re.escape(repr(mode))):
+                self.new_service(packages=mode)
+        for mode in PC.PACKAGE_MODES:
+            self.assertEqual(self.new_service(packages=mode).packages, mode)
+        self.assertEqual(self.new_service().packages, 'report')
+        self.assertEqual(self.registry.calls, [])
+
+    def test_mode_comes_from_the_environment(self):
+        for value, expected in ((None, 'report'), ('', 'report'), ('enforce', 'enforce'), ('key', 'key')):
+            environ = {'TAKX_PROTO_ROOT': str(self.root)}
+            if value is not None:
+                environ['TAKX_PROTO_CACHE_PACKAGES'] = value
+            with self.subTest(value=value):
+                self.assertEqual(PC.build_service(environ).packages, expected)
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {'TAKX_PROTO_CACHE_PACKAGES': 'sometimes', 'TAKX_PROTO_ROOT': str(self.root)}), \
+                mock.patch.object(PC.sys, 'stderr', err):
+            self.assertEqual(PC.main(['key', 'proj']), 1)
+        self.assertEqual(err.getvalue(), "provider-cache: TAKX_PROTO_CACHE_PACKAGES is 'sometimes', not one of "
+                                         "report, enforce, key\n")
+
+    def test_packages_command_prints_the_record_and_the_fingerprint_of_each_mode(self):
+        out = io.StringIO()
+        self.assertEqual(PC.main(['toolchain', '--packages'], service=self.new_service(packages='enforce'), out=out), 0)
+        self.assertEqual(json.loads(out.getvalue()), dict(
+            ATTRIBUTE, image_id=TOOLCHAIN_ID, arch='amd64', mode='enforce', fingerprints={
+                'report': FINGERPRINT, 'enforce': FINGERPRINT, 'key': PC.key_fingerprint(FINGERPRINT, ATTRIBUTE, 'key')}))
+        self.assertEqual(self.registry.calls, [('image_id', PC.TOOLCHAIN)])   # the local image is the recorded one
+
+    def test_index_names_the_mode_of_its_keys(self):
+        index = Path(self.tmp.name) / 'index.tsv'
+        for mode in PC.PACKAGE_MODES:
+            service = self.new_service(packages=mode)
+            self.assertEqual(PC.main(['status', '--write-index', str(index)], service=service, out=io.StringIO()), 0)
+            lines = index.read_text().splitlines()
+            self.assertEqual(lines[7:10], ['# toolchain fingerprint ' + PC.key_fingerprint(FINGERPRINT, ATTRIBUTE, mode),
+                                           '# architecture amd64', '# toolchain packages mode ' + mode])
+
+
+class PackagesMigrate(ServiceCase):
+    """migrate towards keys that name the build packages, and what it records in the others."""
+
+    OTHER_ID = 'sha256:' + '9' * 64
+    legacy_push = Migrate.legacy_push
+
+    def setUp(self):
+        super().setUp()
+        self.top = self.make('base')
+        self.good = snapshot(self.top)
+        self.old_ref = self.legacy_push('base')
+        del self.registry.calls[:]
+        del self.messages[:]
+
+    def keyed(self):
+        return self.new_service(packages='key')
+
+    def test_bundle_under_the_plain_key_becomes_addressable_under_the_keyed_key(self):
+        plain_ref = self.service.push('base')
+        plain_digest = self.registry.digests[plain_ref]
+        old_labels, old_content = copy.deepcopy(self.registry.images[plain_ref])
+        del self.registry.calls[:], self.messages[:]
+        service = self.keyed()
+        key = service.key('base')
+        ref = service.migrate('base')
+        self.assertEqual(ref, 'reg.example/cache/base:' + key)
+        # The plain key is tried first; the schema-1 key is not even asked for.
+        self.assertEqual([call for call in self.registry.calls if call[0] in ('probe', 'fetch', 'adopt', 'forget')], [
+            ('probe', ref), ('probe', plain_ref), ('fetch', plain_ref), ('adopt', plain_ref, ref),
+            ('forget', plain_ref), ('probe', ref)])
+        labels, content = self.registry.images[ref]
+        self.assertEqual(labels, dict(old_labels, **{'dev.uds.takx.key': key}))
+        self.assertEqual({name for name in content if content[name] != old_content[name]}, {'meta.json'})
+        meta, old_meta = json.loads(content['meta.json']), json.loads(old_content['meta.json'])
+        self.assertEqual(meta, dict(old_meta, key=key, key_inputs=service.explain('base'), rekeyed_from={
+            'schema': 2, 'key': old_meta['key'], 'ref': plain_ref, 'digest': plain_digest}))
+        self.assertEqual(meta['toolchain'], dict(ATTRIBUTE, image_id=TOOLCHAIN_ID))
+        self.assertNotIn('adopted_from', meta)
+        self.assertEqual(self.registry.images[plain_ref], (old_labels, old_content))   # the source is untouched
+        tar_sha = hashlib.sha256(content['base.tar']).hexdigest()
+        self.assertEqual(self.messages, [
+            'provider-cache: base is now also %s (was %s under the key without the build packages, 9 entries '
+            'verified, tar sha256 %s; built with the build packages of the toolchain here)' % (ref, plain_ref, tar_sha)])
+        self.set_aside('base')
+        self.assertEqual(service.restore('base'), ref)
+        self.assertEqual(snapshot(self.top), self.good)
+        self.assertEqual(self.leftovers(), [])
+
+    def test_bundle_of_other_or_unknown_packages_is_not_given_a_keyed_key(self):
+        plain_ref = self.service.push('base')
+        labels, content = self.registry.images[plain_ref]
+        meta = json.loads(content['meta.json'])
+        other = [line.replace('14.2.0-19', '14.2.0-20') for line in BUILD_PACKAGES]
+        cases = (({'toolchain': {'build_packages': other, 'build_packages_sha256': PC.packages_digest(other)}},
+                  'built with other toolchain build packages than the ones here (1): gcc-14:amd64 14.2.0-20 -> 14.2.0-19'),
+                 ({'toolchain': None}, 'records no toolchain package list (saved before it was recorded)'),
+                 ({'toolchain': {'image_id': self.OTHER_ID}},
+                  'records no toolchain package list (saved before it was recorded, by toolchain image %s)'
+                  % self.OTHER_ID))
+        for change, detail in cases:
+            content['meta.json'] = json.dumps(dict(meta, **change)).encode()
+            del self.registry.calls[:]
+            service = self.keyed()
+            with self.subTest(change=change), self.assertRaises(PC.CacheError) as caught:
+                service.migrate('base')
+            self.assertEqual(str(caught.exception), 'base: the bundle under %s %s, so it cannot be addressed by a key '
+                                                    'that names the build packages here' % (plain_ref, detail))
+            self.assertNotIn('adopt', [call[0] for call in self.registry.calls])
+            self.assertEqual((self.registry.kept, self.leftovers()), ([], []))
+            self.assertNotIn('reg.example/cache/base:' + service.key('base'), self.registry.images)
+
+    def test_keyed_key_takes_a_schema_1_bundle_only_from_the_image_that_is_here(self):
+        service = self.keyed()
+        ref = service.migrate('base')
+        meta = json.loads(self.registry.images[ref][1]['meta.json'])
+        self.assertEqual(meta['toolchain'], dict(ATTRIBUTE, image_id=TOOLCHAIN_ID))
+        self.assertEqual(meta['adopted_from']['toolchain_image_id'], TOOLCHAIN_ID)
+        self.assertNotIn('rekeyed_from', meta)
+        self.assertIn('under the schema-1 key', self.messages[-1])
+        # Built by another image than the local one: the same packages cannot be claimed.
+        del self.registry.images[ref]
+        self.registry.toolchain = self.OTHER_ID
+        self.write_json('status/toolchain.json', toolchain_record(image_id=self.OTHER_ID))
+        with self.assertRaisesRegex(PC.CacheError, 'records no toolchain package list .*by toolchain image %s.*'
+                                    'cannot be addressed by a key that names the build packages here' % TOOLCHAIN_ID):
+            self.keyed().migrate('base')
+        self.assertNotIn(ref, self.registry.images)
+        # The other modes adopt it all the same, and claim nothing about its packages.
+        plain = self.new_service().migrate('base')
+        meta = json.loads(self.registry.images[plain][1]['meta.json'])
+        self.assertNotIn('toolchain', meta)
+        self.assertIn('; records no toolchain package list (saved before it was recorded, by toolchain image %s))'
+                      % TOOLCHAIN_ID, self.messages[-1])
+        self.set_aside('base')
+        self.assertEqual(self.new_service().restore('base'), plain)
+        self.assertEqual(json.loads((self.root / 'status/base.json').read_text())['toolchain_packages'],
+                         'records no toolchain package list (saved before it was recorded, by toolchain image %s)'
+                         % TOOLCHAIN_ID)
+
+    def test_nothing_under_either_earlier_key_is_a_clean_skip_and_errors_are_refusals(self):
+        self.registry.images.clear()
+        service = self.keyed()
+        plain_ref = 'reg.example/cache/base:' + self.service.key('base')
+        with self.assertRaises(PC.Skip) as caught:
+            service.migrate('base')
+        self.assertEqual(str(caught.exception), 'nothing cached under the key without the build packages or the '
+                                                'schema-1 key (%s)' % self.old_ref)
+        answers = iter(['absent', 'error'])
+        with mock.patch.object(self.registry, 'probe', side_effect=lambda ref: next(answers)), \
+                self.assertRaisesRegex(PC.CacheError, '^base: the registry could not be queried for %s$'
+                                       % re.escape(plain_ref)):
+            self.keyed().migrate('base')
+        answers = iter(['absent', 'absent', 'unauthorized'])
+        with mock.patch.object(self.registry, 'probe', side_effect=lambda ref: next(answers)), \
+                self.assertRaisesRegex(PC.CacheError, '^base: the registry could not be queried for %s$'
+                                       % re.escape(self.old_ref)):
+            self.keyed().migrate('base')
+
+
+class Unpublished(ServiceCase):
+    """A provider that providers.json keeps out of the cache ('unpublished')."""
+
+    WHY = 'CDDL-only reference JAR, build-time only'
+
+    def setUp(self):
+        super().setUp()
+        value = manifest()
+        value['providers']['side']['unpublished'] = self.WHY
+        self.service = PC.ProviderCache(value, PC.WorkTree(self.root, self.repo), self.registry, 'reg.example/cache',
+                                        '', self.messages.append)
+
+    def test_it_is_neither_saved_nor_restored_nor_migrated(self):
+        self.make('side')
+        for action in (self.service.push, self.service.restore, self.service.migrate):
+            with self.subTest(action=action.__name__), self.assertRaises(PC.Skip) as caught:
+                action('side')
+            self.assertEqual(str(caught.exception), 'not kept in the provider cache (%s)' % self.WHY)
+        self.assertEqual((self.registry.calls, self.registry.published, self.messages), ([], 0, []))
+        # Also when an entry of an earlier time is still under its key.
+        ref = self.service.ref('side')
+        self.registry.store(ref, {}, {})
+        self.set_aside('side')
+        with self.assertRaises(PC.Skip):
+            self.service.restore('side')
+        self.assertFalse(os.path.lexists(self.root / 'P/side'))
+        self.assertEqual(self.registry.calls, [])
+        # The other providers are not affected, and the key of the unpublished one is still derived.
+        self.make('base')
+        self.assertEqual(self.service.push('base'), 'reg.example/cache/base:' + self.service.key('base'))
+        self.assertEqual(self.service.key('side'), self.new_service().key('side'))
+
+    def test_command_line_skips_it_cleanly_and_the_index_leaves_it_out(self):
+        self.make('side')
+        self.make('base')
+        err = io.StringIO()
+        with mock.patch.object(PC.sys, 'stderr', err):
+            self.assertEqual(PC.main(['push', 'side'], service=self.service, out=io.StringIO()), 3)
+            self.assertEqual(PC.main(['push', 'base', 'side'], service=self.service, out=io.StringIO()), 3)
+        self.assertEqual(err.getvalue().splitlines()[0],
+                         'provider-cache: push side skipped: not kept in the provider cache (%s)' % self.WHY)
+        self.registry.state = 'present'
+        index, out = Path(self.tmp.name) / 'index.tsv', io.StringIO()
+        self.assertEqual(PC.main(['status', '--remote', '--write-index', str(index)], service=self.service, out=out), 0)
+        rows = {line.split('\t')[0]: line.split('\t')[3] for line in out.getvalue().splitlines()}
+        self.assertEqual(rows, {'base': 'present', 'side': 'unpublished', 'top': 'present'})
+        listed = [line.split('\t')[0] for line in index.read_text().splitlines() if not line.startswith('#')]
+        self.assertEqual(listed, ['base', 'top'])
+        self.assertNotIn(('probe', self.service.ref('side')), self.registry.calls)
+
+    def test_the_wizard_reference_jar_is_the_one_unpublished_provider(self):
+        real = PC.validate_manifest(json.loads((HERE / 'providers.json').read_text()))
+        marked = {name: entry['unpublished'] for name, entry in real['providers'].items() if 'unpublished' in entry}
+        self.assertEqual(list(marked), ['ui-wizard-reference'])
+        self.assertIn('CDDL-only', marked['ui-wizard-reference'])
+        # Nothing is built from it, so no cached provider is bound to an output the cache does not hold.
+        self.assertEqual([name for name, entry in real['providers'].items()
+                          if 'ui-wizard-reference' in entry['prerequisites']], [])
+        index = (HERE / 'cache-index.tsv').read_text()
+        self.assertNotIn('wizard', index)
+        self.assertEqual({line.split('\t')[0] for line in index.splitlines() if not line.startswith('#')},
+                         EXPECTED - {'ui-wizard-reference'})
+
+    def test_real_selection_takes_what_feeds_a_build_and_leaves_what_only_fetches(self):
+        real = json.loads((HERE / 'providers.json').read_text())['toolchain']
+        feeding = ['gcc-14', 'g++-14', 'cpp-14', 'binutils', 'binutils-x86-64-linux-gnu', 'libc6-dev', 'libc6',
+                   'libc-dev-bin', 'linux-libc-dev', 'libstdc++-14-dev', 'libgcc-14-dev', 'libgcc-s1', 'libstdc++6',
+                   'libcrypt-dev', 'libegl-dev', 'libgles-dev', 'libgl-dev', 'libopengl-dev', 'libx11-dev', 'make',
+                   'cmake', 'swig', 'bison', 'flex', 'm4', 'autoconf', 'libtool', 'perl', 'perl-base', 'python3',
+                   'python3.13', 'libpython3.13-stdlib', 'tcl8.6', 'ant', 'patch', 'libasan8', 'libubsan1', 'libgmp10']
+        fetching = ['openssl', 'libssl3t64', 'openssl-provider-legacy', 'curl', 'libcurl4t64', 'wget', 'git', 'gnupg',
+                    'gpg', 'ca-certificates', 'tzdata', 'libkrb5-3', 'libgssapi-krb5-2', 'libnghttp2-14', 'rsync',
+                    'apt', 'libc-bin', 'python3-pip', 'libsqlite3-0', 'zlib1g', 'libexpat1']
+        sections = {'gcc-14': 'devel', 'g++-14': 'devel', 'binutils': 'devel', 'binutils-x86-64-linux-gnu': 'devel',
+                    'libc6-dev': 'libdevel', 'libc-dev-bin': 'libdevel', 'linux-libc-dev': 'devel',
+                    'libstdc++-14-dev': 'libdevel', 'libgcc-14-dev': 'libdevel', 'libcrypt-dev': 'libdevel',
+                    'libx11-dev': 'libdevel', 'make': 'devel', 'cmake': 'devel', 'bison': 'devel', 'flex': 'devel',
+                    'autoconf': 'devel', 'libtool': 'devel', 'cpp-14': 'interpreters', 'swig': 'interpreters',
+                    'm4': 'interpreters', 'perl': 'perl', 'perl-base': 'perl', 'python3': 'python',
+                    'python3.13': 'python', 'libpython3.13-stdlib': 'python', 'tcl8.6': 'interpreters', 'ant': 'java',
+                    'patch': 'vcs', 'openssl': 'utils', 'curl': 'web', 'wget': 'web', 'git': 'vcs', 'rsync': 'net',
+                    'python3-pip': 'python', 'apt': 'admin', 'tzdata': 'localization'}
+        rows = [('ii ', name, '1', 'amd64', sections.get(name, 'libs')) for name in feeding + fetching]
+        self.assertEqual(PC.build_packages(real, rows), sorted('%s 1 amd64' % name for name in feeding))
+
+
+class CheckRejection(ServiceCase):
+    """What the push after a rebuild does with an entry a post-restore check rejected."""
+
+    document, checked, notes = PostRestoreCheck.document, PostRestoreCheck.checked, PostRestoreCheck.notes
+
+    def setUp(self):
+        super().setUp()
+        self.runner = FakeRunner(self.root)
+        self.service = self.checked()
+        self.top = self.make('base')
+        self.good = snapshot(self.top)
+        self.ref = self.service.push('base')
+        self.digest = self.registry.digests[self.ref]
+        self.set_aside('base')
+        del self.messages[:]
+
+    def reject(self, name='base'):
+        self.runner.code = 1
+        with self.assertRaises(PC.Rejected):
+            self.service.restore(name)
+        self.runner.code = 0
+        del self.runner.calls[:], self.messages[:], self.registry.calls[:]
+        return self.notes()[self.ref]
+
+    def unchanged(self, note=True):
+        self.assertEqual((self.registry.published, self.registry.digests[self.ref]), (1, self.digest))
+        self.assertNotIn('publish', [call[0] for call in self.registry.calls])
+        self.assertEqual(self.notes() == {} or self.notes() is None, not note)
+        self.assertEqual(self.leftovers(), [])
+
+    def rebuild_identical(self):
+        aside = [item for item in sorted(os.listdir(self.tmp.name)) if item.startswith('aside-base-')][0]
+        shutil.copytree(Path(self.tmp.name) / aside, self.root / 'P/base', symlinks=True)
+        self.write_json('status/base.json', {'stage': 'base', 'status': 'ok', 'outputs': [], 'seconds': 1, 'notes': 'n'})
+
+    def test_rebuilt_output_that_is_the_entry_file_for_file_keeps_it_and_drops_the_note(self):
+        self.reject()
+        self.rebuild_identical()
+        self.assertEqual(snapshot(self.root / 'P/base'), self.good)
+        self.assertEqual(self.service.push('base'), self.ref)
+        self.unchanged(note=False)
+        self.assertEqual(self.runner.calls, [])          # the check is not even asked
+        self.assertEqual(self.messages, [
+            'provider-cache: base is already cached under this key; the output rebuilt here is file for file the '
+            'cached entry, so the check that rejected it judged this machine, not the entry: ' + self.ref])
+        # Without the note the next push is the plain "already cached".
+        del self.messages[:]
+        self.service.push('base')
+        self.assertEqual(self.messages, ['provider-cache: base is already cached under this key: ' + self.ref])
+
+    def changed(self, change):
+        self.reject()
+        self.rebuild_identical()
+        change(self.root / 'P/base')
+        self.service.push('base')
+        self.assertEqual(len(self.runner.calls), 1)   # so the check is asked, and it accepts
+        self.assertEqual(self.registry.published, 2)
+        self.assertNotEqual(self.registry.digests[self.ref], self.digest)
+
+    def test_a_single_changed_mode_is_another_output(self):
+        self.changed(lambda top: os.chmod(top / 'install/tool', 0o700))
+
+    def test_a_single_changed_byte_is_another_output(self):
+        def flip(top):
+            data = bytearray((top / 'install/lib/lib.a').read_bytes())
+            data[-1] ^= 1
+            (top / 'install/lib/lib.a').write_bytes(bytes(data))
+        self.changed(flip)
+
+    def test_a_single_added_file_is_another_output(self):
+        self.changed(lambda top: (top / 'empty/new').write_text(''))
+
+    def test_a_single_retargeted_link_is_another_output(self):
+        def retarget(top):
+            os.unlink(top / 'install/tool-1')
+            os.symlink('lib', top / 'install/tool-1')
+        self.changed(retarget)
+
+    def test_check_that_rejects_the_rebuilt_output_too_keeps_the_entry_and_drops_the_note(self):
+        self.reject()
+        self.make('base')
+        self.runner.code = 1
+        self.assertEqual(self.service.push('base'), self.ref)
+        self.assertEqual(len(self.runner.calls), 1)
+        self.assertEqual(self.runner.seen[-1]['tree'], sorted(os.listdir(self.root / 'P/base')))  # the rebuilt tree
+        self.unchanged(note=False)
+        self.assertEqual(self.messages, [
+            'provider-cache: base is already cached under this key; the check that rejected it rejects the output '
+            'rebuilt here as well, so it does not judge the entry: ' + self.ref])
+        self.assertEqual(self.service.tree.status_of('base'), 'ok')   # the rebuilt output is not touched
+        self.assertTrue((self.root / 'P/base/complete.json').is_file())
+
+    def test_check_that_cannot_run_on_the_rebuilt_output_keeps_the_entry_and_the_note(self):
+        note = self.reject()
+        self.make('base')
+        for code, why in ((2, 'exit 2'), (125, 'exit 125'), (-9, 'exit -9'), (None, 'exit None'),
+                          (CacheErrorFromRunner(), 'the check of base did not finish in 900 s')):
+            self.runner.code = code
+            del self.messages[:], self.runner.calls[:]
+            with self.subTest(code=code):
+                self.assertEqual(self.service.push('base'), self.ref)
+                self.assertEqual(len(self.runner.calls), 1)
+                self.unchanged(note=True)
+                self.assertEqual(self.notes()[self.ref], note)
+                self.assertEqual(self.messages, [
+                    'provider-cache: base is already cached under this key; a check rejected it here, but that '
+                    'check could not judge the rebuilt output (%s), so the entry is not replaced: %s'
+                    % (why, self.ref)])
+        # Once it can run and accepts, the same note still replaces the entry.
+        self.runner.code = 0
+        self.service.push('base')
+        self.assertEqual(self.registry.published, 2)
+        self.assertEqual(self.notes(), {})
+
+    def test_push_that_cannot_run_the_same_check_keeps_the_entry_and_the_note(self):
+        note = self.reject()
+        self.make('base')
+        other = self.document()
+        other['providers']['base']['verify']['argv'][-1] = 'test_other.py'
+        changed = PC.ProviderCache(other, PC.WorkTree(self.root, self.repo), self.registry, 'reg.example/cache', '',
+                                   self.messages.append, runner=self.runner)
+        undeclared = self.new_service(runner=self.runner)
+        for what, service in (('switched off', self.checked(verify=False)), ('no runner', self.checked(runner=None)),
+                              ('another check', changed), ('no check declared', undeclared)):
+            del self.messages[:]
+            with self.subTest(what=what):
+                self.assertEqual(service.key('base'), self.service.key('base'))
+                self.assertEqual(service.push('base'), self.ref)
+                self.assertEqual(self.runner.calls, [])
+                self.unchanged(note=True)
+                self.assertEqual(self.notes()[self.ref], note)
+                self.assertEqual(self.messages, [
+                    'provider-cache: base is already cached under this key; a check rejected it here, but that '
+                    'check could not judge the rebuilt output (it is not among the checks this push can run), so '
+                    'the entry is not replaced: ' + self.ref])
+
+    def test_note_without_check_or_manifest_never_replaces(self):
+        note = self.reject()
+        self.make('base')
+        for field in ('check', 'files_sha256'):
+            self.service.tree.note_refusal(self.ref, {key: value for key, value in note.items() if key != field})
+            del self.messages[:]
+            with self.subTest(field=field):
+                self.service.push('base')
+                self.unchanged(note=True)
+                self.assertEqual(self.runner.calls, [])
+                self.assertEqual(self.messages, ['provider-cache: base is already cached under this key; the note '
+                                                 'of its rejection names no check and no file manifest: ' + self.ref])
+
+    def test_entry_that_moved_since_is_not_judged_by_the_old_rejection(self):
+        self.reject()
+        self.make('base')
+        self.registry.digests[self.ref] = 'sha256:' + '5' * 64
+        with mock.patch.object(self.service, '_files_digest', side_effect=AssertionError('not compared')):
+            self.service.push('base')
+        self.assertEqual((self.registry.published, self.runner.calls, self.notes()), (1, [], {}))
+
+    def test_output_that_changes_after_the_comparison_is_not_pushed(self):
+        note = self.reject()
+        self.make('base')
+        with mock.patch.object(self.service, '_files_digest', return_value='0' * 64), \
+                self.assertRaisesRegex(PC.CacheError, '^base changed after it was compared with the cached entry$'):
+            self.service.push('base')
+        self.unchanged(note=True)
+        self.assertEqual(self.notes()[self.ref], note)
+        self.assertEqual(len(self.runner.calls), 1)
+
+    def test_compared_digest_is_the_one_a_bundle_records(self):
+        self.reject()
+        self.make('base')
+        compared = self.service._files_digest('base')
+        self.service.push('base')
+        content = self.bundle('base')[1]
+        self.assertEqual(compared, hashlib.sha256(content['files.json']).hexdigest())
+        self.assertEqual(compared, json.loads(content['meta.json'])['files_sha256'])
+
+    def test_integrity_refusal_replaces_without_asking_any_check(self):
+        labels, content = self.bundle('base')
+        data = bytearray(content['base.tar'])
+        data[700] ^= 1
+        content['base.tar'] = bytes(data)
+        with self.assertRaises(PC.CacheError) as caught:
+            self.service.restore('base')
+        self.assertNotIsInstance(caught.exception, PC.Rejected)
+        note = self.notes()[self.ref]
+        self.assertEqual(note['kind'], 'bundle')
+        self.assertNotIn('check', note)
+        self.assertNotIn('files_sha256', note)
+        self.assertEqual(self.runner.calls, [])   # the tree never got as far as the check
+        self.make('base')
+        self.runner.code = 1                       # whatever a check would say
+        with mock.patch.object(self.service, '_files_digest', side_effect=AssertionError('not compared')):
+            self.service.push('base')
+        self.assertEqual((self.registry.published, self.runner.calls, self.notes()), (2, [], {}))
+
+    def test_check_failure_that_is_no_verdict_notes_nothing(self):
+        for code in (2, 124, 137, CacheErrorFromRunner()):
+            self.runner.code = code
+            with self.subTest(code=code), self.assertRaises(PC.CacheError) as caught:
+                self.service.restore('base')
+            self.assertNotIsInstance(caught.exception, PC.Rejected)
+            self.assertIsNone(self.notes())
+        self.make('base')
+        self.runner.code = 0
+        del self.runner.calls[:]
+        self.service.push('base')
+        self.assertEqual((self.registry.published, self.registry.digests[self.ref], self.runner.calls),
+                         (1, self.digest, []))
+
+    def test_recheck_writes_below_logs_and_answers_in_three_words(self):
+        shutil.rmtree(self.root / 'logs', ignore_errors=True)
+        self.make('base')
+        identity = self.service._checks('base')[0][1]
+        for code, answer in ((0, 'passed'), (1, 'rejected'), (3, 'exit 3')):
+            self.runner.code = code
+            self.assertEqual(self.service._recheck('base', identity), answer)
+        self.assertTrue(self.runner.seen[0]['logs'])
+        self.assertEqual(self.runner.calls[0][3], str(self.root / 'logs/base-verify.log'))
+        self.assertEqual(self.service._recheck('base', '0' * 64), 'it is not among the checks this push can run')
+        self.assertEqual(self.service._recheck('side', identity), 'it is not among the checks this push can run')
+
+
+class LaneCheckRejection(ServiceCase):
+    """The same for a check the lane brings: push needs the lane's words again."""
+
+    document, checked, notes, cli = (LaneSuppliedCheck.document, LaneSuppliedCheck.checked, LaneSuppliedCheck.notes,
+                                     LaneSuppliedCheck.cli)
+
+    def setUp(self):
+        super().setUp()
+        self.events = []
+        self.runner = OrderedRunner(self.root, self.events)
+        self.lane = FakeLaneCheck(self.root, events=self.events)
+        self.service = self.checked()
+        self.make('side')
+        self.side = self.service.push('side')
+        self.set_aside('side')
+        del self.messages[:]
+
+    def reject(self):
+        self.lane.code = 1
+        with self.assertRaises(PC.Rejected):
+            self.service.restore('side')
+        self.lane.code = 0
+        del self.lane.calls[:], self.messages[:]
+        return self.notes()[self.side]
+
+    def test_push_with_the_lanes_words_replaces_what_the_lane_rejected(self):
+        note = self.reject()
+        digest = self.registry.digests[self.side]
+        self.assertEqual((note['kind'], note['check']), ('check', PC.check_identity('lane', self.lane.command)))
+        published = self.registry.published
+        self.make('side')
+        self.service.push('side')
+        self.assertEqual(self.lane.calls, [('side', str(self.root / 'logs/side-verify.log'))])
+        self.assertEqual(self.registry.published, published + 1)
+        self.assertNotEqual(self.registry.digests[self.side], digest)
+        self.assertEqual(self.notes(), {})
+
+    def test_push_without_the_lanes_words_or_with_others_keeps_the_entry(self):
+        note = self.reject()
+        digest, published = self.registry.digests[self.side], self.registry.published
+        self.make('side')
+        other = FakeLaneCheck(self.root, command=('lane-check', 'other'))
+        for what, check in (('none', None), ('other words', other)):
+            self.service.lane_check = check
+            del self.messages[:]
+            with self.subTest(what=what):
+                self.service.push('side')
+                self.assertEqual((self.registry.published, self.registry.digests[self.side]), (published, digest))
+                self.assertEqual(self.notes()[self.side], note)
+                self.assertEqual(other.calls, [])
+                self.assertIn('it is not among the checks this push can run', self.messages[0])
+
+    def test_command_line_hands_the_lanes_command_to_push(self):
+        program = 'exit "$1"'
+        code, text, service = self.cli('restore', 'side', '--verify-with', '/bin/sh', '-c', program, 'sh', '1')
+        self.assertEqual(code, 1)
+        note = self.notes()[self.side]
+        self.assertEqual(note['check'], PC.check_identity('lane', ['/bin/sh', '-c', program, 'sh', '1']))
+        digest, published = self.registry.digests[self.side], self.registry.published
+        self.make('side')
+        # The same words reject the rebuilt output as well: the entry stays, the note goes.
+        code, text, service = self.cli('push', 'side', '--verify-with', '/bin/sh', '-c', program, 'sh', '1')
+        self.assertEqual((code, text), (0, ''))
+        self.assertEqual(service.lane_check.command, ['/bin/sh', '-c', program, 'sh', '1'])
+        self.assertEqual((self.registry.published, self.registry.digests[self.side], self.notes()),
+                         (published, digest, {}))
+        self.assertIn("\n===== provider-cache restore side: the lane's own check (/bin/sh, 5 words)\n",
+                      (self.root / 'logs/side-verify.log').read_text())
 
 
 if __name__ == '__main__':

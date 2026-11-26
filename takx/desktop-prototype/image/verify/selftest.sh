@@ -19,8 +19,19 @@
 #                                 none), and on any UnsatisfiedLinkError
 #                                 other than the one the absent FFmpeg
 #                                 natives cause when a project opens
+#   selftest.sh auth              the bridge's own sign-in check, with real
+#                                 HTTP and WebSocket clients (auth_probe.py):
+#                                 every request variant of 'token_tool.py
+#                                 cases' against port 6080, from inside the
+#                                 containers and, when the containers are on
+#                                 a Docker network, from the host as well;
+#                                 a WebSocket that ends when its token
+#                                 expires; a bridge that cannot fetch keys.
+#                                 Only a correct token may reach the RFB
+#                                 handshake
 #   selftest.sh browser           Playwright Chromium on the host loads noVNC
-#                                 through exec_relay.py and saves a screenshot
+#                                 through exec_relay.py, which adds the token
+#                                 as Authservice would, and saves a screenshot
 #                                 (needs node with the playwright module)
 #   selftest.sh stats             memory and CPU of both containers now, and the
 #                                 peak the kernel recorded
@@ -39,10 +50,15 @@
 #   selftest.sh stop              remove the containers and the socket volume
 #
 # Containers: takx-img-desktop (uid 10001, --network none, read-only root,
-# all capabilities dropped, 1.5 CPU, 5 GiB) and takx-img-web (uid 10002 with
-# supplementary group 10001, same network namespace, 0.5 CPU). Writable:
-# tmpfs /tmp, /run/takx/session (exec), /run/takx/identity, and a tmpfs
-# volume for the RFB socket shared by both. X display :1.
+# all capabilities dropped, 1.5 CPU, 5 GiB), takx-img-web (uid 10002 with
+# supplementary group 10001, same network namespace, 0.5 CPU) and
+# takx-img-jwks (same image and namespace, uid 10002): a stand-in for the
+# realm's key endpoint on 127.0.0.1:8081 that serves the public half of a
+# key made for the run. The web container runs with TAKX_AUTH_MODE=oidc, as
+# in the chart; the probes sign their tokens with that key
+# (token_tool.py, OpenSSL on the host). Writable: tmpfs /tmp,
+# /run/takx/session (exec), /run/takx/identity, /run/takx/web, and a tmpfs
+# volume for the RFB socket shared by desktop and web. X display :1.
 #
 # Environment:
 #   TAKX_IMAGE          image, default: the first tag in status/image.json
@@ -54,7 +70,9 @@
 #                       host has to reach port 6080 of the desktop container
 #
 # The identity step bind-mounts a synthetic Secret directory read-only into a
-# short-lived container; nothing else is ever mounted from the host.
+# short-lived container; nothing else is ever mounted from the host. The test
+# keys stay on the host in pkg/selftest/auth (mode 0700) and are deleted by
+# 'stop'; the containers get the public JWKS document and signed tokens only.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -64,8 +82,14 @@ evidence="${root}/pkg/evidence/${run}"
 status_dir="${root}/pkg/status"
 desktop=takx-img-desktop
 web=takx-img-web
+jwks=takx-img-jwks
 volume=takx-img-vnc
 app=/opt/takx-desktop
+auth_dir="${root}/pkg/selftest/auth"
+auth_issuer=https://sso.selftest.invalid/realms/uds
+auth_audience=uds-takx-desktop
+auth_group='/UDS Core/Admin'
+jwks_url=http://127.0.0.1:8081/realms/uds/protocol/openid-connect/certs
 
 image="${TAKX_IMAGE:-}"
 if [[ -z "${image}" && -s "${status_dir}/image.json" ]]; then
@@ -77,8 +101,36 @@ mkdir -p "${evidence}" "${status_dir}"
 hardening=(--read-only --cap-drop ALL --security-opt no-new-privileges)
 
 do_stop() {
-  docker rm -f "${web}" "${desktop}" >/dev/null 2>&1 || true
+  docker rm -f "${web}" "${jwks}" "${desktop}" >/dev/null 2>&1 || true
   docker volume rm "${volume}" >/dev/null 2>&1 || true
+  rm -rf "${auth_dir}"
+}
+
+# Fresh request variants (token_tool.py cases) signed with the run's key;
+# written to a file only the owner reads. The keys are made on first use.
+auth_cases() { # [short-lifetime-seconds]
+  mkdir -p "${auth_dir}"
+  chmod 0700 "${auth_dir}"
+  (umask 077; python3 -I "${here}/token_tool.py" cases "${auth_dir}" --issuer "${auth_issuer}" \
+    --audience "${auth_audience}" --group "${auth_group}" --short "${1:-20}" >"${auth_dir}/cases.json")
+}
+
+good_token() {
+  python3 -I -c 'import json, sys
+print(next(case for case in json.load(open(sys.argv[1])) if case["name"] == "good-token")["headers"][0].split()[2])' \
+    "${auth_dir}/cases.json"
+}
+
+# The web container as the chart runs it: token check on, keys from a URL.
+run_web() { # name [docker run option...]
+  local name="$1"; shift
+  docker run -d --name "${name}" --network "container:${desktop}" \
+    "${hardening[@]}" --user 10002:10002 --group-add 10001 --cpus 0.5 --memory 256m \
+    --tmpfs /run/takx/web:rw,noexec,nosuid,nodev,size=1m,uid=10002,gid=10002,mode=0700 \
+    --mount "type=volume,src=${volume},dst=/run/takx/vnc,readonly" \
+    -e TAKX_AUTH_MODE=oidc -e "TAKX_AUTH_ISSUER=${auth_issuer}" -e "TAKX_AUTH_AUDIENCE=${auth_audience}" \
+    -e "TAKX_AUTH_GROUPS=[\"${auth_group}\"]" -e "TAKX_AUTH_JWKS_URL=${jwks_url}" "$@" \
+    "${image}" web >/dev/null
 }
 
 do_start() {
@@ -96,12 +148,27 @@ do_start() {
     --mount "type=volume,src=${volume},dst=/run/takx/vnc" \
     -e "EXTRA_JVM_OPTS=${TAKX_SELFTEST_JVM:--Xmx2g}" \
     "${image}" desktop >/dev/null
-  docker run -d --name "${web}" --network "container:${desktop}" \
-    "${hardening[@]}" --user 10002:10002 --group-add 10001 --cpus 0.5 --memory 256m \
-    --mount "type=volume,src=${volume},dst=/run/takx/vnc,readonly" \
-    "${image}" web >/dev/null
+  # The realm's key endpoint, stood in for: the public JWKS document of the
+  # run's key, handed over in the environment and served on loopback.
+  auth_cases
+  # shellcheck disable=SC2016 # expanded by Python in the container
+  docker run -d --name "${jwks}" --network "container:${desktop}" "${hardening[@]}" --user 10002:10002 --cpus 0.2 \
+    --memory 64m -e "TAKX_SELFTEST_JWKS=$(cat "${auth_dir}/jwks.json")" --entrypoint python3 "${image}" -I -c '
+import http.server, os
+DOCUMENT = os.environ["TAKX_SELFTEST_JWKS"].encode()
+class Keys(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        found = self.path == "/realms/uds/protocol/openid-connect/certs"
+        body = DOCUMENT if found else b"{}"
+        self.send_response(200 if found else 404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+http.server.ThreadingHTTPServer(("127.0.0.1", 8081), Keys).serve_forever()' >/dev/null
+  run_web "${web}"
   date -u +%FT%TZ >"${evidence}/started-at.txt"
-  echo "selftest: started ${desktop} and ${web} from ${image} on network ${network}"
+  echo "selftest: started ${desktop}, ${web} and ${jwks} from ${image} on network ${network}"
 }
 
 do_wait() {
@@ -163,6 +230,27 @@ def listeners():
                 found.append({"family": family, "port": int(port, 16), "loopback_only": loopback,
                               "every_address": set(address) == {"0"}})
     return sorted(found, key=lambda item: (item["port"], item["family"]))
+def udp_ports():
+    # Bound UDP sockets of the namespace: CommonCommo's default inputs would
+    # show here as 4242, 8087, 10011 and the multicast ports.
+    ports = set()
+    for family in ("udp", "udp6"):
+        try:
+            rows = open(f"/proc/net/{family}").read().splitlines()[1:]
+        except OSError:
+            continue
+        ports.update(int(row.split()[1].rsplit(":", 1)[1], 16) for row in rows)
+    return sorted(ports)
+def program_inputs():
+    # What the session's program properties say about CommonCommo's inputs.
+    import re
+    try:
+        text = open("/run/takx/session/ProjectData/ProjectData/LocalProgramProperties.xml", encoding="utf-8").read()
+    except OSError:
+        return None
+    block = text[text.find('<node name="DefaultInputs">'):text.find('<node name="DefaultOutputs">')]
+    return {"inputs": len(re.findall(r'<entry key="uri"', block)),
+            "enabled": len(re.findall(r'<entry key="enabled" value="true"/>', block))}
 print(json.dumps({
     "jvm_pid": pid, "jvm_age_seconds": round(age), "uid": status["Uid"].split()[0], "gid": status["Gid"].split()[0],
     "cap_eff": status["CapEff"].strip(), "no_new_privs": status["NoNewPrivs"].strip(),
@@ -176,6 +264,8 @@ print(json.dumps({
     "mapped_ffmpeg_libraries": [path for path in paths if re.search(r"/lib(jni)?(av|sw|postproc)[a-z]*\.so", path)],
     "working_directory": os.readlink(f"/proc/{pid}/cwd"),
     "tcp_listeners": listeners(),
+    "udp_ports": udp_ports(),
+    "program_properties_default_inputs": program_inputs(),
     "gdal_data": environ.get("GDAL_DATA"), "proj_lib": environ.get("PROJ_LIB"),
     "gdal_data_has_gcs_csv": os.path.isfile(os.path.join(environ.get("GDAL_DATA", "/nonexistent"), "gcs.csv")),
     "proj_lib_has_epsg": os.path.isfile(os.path.join(environ.get("PROJ_LIB", "/nonexistent"), "epsg")),
@@ -188,8 +278,16 @@ PY
   local rc_desktop=0 rc_web=0
   docker exec -i "${desktop}" python3 -I - --unix /run/takx/vnc/rfb.sock --png - \
     <"${here}/rfb_probe.py" >"${evidence}/frame-desktop.png" 2>"${evidence}/frame-desktop.json" || rc_desktop=$?
-  docker exec -i "${web}" python3 -I - --ws 127.0.0.1:6080 --png - --second-after 5 \
+  # Through the gate, with a token of the run's key, as a signed-in browser.
+  auth_cases
+  TAKX_PROBE_BEARER="$(good_token)" docker exec -i -e TAKX_PROBE_BEARER "${web}" \
+    python3 -I - --ws 127.0.0.1:6080 --png - --second-after 5 \
     <"${here}/rfb_probe.py" >"${evidence}/frame-web.png" 2>"${evidence}/frame-web.json" || rc_web=$?
+  # shellcheck disable=SC2016 # expanded by the shell in the container
+  docker exec "${web}" bash -c 'for comm in /proc/[0-9]*/comm; do
+      pid="${comm#/proc/}"; pid="${pid%/comm}"
+      printf "%s %s\n" "$(cat "${comm}")" "$(tr "\0" " " <"/proc/${pid}/cmdline")"
+    done; stat -c "%a %U %n" /run/takx/web /run/takx/web/websockify.sock' >"${evidence}/web-processes.txt" 2>&1 || true
   docker exec "${desktop}" bash -c 'export DISPLAY=:1 XAUTHORITY=/run/takx/session/home/.Xauthority
     for id in $(xdotool search --onlyvisible --name . 2>/dev/null); do
       printf "%s|%s|%s\n" "${id}" "$(xdotool getwindowname "${id}")" "$(xdotool getwindowgeometry "${id}" | tr "\n" " ")"
@@ -219,6 +317,7 @@ for item in inspect:
         "tmpfs": host.get("Tmpfs") or {}, "binds": host.get("Binds") or [],
         "mounts": [{"type": m["Type"], "destination": m["Destination"], "rw": m["RW"], "name": m.get("Name")} for m in item["Mounts"]],
         "bind_mounts": [m["Destination"] for m in item["Mounts"] if m["Type"] == "bind"],
+        "auth_mode": dict(pair.split("=", 1) for pair in item["Config"]["Env"] if "=" in pair).get("TAKX_AUTH_MODE"),
     }
 frames = {name: load(f"frame-{name}.json") for name in ("desktop", "web")}
 checks = {
@@ -238,6 +337,16 @@ checks = {
     "nothing_mapped_below_var_lib_takx_proto": not jvm["mapped_paths_below_var_lib_takx_proto"] and not jvm["var_lib_takx_proto_exists"],
     "nine_kernel_libraries_from_session_tmp": len(jvm["mapped_kernel_libraries"]) == 9 and all(
         path.startswith("/run/takx/session/tmp/takkernel/") for path in jvm["mapped_kernel_libraries"]),
+    # CommonCommo's default inputs are switched off: of the TCP listeners on
+    # every address only the gate (6080) and one ephemeral port are left
+    # (CommonCommo's HTTPS port for peer-to-peer mission packages).
+    "commo_default_inputs_off": (jvm["program_properties_default_inputs"] or {}).get("enabled") == 0
+        and not {4242, 8087} & {item["port"] for item in jvm["tcp_listeners"]}
+        and not {4242, 8087, 10011, 6969, 17012, 18740, 18999, 18200, 18000} & set(jvm["udp_ports"]),
+    "tcp_on_every_address_is_the_gate_and_one_ephemeral_port":
+        sorted(item["port"] for item in jvm["tcp_listeners"] if item["every_address"] and item["port"] < 32768) == [6080]
+        and len({item["port"] for item in jvm["tcp_listeners"] if item["every_address"]}) == 2,
+    "web_container_runs_with_the_token_check_on": containers["takx-img-web"]["auth_mode"] == "oidc",
     "frame_inside_desktop_ok": rc_desktop == "0" and frames["desktop"].get("status") == "ok",
     "frame_through_websocket_ok": rc_web == "0" and frames["web"].get("status") == "ok",
 }
@@ -506,7 +615,10 @@ do_browser() {
   fi
   # The containers keep --network none: the browser reaches port 6080 of the
   # web container through 'docker exec' (exec_relay.py), nothing is published.
-  python3 -I "${here}/exec_relay.py" "${web}" 6080 "${port}" >"${evidence}/exec-relay.log" 2>&1 &
+  # The relay adds the token to each request, as Authservice does.
+  auth_cases
+  TAKX_RELAY_BEARER="$(good_token)" python3 -I "${here}/exec_relay.py" "${web}" 6080 "${port}" \
+    >"${evidence}/exec-relay.log" 2>&1 &
   relay=$!
   sleep 1
   NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost timeout 150 \
@@ -515,6 +627,101 @@ do_browser() {
   kill "${relay}" 2>/dev/null || true
   wait "${relay}" 2>/dev/null || true
   cat "${evidence}/browser-probe.json"
+  return "${rc}"
+}
+
+# Run auth_probe.py against HOST:PORT from inside CONTAINER, or from the host
+# when CONTAINER is '-'. The request variants go through the environment.
+auth_probe() { # container target label output [probe option...]
+  local container="$1" target="$2" label="$3" out="$4" rc=0; shift 4
+  if [[ "${container}" == - ]]; then
+    TAKX_AUTH_CASES="$(cat "${auth_dir}/cases.json")" NO_PROXY='*' no_proxy='*' \
+      python3 -I "${here}/auth_probe.py" "${target}" --label "${label}" "$@" >"${out}" || rc=$?
+  else
+    TAKX_AUTH_CASES="$(cat "${auth_dir}/cases.json")" docker exec -i -e TAKX_AUTH_CASES "${container}" \
+      python3 -I - "${target}" --label "${label}" "$@" <"${here}/auth_probe.py" >"${out}" || rc=$?
+  fi
+  python3 -I -c 'import json, sys
+report = json.load(open(sys.argv[1]))
+print(f"selftest auth: {report[\"label\"]}: {report[\"status\"]}; reached the desktop: "
+      f"{report[\"variants_that_reached_the_desktop\"]}")' "${out}" || rc=1
+  return "${rc}"
+}
+
+do_auth() {
+  local rc=0 address strict=takx-img-web-strict nokeys=takx-img-web-nokeys out="${evidence}/auth-summary.txt" hits
+  docker rm -f "${strict}" "${nokeys}" >/dev/null 2>&1 || true
+  auth_cases
+  : >"${out}"
+  # 1. Every variant against the running bridge, from a process next to it.
+  auth_probe "${web}" 127.0.0.1:6080 "inside the web container" "${evidence}/auth-inside.json" | tee -a "${out}" || rc=1
+  # 2. The same from the host's network namespace, when the containers have
+  #    an address there: what a process on a node sees of a pod.
+  address="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${desktop}")"
+  if [[ -n "${address}" ]]; then
+    auth_probe - "${address}:6080" "from the host's network namespace to ${address}:6080" \
+      "${evidence}/auth-from-host.json" | tee -a "${out}" || rc=1
+    {
+      echo "curl from the host, no token: $(NO_PROXY='*' curl -s -o /dev/null -m 10 -w '%{http_code} %{size_download} bytes' "http://${address}:6080/vnc.html")"
+      echo "curl from the host, no token, /healthz: $(NO_PROXY='*' curl -s -m 10 -w ' -> %{http_code}' "http://${address}:6080/healthz" | tr -d '\n')"
+      echo "curl from the host, good token: $(NO_PROXY='*' curl -s -o /dev/null -m 10 -w '%{http_code} %{size_download} bytes' \
+        -K <(printf 'header = "Authorization: Bearer %s"\n' "$(good_token)") "http://${address}:6080/vnc.html")"
+      for port in 4242 8087; do
+        echo "TCP ${port} from the host: $(if timeout 3 bash -c "exec 3<>/dev/tcp/${address}/${port}" 2>/dev/null; then echo open; else echo closed; fi)"
+      done
+    } | tee -a "${out}"
+    grep -q '^curl from the host, no token: 401 ' "${out}" || rc=1
+    grep -q '^curl from the host, good token: 200 ' "${out}" || rc=1
+    grep -q '^TCP 4242 from the host: closed$' "${out}" || rc=1
+    grep -q '^TCP 8087 from the host: closed$' "${out}" || rc=1
+  else
+    echo "selftest auth: the containers have no address the host can reach (--network none); host part not run" | tee -a "${out}"
+  fi
+  # 3. A second bridge on the same desktop that ends a WebSocket when its
+  #    token expires (TAKX_AUTH_WS_MAX_SECONDS=0), on port 6090.
+  run_web "${strict}" -e TAKX_WEB_LISTEN=0.0.0.0:6090 -e TAKX_AUTH_WS_MAX_SECONDS=0 -e TAKX_AUTH_LEEWAY_SECONDS=0
+  # 4. A third one whose key endpoint does not answer, on port 6091.
+  run_web "${nokeys}" -e TAKX_WEB_LISTEN=0.0.0.0:6091 -e TAKX_AUTH_JWKS_URL=http://127.0.0.1:9/certs
+  sleep 3
+  auth_cases 20
+  auth_probe "${strict}" 127.0.0.1:6090 "a WebSocket and the expiry of its token" "${evidence}/auth-expiry.json" --expiry |
+    tee -a "${out}" || rc=1
+  python3 -I - "${auth_dir}/cases.json" <<'PY'
+import json, sys
+cases = [case for case in json.load(open(sys.argv[1])) if case["name"] != "short-lived-token"]
+for case in cases:
+    # Without keys nobody is let in: a well-formed Bearer token gets 503,
+    # everything that is refused before a key is needed keeps its answer.
+    if case["name"] in ("good-token", "wrong-signature", "payload-swapped", "wrong-issuer", "wrong-audience", "expired",
+                        "not-yet-valid", "missing-group", "no-groups-claim", "unknown-kid"):
+        case["expect"] = 503
+json.dump(cases, open(sys.argv[1], "w"))
+PY
+  auth_probe "${nokeys}" 127.0.0.1:6091 "a bridge that cannot fetch the keys" "${evidence}/auth-no-keys.json" |
+    tee -a "${out}" || rc=1
+  docker logs "${strict}" >"${evidence}/web-strict.log" 2>&1 || true
+  docker logs "${nokeys}" >"${evidence}/web-nokeys.log" 2>&1 || true
+  docker logs "${web}" >"${evidence}/web.log" 2>&1 || true
+  docker rm -f "${strict}" "${nokeys}" >/dev/null 2>&1 || true
+  # No token, and no part of one, in any log of the bridge.
+  hits="$(python3 -I - "${auth_dir}/cases.json" "${evidence}"/web.log "${evidence}"/web-strict.log "${evidence}"/web-nokeys.log <<'PY'
+import json, re, sys
+tokens = set()
+for case in json.load(open(sys.argv[1])):
+    for header in case["headers"]:
+        tokens.update(part for part in re.split(r"[ .;=]", header) if len(part) > 40)
+text = "".join(open(path, errors="replace").read() for path in sys.argv[2:])
+print(sum(text.count(token[:40]) for token in tokens))
+PY
+)"
+  {
+    echo "token fragments in the bridge logs: ${hits}"
+    echo "denials logged by the bridge: $(grep -c ' denied: ' "${evidence}/web.log" || true)"
+    echo "websockets opened through the bridge: $(grep -c ' websocket open' "${evidence}/web.log" || true)"
+    echo "ended by the session limit on the strict bridge: $(grep -c 'session limit reached' "${evidence}/web-strict.log" || true)"
+  } | tee -a "${out}"
+  [[ "${hits}" == 0 ]] || rc=1
+  grep -q '^ended by the session limit on the strict bridge: [1-9]' "${out}" || rc=1
   return "${rc}"
 }
 
@@ -532,10 +739,11 @@ case "${1:-}" in
   supervision) do_supervision;;
   audit) do_audit;;
   identity) do_identity;;
+  auth) do_auth;;
   browser) do_browser;;
   linker) do_linker;;
   logs) do_logs;;
   stop) do_stop;;
-  -h|--help|"") sed -n '5,57p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
+  -h|--help|"") sed -n '5,75p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
   *) echo "selftest.sh: unknown step '$1'" >&2; exit 2;;
 esac

@@ -3,7 +3,8 @@
 #
 # Self-contained image of the TAKX 5.7 desktop prototype: the assembled tree
 # (../assemble), the JDK it booted on, an X server that speaks RFB on a Unix
-# socket (Xtigervnc), openbox, and the websockify + noVNC browser bridge.
+# socket (Xtigervnc), openbox, and the browser bridge: websockify + noVNC
+# behind a gate that verifies the signed-in user's token (web_gate.py).
 # One image, three entrypoint modes: desktop | web | identity (entrypoint.sh).
 #
 # What is inside is TAKX 5.7 (0b59a9bb) built from public sources on Kernel
@@ -121,11 +122,18 @@ FROM os AS base
 COPY --from=tree --chown=0:0 . /opt/takx
 COPY --chmod=0555 assemble/launch.sh /opt/takx-desktop/launch.sh
 COPY --chmod=0555 image/entrypoint.sh image/healthcheck.sh image/stage_identity.py \
-     image/verify_tree.py image/check_native_closure.py image/elf_audit.sh image/licence_gate.py /opt/takx-desktop/
+     image/verify_tree.py image/check_native_closure.py image/elf_audit.sh image/licence_gate.py \
+     image/web_gate.py image/web_auth.py /opt/takx-desktop/
 COPY --chmod=0444 image/licence-policy.json /opt/takx-desktop/licence-policy.json
 COPY --chmod=0444 image/web/index.html /opt/takx-desktop/web-root/index.html
 COPY --from=notices --chown=0:0 . /usr/share/takx-desktop/
-RUN test ! -e /var/lib/takx-proto \
+# /run/takx/web is the mount point of the web mode's own volume: websockify
+# listens on a Unix socket there, behind the gate, and only the web user
+# (10002) may enter the directory.
+RUN mkdir /run/takx/web \
+ && chown 10002:10002 /run/takx/web \
+ && chmod 0700 /run/takx/web \
+ && test ! -e /var/lib/takx-proto \
  && test -s /usr/share/takx-desktop/NOTICE.md \
  && test -s /usr/share/takx-desktop/SOURCES.json \
  && test -s /usr/share/takx-desktop/licence-gate.json \

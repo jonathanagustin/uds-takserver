@@ -8,8 +8,11 @@
 #   desktop    Xtigervnc on a Unix socket, openbox, then the TAKX JVM with the
 #              official runTakx command line (launch.sh). When any of the
 #              three ends, the others are stopped and the container exits.
-#   web        websockify: serves noVNC on TCP 6080 and bridges WebSocket
-#              clients to the RFB Unix socket. No VNC TCP port exists.
+#   web        web_gate.py on TCP 6080 in front of websockify. The gate
+#              verifies the token Authservice forwards (web_auth.py) and only
+#              then passes a request on; websockify serves noVNC and bridges
+#              WebSocket clients to the RFB Unix socket, and listens on a Unix
+#              socket only the web user can reach. No VNC TCP port exists.
 #   identity   stage_identity.py: validate a mounted TakClient data package
 #              and stage it for a manual import. Exits 0 when none is mounted.
 #
@@ -19,6 +22,7 @@
 #                         (desktop; needs exec: the Kernel loader extracts its
 #                         native libraries below tmp/ and maps them from there)
 #   /run/takx/vnc         rfb.sock (desktop writes, web connects; shared)
+#   /run/takx/web         websockify.sock (web only, mode 0700)
 #   /run/takx/identity    staged identity files (identity writes, desktop reads)
 # Read-only input of the identity mode: /run/takx/secret (package.zip, password).
 # Optional read-only input of the desktop mode: /opt/takx-addons/video, a
@@ -33,7 +37,19 @@
 #   EXTRA_JVM_OPTS       extra JVM options, as the official runTakx task reads
 #                        them. Heap dumps are always switched off afterwards:
 #                        a dump would hold key material in a file.
+#   TAKX_LOCAL_INPUTS    'off' (default): every network input TAKX would
+#                        listen on by default is switched off in the program
+#                        properties of a new session (below). 'default': the
+#                        client's own defaults (TCP and UDP 4242 and 8087, UDP
+#                        10011, six multicast groups)
 #   TAKX_WEB_LISTEN      web mode listen address, default 0.0.0.0:6080
+#   TAKX_WEB_HEARTBEAT   seconds between WebSocket pings from websockify to the
+#                        browser, default 25; keeps a quiet session from
+#                        looking idle to anything on the path
+#   TAKX_AUTH_*          web mode: what the gate checks; see web_gate.py and
+#                        web_auth.py. Without a complete set the web mode does
+#                        not start. TAKX_AUTH_MODE=none switches the check off
+#                        (a developer's own machine, port on loopback only)
 #   TAKX_ADDON_VIDEO     directory with FFmpeg natives for JavaCPP
 #                        (libavutil.so.56, libjniavutil.so, ...), default
 #                        /opt/takx-addons/video. The image ships none: the
@@ -100,6 +116,51 @@ build_run_tree() {
   done
 }
 
+# TAKX keeps its program settings in ProjectData/LocalProgramProperties.xml,
+# "the file expected to be edited by users to make program configuration
+# changes" (IProgramEnvironment.getLocalProgramPropertiesFile), and copies it
+# from conf/DefaultProgramProperties.xml when it does not exist. The node
+# CommonCommo/DefaultInputs there lists what CommonCommo listens on, each
+# with an 'enabled' entry; the same switches are in Preferences > Network.
+# CommonCommo takes only the port of a TCP input (addTcpInboundInterface), so
+# an input cannot be bound to loopback: it is on every address or off.
+#
+# In a pod nothing can reach these inputs and nothing should, so a new
+# session starts with all of them off. An existing file is left alone: it is
+# the user's. Not covered: the HTTPS port CommonCommo opens for peer-to-peer
+# mission packages (setMissionPackageLocalHttpsParams, an ephemeral port, no
+# setting), and one listener on loopback.
+seed_program_properties() {
+  local mode="${TAKX_LOCAL_INPUTS:-off}" target="${session}/ProjectData/ProjectData/LocalProgramProperties.xml"
+  case "${mode}" in
+    default) log "local inputs: the client's defaults (TCP 4242 and 8087 on every address)"; return 0;;
+    off) ;;
+    *) die "TAKX_LOCAL_INPUTS must be off or default, got '${mode}'";;
+  esac
+  if [[ -e "${target}" ]]; then
+    log "local inputs: ${target} exists and is left as it is"
+    return 0
+  fi
+  mkdir -p "$(dirname "${target}")"
+  python3 -I - "${tree}/conf/DefaultProgramProperties.xml" "${target}" <<'PY' || die "could not switch the default inputs off"
+import os, re, sys
+source, target = sys.argv[1:]
+text = open(source, encoding="utf-8").read()
+begin, end = text.find('<node name="DefaultInputs">'), text.find('<node name="DefaultOutputs">')
+if begin < 0 or end < begin:
+    sys.exit("no CommonCommo DefaultInputs node before DefaultOutputs in " + source)
+block = text[begin:end]
+inputs = len(re.findall(r'<entry key="uri" value="(?:tcp|udp)://', block))
+block, changed = re.subn(r'(<entry key="enabled" value=")true("/>)', r"\1false\2", block)
+if inputs == 0 or changed != inputs:
+    sys.exit(f"{inputs} inputs but {changed} 'enabled' entries in {source}")
+with open(target + ".tmp", "w", encoding="utf-8") as stream:
+    stream.write(text[:begin] + block + text[end:])
+os.replace(target + ".tmp", target)
+print(f"local inputs: {changed} default inputs switched off in {target}", file=sys.stderr)
+PY
+}
+
 desktop() {
   local number="${TAKX_DISPLAY_NUMBER:-1}" geometry="${TAKX_GEOMETRY:-1920x1080}" depth="${TAKX_DEPTH:-24}"
   local dir xpid wmpid jpid ended="" rc=0 stop=0 args=() cookie addon="${TAKX_ADDON_VIDEO:-/opt/takx-addons/video}"
@@ -155,11 +216,13 @@ desktop() {
   wmpid=$!
 
   build_run_tree
+  # -create unless a project exists already (a volume that was used before).
   if [[ -n "${TAKX_ARGS:-}" ]]; then
     read -r -a args <<<"${TAKX_ARGS}"
-  elif [[ -z "$(find "${session}/ProjectData" -mindepth 1 -print -quit)" ]]; then
+  elif [[ -z "$(find "${session}/ProjectData" -mindepth 3 -maxdepth 3 -path '*/Projects/*' -type d -print -quit 2>/dev/null)" ]]; then
     args=(-create)
   fi
+  seed_program_properties
   export EXTRA_JVM_OPTS="${EXTRA_JVM_OPTS:-} -XX:-HeapDumpOnOutOfMemoryError -XX:ErrorFile=${session}/hs_err_%p.log"
   log "starting the JVM: launch.sh ${session}/bin ${session} ${args[*]}"
   "${app}/launch.sh" "${session}/bin" "${session}" "${args[@]}" &
@@ -188,11 +251,46 @@ desktop() {
 }
 
 web() {
-  local listen="${TAKX_WEB_LISTEN:-0.0.0.0:6080}"
+  local listen="${TAKX_WEB_LISTEN:-0.0.0.0:6080}" heartbeat="${TAKX_WEB_HEARTBEAT:-25}" dir="${run_dir}/web"
+  local socket wpid gpid ended="" rc=0 stop=0
   [[ "${listen}" =~ ^[0-9a-fA-F.:]+:[0-9]{2,5}$ ]] || die "TAKX_WEB_LISTEN must be ADDRESS:PORT, got '${listen}'"
+  [[ "${heartbeat}" =~ ^[0-9]{1,4}$ ]] || die "TAKX_WEB_HEARTBEAT must be a number of seconds, got '${heartbeat}'"
   [[ -d "${vnc}" ]] || die "${vnc} is not mounted; the web bridge needs the socket directory of the desktop"
-  log "starting websockify on ${listen} for ${vnc}/rfb.sock"
-  exec websockify --web "${app}/web-root" --file-only --unix-target "${vnc}/rfb.sock" "${listen}"
+  [[ -d "${dir}" && -w "${dir}" ]] || die "${dir} is not a writable directory; mount a tmpfs there for the bridge's own socket"
+  socket="${dir}/websockify.sock"
+  umask 077
+  rm -f "${socket}"
+  # websockify is reachable through this socket only: mode 0600 in a
+  # directory of the web user. The gate in front of it owns TCP 6080.
+  log "starting websockify on ${socket} for ${vnc}/rfb.sock"
+  websockify --unix-listen="${socket}" --unix-listen-mode=0600 --web "${app}/web-root" --file-only \
+    --heartbeat="${heartbeat}" --unix-target "${vnc}/rfb.sock" &
+  wpid=$!
+  for _ in $(seq 100); do
+    if [[ -S "${socket}" ]]; then break; fi
+    alive "${wpid}" || die "websockify ended during start"
+    sleep 0.1
+  done
+  [[ -S "${socket}" ]] || { stop_children "${wpid}"; die "websockify did not create ${socket}"; }
+  log "starting the gate on ${listen} (authentication: ${TAKX_AUTH_MODE:-oidc})"
+  TAKX_WEB_LISTEN="${listen}" TAKX_WEB_UPSTREAM="${socket}" python3 -I "${app}/web_gate.py" &
+  gpid=$!
+
+  trap 'stop=1' TERM INT
+  wait -n -p ended "${wpid}" "${gpid}" || rc=$?
+  trap - TERM INT
+  if ((stop)); then
+    log "stop requested; ending the bridge"
+    stop_children "${gpid}" "${wpid}"
+    exit 0
+  fi
+  case "${ended}" in
+    "${gpid}") log "the gate ended with status ${rc}"; ((rc != 0)) || rc=73;;
+    "${wpid}") log "websockify ended with status ${rc}"; ((rc != 0)) || rc=74;;
+    *) log "a child ended with status ${rc}"; rc=72;;
+  esac
+  stop_children "${gpid}" "${wpid}"
+  exit "${rc}"
 }
 
 identity() {

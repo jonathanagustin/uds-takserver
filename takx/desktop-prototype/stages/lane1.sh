@@ -108,7 +108,10 @@ cache_restored() { # name marker: 0 when the cache installed a verified P/<name>
 
 cache_push() { # name: best effort
   [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 0
-  python3 -I "${cache}" push "$1" >>"${ROOT}/logs/provider-cache.log" 2>&1 \
+  # The same words as for restore: push runs them only when a cached entry
+  # that this check rejected here is about to be replaced by the rebuilt output.
+  python3 -I "${cache}" push "$1" --verify-with "${check_command[@]}" "$1" "${P}" \
+    >>"${ROOT}/logs/provider-cache.log" 2>&1 \
     || echo "lane1: $1 was not pushed to the provider cache; see ${ROOT}/logs/provider-cache.log" >&2
   return 0
 }

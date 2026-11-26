@@ -11,7 +11,15 @@ connection is piped through 'docker exec -i CONTAINER python3 ...' to
 nothing is published and nothing is mounted. Used by browser_probe.js to
 load noVNC from the self-test's web container with a real browser. Stops on
 SIGTERM or SIGINT.
+
+The bridge wants the signed-in user's token on every request, and a browser
+cannot add one to a WebSocket. In a cluster Authservice at the gateway adds
+it. Here the relay stands in for Authservice: when the environment variable
+TAKX_RELAY_BEARER holds a token, the relay inserts
+`Authorization: Bearer <token>` after the request line of every connection
+(the bridge serves one request per connection).
 """
+import os
 import socket
 import subprocess
 import sys
@@ -56,11 +64,20 @@ def serve(connection, container, port):
             connection.close()
 
     threading.Thread(target=down, daemon=True).start()
+    token = os.environ.get("TAKX_RELAY_BEARER", "")
+    pending = b"" if token else None
     try:
         while True:
             data = connection.recv(65536)
             if not data:
                 break
+            if pending is not None:
+                # Hold the bytes back until the request line is complete.
+                pending += data
+                line, found, rest = pending.partition(b"\r\n")
+                if not found:
+                    continue
+                data, pending = line + b"\r\nAuthorization: Bearer " + token.encode("ascii") + b"\r\n" + rest, None
             child.stdin.write(data)
     except OSError:
         pass

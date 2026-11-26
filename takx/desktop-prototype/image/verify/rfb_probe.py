@@ -23,6 +23,10 @@ Exit status 0 needs: every protocol step, the --min-size, and a luma range
 above --min-luma-range. Whether the frame shows the TAKX globe is for a
 person to judge from the PNG.
 
+The bridge wants the signed-in user's token on every request. When the
+environment variable TAKX_PROBE_BEARER holds one, --ws sends it as
+`Authorization: Bearer ...`, as Authservice does in a cluster.
+
 Standard library only, so it can be piped into 'python3 -I -' in the image:
   docker exec -i CONTAINER python3 -I - --ws 127.0.0.1:6080 --png - <rfb_probe.py >frame.png
 """
@@ -119,9 +123,15 @@ class WebSocket(Plain):
         return data
 
 
+def bearer():
+    """The Authorization header line for the bridge, or nothing."""
+    token = os.environ.get("TAKX_PROBE_BEARER", "")
+    return f"Authorization: Bearer {token}\r\n".encode() if token else b""
+
+
 def http_get(host, port, path):
     with socket.create_connection((host, port), timeout=10) as sock:
-        sock.sendall(f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n".encode())
+        sock.sendall(f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n".encode() + bearer() + b"\r\n")
         data = b""
         while True:
             block = sock.recv(65536)
@@ -137,7 +147,7 @@ def open_websocket(host, port, timeout):
     key = base64.b64encode(os.urandom(16))
     sock.sendall(b"GET /websockify HTTP/1.1\r\nHost: " + f"{host}:{port}".encode() +
                  b"\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key +
-                 b"\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n\r\n")
+                 b"\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n" + bearer() + b"\r\n")
     data = b""
     while b"\r\n\r\n" not in data:
         block = sock.recv(4096)
