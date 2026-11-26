@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1](https://github.com/jonathanagustin/uds-takserver/compare/v1.4.0...v1.4.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* **cloudtak:** replace the merged trust file when the init container reruns ([#938](https://github.com/jonathanagustin/uds-takserver/issues/938)) ([ffd86e1](https://github.com/jonathanagustin/uds-takserver/commit/ffd86e115ab0084a4258fa6c389203008e79a9e1))
+
 ## [1.4.0](https://github.com/jonathanagustin/uds-takserver/compare/v1.3.0...v1.4.0) (2026-11-24)
 
 
