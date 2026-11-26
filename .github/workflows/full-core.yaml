@@ -96,6 +96,7 @@ jobs:
       DEV_PACKAGE_WAIT_SECONDS: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '900' || '0' }}
       DEV_PACKAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       GH_TOKEN: ${{ github.token }}
+      CANDIDATE_API_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -130,7 +131,7 @@ jobs:
           version: v5.8.0
 
       - name: Install UDS CLI
-        uses: defenseunicorns/setup-uds@d6add59d4c2ca789ed7c92741e91bd340b4e950b # v1.0.2
+        uses: ./.github/actions/install-uds-cli
         with:
           # renovate: datasource=github-tags depName=defenseunicorns/uds-cli versioning=semver
           version: v0.42.0

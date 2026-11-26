@@ -8,10 +8,11 @@ import io
 import importlib.util
 import json
 from pathlib import Path
+import ssl
 import tempfile
 import unittest
 from unittest.mock import patch
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request
 import zipfile
 
@@ -47,6 +48,27 @@ class FakeGitHub:
 
 
 class ArtifactIdentityTests(unittest.TestCase):
+    def test_metadata_retries_one_tls_eof_without_changing_request(self):
+        api = CANDIDATE.GitHub('upstream/repo', 'fixture-token')
+        path = '/repos/upstream/repo/actions/runs?head_sha=fixture'
+        eof = URLError(ssl.SSLEOFError(8, 'unexpected EOF'))
+        with patch.object(api, 'request', side_effect=[eof, io.BytesIO(b'{"id":42}')]) as request, \
+             patch.object(CANDIDATE.time, 'sleep') as sleep:
+            self.assertEqual(api.get(path), {'id': 42})
+            self.assertEqual(request.call_count, 2)
+            self.assertEqual(request.call_args_list[0], request.call_args_list[1])
+            sleep.assert_called_once_with(1)
+        with patch.object(api, 'request', side_effect=eof) as request, patch.object(CANDIDATE.time, 'sleep'):
+            with self.assertRaisesRegex(ValueError, r'GET /repos/upstream/repo/actions/runs closed during TLS twice'):
+                api.get(path)
+            self.assertEqual(request.call_count, 2)
+        with patch.object(api, 'request', side_effect=URLError(ssl.SSLCertVerificationError(1, 'bad cert'))) as request, \
+             patch.object(CANDIDATE.time, 'sleep') as sleep:
+            with self.assertRaises(URLError):
+                api.get(path)
+            request.assert_called_once()
+            sleep.assert_not_called()
+
     def setUp(self):
         self.api = FakeGitHub()
         self.context = {'repository': self.api.repository, 'head_repository': 'contributor/repo', 'head_sha': 'a' * 40,

@@ -1,0 +1,53 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+name: Install pinned UDS CLI
+description: Download and verify the native Linux UDS CLI release
+inputs:
+  version:
+    description: UDS CLI release tag
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        UDS_VERSION: ${{ inputs.version }}
+        RUNNER_ARCHITECTURE: ${{ runner.arch }}
+      run: |
+        set -euo pipefail
+        case "${RUNNER_ARCHITECTURE}" in
+          X64) arch=amd64 ;;
+          ARM64) arch=arm64 ;;
+          *) echo "Unsupported runner architecture: ${RUNNER_ARCHITECTURE}" >&2; exit 1 ;;
+        esac
+        if [[ ! "${UDS_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+          echo "Invalid UDS CLI release tag" >&2
+          exit 1
+        fi
+
+        asset="uds-cli_${UDS_VERSION}_Linux_${arch}"
+        release="https://github.com/defenseunicorns/uds-cli/releases/download/${UDS_VERSION}"
+        directory="$(mktemp -d "${RUNNER_TEMP}/uds-cli.XXXXXX")"
+        trap 'if [[ $? -ne 0 ]]; then rm -rf "${directory}"; fi' EXIT
+        download() {
+          curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' \
+            --connect-timeout 10 --max-time 45 \
+            --retry 4 --retry-delay 3 --retry-max-time 90 --retry-connrefused \
+            --output "$2" "$1"
+        }
+        download "${release}/checksums.txt" "${directory}/checksums.txt"
+        expected="$(awk -v asset="${asset}" '$2 == asset {print $1}' "${directory}/checksums.txt")"
+        if [[ ! "${expected}" =~ ^[[:xdigit:]]{64}$ ]]; then
+          echo "Expected one SHA-256 checksum for ${asset}" >&2
+          exit 1
+        fi
+        download "${release}/${asset}" "${directory}/uds"
+        actual="$(sha256sum "${directory}/uds")"
+        if [[ "${actual%% *}" != "${expected}" ]]; then
+          echo "SHA-256 verification failed for ${asset}" >&2
+          exit 1
+        fi
+        chmod 0755 "${directory}/uds"
+        printf '%s\n' "${directory}" >> "${GITHUB_PATH}"

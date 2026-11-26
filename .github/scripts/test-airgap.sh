@@ -14,8 +14,14 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 export AIRGAP_TEST=true
 
+# Fork package creation needs GitHub API access for producer verification.
+if [[ -n "${CANDIDATE_IMAGE_STATE:-}" ]]; then
+  uds run create-dev-package --set FLAVOR=upstream --no-progress
+fi
 uds run deploy-slim-core --no-progress
-uds run create-dev-package --set FLAVOR=upstream --no-progress
+if [[ -z "${CANDIDATE_IMAGE_STATE:-}" ]]; then
+  uds run create-dev-package --set FLAVOR=upstream --no-progress
+fi
 uds run fit-runner --no-progress
 # Fetch the bundle's Core package archive while the runner is online.
 uds run create:test-bundle --no-progress

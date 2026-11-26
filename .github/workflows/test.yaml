@@ -555,6 +555,7 @@ jobs:
       # Fork pull requests cannot publish one, so they create at once.
       DEV_PACKAGE_WAIT_SECONDS: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && '600' || '0' }}
       DEV_PACKAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      CANDIDATE_API_TOKEN: ${{ github.token }}
       GH_TOKEN: ${{ github.token }}
       TEST_FLAVOR: upstream
     steps: &validate-steps
@@ -629,7 +630,7 @@ jobs:
 
       - name: Install UDS CLI
         if: (env.TEST_TYPE == 'install' || steps.baseline.outputs.available == 'true')
-        uses: defenseunicorns/setup-uds@d6add59d4c2ca789ed7c92741e91bd340b4e950b # v1.0.2
+        uses: ./.github/actions/install-uds-cli
         with:
           # renovate: datasource=github-tags depName=defenseunicorns/uds-cli versioning=semver
           version: v0.42.0
@@ -932,6 +933,7 @@ jobs:
       # Fork pull requests cannot publish one, so they create at once.
       DEV_PACKAGE_WAIT_SECONDS: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && '600' || '0' }}
       DEV_PACKAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      CANDIDATE_API_TOKEN: ${{ github.token }}
       GH_TOKEN: ${{ github.token }}
       TEST_FLAVOR: upstream
     steps: *validate-steps
@@ -962,6 +964,7 @@ jobs:
       UPGRADE_BASELINE_TAG: v0.6.0
       DEV_PACKAGE_WAIT_SECONDS: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && '600' || '0' }}
       DEV_PACKAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      CANDIDATE_API_TOKEN: ${{ github.token }}
       GH_TOKEN: ${{ github.token }}
       TEST_FLAVOR: upstream
     steps: *validate-steps

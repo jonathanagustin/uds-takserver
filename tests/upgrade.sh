@@ -127,6 +127,10 @@ uds zarf tools yq -i '
 uds create "${work}/bundle" --architecture="${arch}" --confirm --no-progress
 # Preserve v0.6's controller 2.0.3 preload for the PostgreSQL 15 upgrade. Recent
 # releases start at their matching Core instead of an unnecessary older Core.
+# Validate and package fork artifacts before the cluster changes host networking.
+if [[ -n "${CANDIDATE_IMAGE_STATE:-}" ]]; then
+  uds run create-dev-package --set FLAVOR=upstream --no-progress
+fi
 SLIM_CORE_VERSION="${bootstrap_core}" uds run deploy-slim-core --no-progress
 # The cluster now exists, and nothing below deploys the checkpoint again.
 # On CI, delete the checkpoint archive. Locally it stays as the cache for the
@@ -394,8 +398,10 @@ require_released_pg "released CloudTAK database" "${released_cloudtak_version}" 
 pvc_snapshot cloudtak "$(cloudtak_pod)" > "${work}/cloudtak-pvc.before"
 echo "PASS released CloudTAK database is PostgreSQL ${released_cloudtak_version} / PostGIS ${released_cloudtak_postgis}"
 
-# Only now create and deploy the PR package. Do not recreate identities or seed data.
-uds run create-dev-package --set FLAVOR=upstream --no-progress
+# Deploy the PR package after capturing the released state.
+if [[ -z "${CANDIDATE_IMAGE_STATE:-}" ]]; then
+  uds run create-dev-package --set FLAVOR=upstream --no-progress
+fi
 uds run create:test-bundle --set FLAVOR=upstream --no-progress
 mapfile -t next_bundles < <(find bundle -maxdepth 1 -name "uds-bundle-*-${arch}-*.tar.zst")
 [[ "${#next_bundles[@]}" -eq 1 ]]

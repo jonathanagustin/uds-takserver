@@ -13,11 +13,12 @@ import json
 import os
 from pathlib import Path
 import re
+import ssl
 import stat
 import subprocess
 import tempfile
 import time
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 import zipfile
@@ -127,12 +128,28 @@ class GitHub:
             detail = '; '.join([f'reason={reason}', *evidence])
             raise ValueError(f'GitHub candidate API GET {urlparse(path).path} returned HTTP {error.code}: {detail}') from error
 
+    def metadata_request(self, path, etag):
+        # Retry only a premature TLS EOF on a read-only metadata request.
+        # HTTP errors and certificate verification failures stay terminal.
+        try:
+            return self.request(path, etag=etag)
+        except (URLError, ssl.SSLEOFError) as error:
+            if not isinstance(getattr(error, 'reason', error), ssl.SSLEOFError):
+                raise
+            time.sleep(1)
+        try:
+            return self.request(path, etag=etag)
+        except (URLError, ssl.SSLEOFError) as error:
+            if not isinstance(getattr(error, 'reason', error), ssl.SSLEOFError):
+                raise
+            raise ValueError(f'GitHub candidate API GET {urlparse(path).path} closed during TLS twice') from error
+
     def get(self, path):
         if self.snapshot_cache is not None and path in self.snapshot_cache:
             return self.snapshot_cache[path]
         cached = self.metadata_cache.get(path)
         try:
-            with self.request(path, etag=cached['etag'] if cached else None) as response:
+            with self.metadata_request(path, etag=cached['etag'] if cached else None) as response:
                 raw = response.read(16 * 1024**2 + 1)
                 etag = (getattr(response, 'headers', None) or {}).get('ETag')
             require(len(raw) <= 16 * 1024**2, 'GitHub metadata response exceeds its size limit')

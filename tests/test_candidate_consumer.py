@@ -32,6 +32,25 @@ class CandidateConsumerTests(unittest.TestCase):
                                       'workflow': '.github/workflows/postgis-image.yaml', 'run_id': 42, 'run_attempt': 1}}
         self.api = MagicMock()
 
+    def test_containerd_descriptor_requires_matching_exported_config(self):
+        ref = 'example.test/postgis:fixture'
+        digest = 'sha256:' + '1' * 64
+        descriptor = 'sha256:' + '2' * 64
+        details = {'Id': descriptor, 'Descriptor': {'digest': descriptor},
+                   'Architecture': 'arm64', 'Os': 'linux',
+                   'Config': {'Labels': {CANDIDATE.IMAGES.INPUTS_LABEL: self.expected['inputs']}}}
+        with patch.object(CANDIDATE, 'command', return_value=json.dumps([details])), \
+             patch.object(CANDIDATE, 'saved_config_digest', return_value=digest) as exported:
+            CANDIDATE.verify_loaded(ref, self.expected, digest)
+            exported.assert_called_once_with(ref, 'arm64')
+            exported.return_value = 'sha256:' + '3' * 64
+            with self.assertRaisesRegex(ValueError, 'identity mismatch'):
+                CANDIDATE.verify_loaded(ref, self.expected, digest)
+            exported.reset_mock()
+            with self.assertRaisesRegex(ValueError, 'identity mismatch'):
+                CANDIDATE.verify_loaded(ref, {**self.expected, 'architecture': 'amd64'}, digest)
+            exported.assert_not_called()
+
     def test_pending_or_failed_scheduled_producer_cannot_fall_back_to_a_published_key(self):
         for error in (ValueError('canonical build failed'), ValueError('canonical candidate needs approval')):
             with self.subTest(error=str(error)), patch.object(CANDIDATE, 'identity', return_value=self.expected), \

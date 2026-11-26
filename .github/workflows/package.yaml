@@ -230,7 +230,7 @@ jobs:
         run: ./.github/container-and-chart/postgis/build.sh --wait
 
       - name: Install UDS CLI
-        uses: defenseunicorns/setup-uds@d6add59d4c2ca789ed7c92741e91bd340b4e950b # v1.0.2
+        uses: ./.github/actions/install-uds-cli
         with:
           # renovate: datasource=github-tags depName=defenseunicorns/uds-cli versioning=semver
           version: v0.42.0

@@ -771,6 +771,7 @@ class HostAndPrivacyTests(unittest.TestCase):
             with patch.object(sys, 'argv', argv), contextlib.redirect_stdout(output), \
                     contextlib.redirect_stderr(output):
                 self.assertEqual(S.main(), 1)
+            self.assertIn('during input inventory and scanner identities', output.getvalue())
             self.assertNotIn(sentinel, output.getvalue())
             self.assertNotIn('Traceback', output.getvalue())
             self.assertFalse((root / 'comment.md').exists())

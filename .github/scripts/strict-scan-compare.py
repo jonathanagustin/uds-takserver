@@ -801,6 +801,7 @@ def main():
     parser.add_argument('--markdown', type=Path, required=True)
     args = parser.parse_args()
     os.umask(0o077)
+    phase = 'input inventory and scanner identities'
     try:
         output = args.output_directory
         output.mkdir(parents=True, exist_ok=False)
@@ -814,6 +815,7 @@ def main():
         source = source_identity(args.source_root)
         with tempfile.TemporaryDirectory(prefix='strict-scan-') as temporary:
             work = Path(temporary)
+            phase = 'released package and SBOM acquisition'
             archive, release = acquire_release(args.architecture, work, release_tag=args.release_tag)
             sboms = work / 'sboms'; sboms.mkdir()
             baseline = released_sboms(archive, sboms, args.architecture)
@@ -821,10 +823,13 @@ def main():
             require(all(reference(image)['repository'] in baseline for image in canonical),
                     'unsupported_new_image_repository')
             database = work / 'db'; database.mkdir()
+            phase = 'vulnerability database acquisition'
             db_identity = prepare_database(database)
             scans = work / 'scans'; scans.mkdir()
+            phase = 'image scanning and comparison'
             markdown, scans_receipt = compare_inventory(images, mappings, baseline, scans,
                                                         database, args.architecture)
+            phase = 'release and candidate revalidation'
             revalidate_release(release)
             require(inventory(canonical_file, args.flavor, args.source_root) == (canonical, original_sources)
                     and inventory(args.zarf_yaml_path, args.flavor, args.source_root) == (images, selected_sources),
@@ -833,6 +838,7 @@ def main():
                     args.candidate_state_sha256) == (mappings, candidate), 'candidate_source_changed')
             require(tool_identities() == tools, 'scanner_tool_changed')
             require(source_identity(args.source_root) == source, 'adapter_source_changed')
+            phase = 'comparison receipt writing'
             receipt = {'schema': 1, 'flavor': args.flavor, 'architecture': args.architecture,
                        'source_files': original_sources, 'selected_source_files': selected_sources,
                        'canonical_inventory': canonical, 'selected_inventory': images,
@@ -857,7 +863,7 @@ def main():
         print('Strict image comparison rejected: ' + str(error), file=sys.stderr)
     except (ValueError, TypeError, KeyError, IndexError, AttributeError, OSError, RuntimeError,
             StopIteration, subprocess.SubprocessError, tarfile.TarError, urllib.error.URLError, yaml.YAMLError):
-        print('Strict image comparison rejected: unavailable or invalid input', file=sys.stderr)
+        print(f'Strict image comparison rejected: unavailable or invalid input during {phase}', file=sys.stderr)
     return 1
 
 

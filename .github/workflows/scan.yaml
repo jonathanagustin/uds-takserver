@@ -16,10 +16,11 @@ on:
       - ".github/workflows/scan.yaml"
       - ".github/scripts/pin-image-tags.sh"
       - ".github/scripts/strict-scan-compare.py"
-      - ".github/scripts/candidate-scan-mappings.py"
+      - ".github/scripts/candidate-*.py"
       - ".github/test-infra/release-binding.py"
       - ".github/test-infra/release-readiness.py"
       - "tests/test_strict_scan_compare.py"
+      - ".github/actions/install-uds-cli/**"
       - ".gitmodules"
       - "upstream/**"
 
@@ -126,7 +127,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install UDS CLI
-        uses: defenseunicorns/setup-uds@d6add59d4c2ca789ed7c92741e91bd340b4e950b # v1.0.2
+        uses: ./.github/actions/install-uds-cli
         with:
           version: v${{ env.UDS_CLI_VERSION }}
 

@@ -246,7 +246,7 @@ class WorkflowPolicyTests(unittest.TestCase):
         units = (ROOT / '.github/workflows/unit-tests.yaml').read_text()
         self.assertIn('tests.test_strict_scan_compare tests.test_scan_integration', units)
         self.assertEqual(units.count('tests.test_copa_evidence'), 1)
-        for path in ('.github/scripts/strict-scan-compare.py', '.github/scripts/candidate-scan-mappings.py'):
+        for path in ('.github/scripts/strict-scan-compare.py', '.github/scripts/candidate-*.py'):
             self.assertIn(path, document[True]['pull_request']['paths'])
 
     def test_missing_receipt_retention_and_comparison_bypass_are_rejected(self):

@@ -135,10 +135,16 @@ tasks:
   - name: test-install
     description: Install the current branch on a new k3d-core-slim-dev cluster
     actions:
-      # The checkpoint deploys first so a package built by CI's parallel
-      # package job is published by the time it is needed.
+      # Verify fork candidates while the runner can still reach GitHub.
+      # Published packages still wait for the concurrent Package workflow.
+      - cmd: 'if [ -n "${CANDIDATE_IMAGE_STATE:-}" ]; then echo true; else echo false; fi'
+        setVariables:
+          - name: CREATE_CANDIDATE_BEFORE_CORE
+      - task: create-dev-package
+        if: ${{ eq .variables.CREATE_CANDIDATE_BEFORE_CORE "true" }}
       - task: deploy-slim-core
       - task: create-dev-package
+        if: ${{ ne .variables.CREATE_CANDIDATE_BEFORE_CORE "true" }}
       - task: fit-runner
       - task: create-deploy-test-bundle
 
@@ -186,10 +192,17 @@ tasks:
   - name: test-full-core
     description: Deploy the functional layers on the slim checkpoint and run the full-core checks
     actions:
+      # Verify fork candidates before bootstrapping the Core cluster.
+      - cmd: 'if [ -n "${CANDIDATE_IMAGE_STATE:-}" ]; then echo true; else echo false; fi'
+        setVariables:
+          - name: CREATE_CANDIDATE_BEFORE_CORE
+      - task: create-dev-package
+        if: ${{ eq .variables.CREATE_CANDIDATE_BEFORE_CORE "true" }}
       # The full bundle pins the same Core version as the checkpoint script.
       - description: Deploy the slim checkpoint at the bundle's Core version
         cmd: SLIM_CORE_VERSION=1.16.0 ./.github/scripts/deploy-slim-core.sh
       - task: create-dev-package
+        if: ${{ ne .variables.CREATE_CANDIDATE_BEFORE_CORE "true" }}
       - description: Validate Keycloak endpoint
         wait:
           network:
@@ -228,12 +241,18 @@ tasks:
     description: Upgrade a cluster from the latest published package to this branch
     actions:
       - task: upgrade:create-latest-tag-bundle
+      - cmd: 'if [ -n "${CANDIDATE_IMAGE_STATE:-}" ]; then echo true; else echo false; fi'
+        setVariables:
+          - name: CREATE_CANDIDATE_BEFORE_CORE
+      - task: create-dev-package
+        if: ${{ eq .variables.CREATE_CANDIDATE_BEFORE_CORE "true" }}
       - task: deploy-slim-core
       - task: fit-runner
       - task: deploy:test-bundle
         with:
           options: "--force-conflicts"
       - task: create-dev-package
+        if: ${{ ne .variables.CREATE_CANDIDATE_BEFORE_CORE "true" }}
       - task: create-deploy-test-bundle
 
   - name: publish-package

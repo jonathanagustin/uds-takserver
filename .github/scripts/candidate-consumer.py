@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import tarfile
 import tempfile
 import time
 from urllib.request import Request, urlopen
@@ -100,12 +101,53 @@ def published_images(expected):
     return images
 
 
+def saved_config_digest(ref, architecture):
+    """Hash the config selected by Docker's native image export."""
+    manifest = None
+    digests = {}
+    names = set()
+    with subprocess.Popen(['docker', 'image', 'save', '--platform', f'linux/{architecture}', ref],
+                          stdout=subprocess.PIPE) as process:
+        try:
+            with tarfile.open(fileobj=process.stdout, mode='r|') as archive:
+                for member in archive:
+                    require(member.name not in names and len(names) < IMAGES.MAX_MEMBERS,
+                            'invalid Docker image export inventory')
+                    names.add(member.name)
+                    require(member.offset_data + member.size <= IMAGES.MAX_ARCHIVE,
+                            'Docker image export exceeds its size limit')
+                    if member.name == 'manifest.json':
+                        require(member.isfile() and member.size <= IMAGES.MAX_METADATA,
+                                'invalid Docker image export manifest')
+                        manifest = IMAGES.read_json(archive.extractfile(member).read())
+                    elif member.isfile() and member.size <= IMAGES.MAX_METADATA:
+                        digests[member.name] = IMAGES.digest(archive.extractfile(member), IMAGES.MAX_METADATA)
+            # Drain buffered tar padding before waiting for the exporter.
+            require(len(process.stdout.read(64 * 1024 + 1)) <= 64 * 1024,
+                    'unexpected trailing Docker image export data')
+            require(process.wait() == 0, 'Docker image export failed')
+        finally:
+            if process.poll() is None:
+                process.kill()
+    require(isinstance(manifest, list) and len(manifest) == 1 and isinstance(manifest[0], dict),
+            'Docker image export must contain exactly one native image')
+    config = manifest[0].get('Config')
+    require(isinstance(config, str) and config in digests, 'Docker image export config is missing')
+    return digests[config]
+
+
 def verify_loaded(ref, expected, config_digest):
     details = IMAGES.read_json(command('docker', 'image', 'inspect', ref))[0]
-    require(details['Id'] == config_digest and details['Architecture'] == expected['architecture'] and details['Os'] == 'linux',
+    actual_digest = details['Id']
+    platform_matches = details['Architecture'] == expected['architecture'] and details['Os'] == 'linux'
+    descriptor = details.get('Descriptor') or {}
+    if platform_matches and actual_digest != config_digest and descriptor.get('digest') == actual_digest:
+        # The containerd image store uses the target descriptor as Id.
+        actual_digest = saved_config_digest(ref, expected['architecture'])
+    require(actual_digest == config_digest and platform_matches,
             f"loaded candidate image identity mismatch for {ref}: "
             f"expected {config_digest} linux/{expected['architecture']}, "
-            f"got {details['Id']!r} {details['Os']!r}/{details['Architecture']!r}")
+            f"got {actual_digest!r} {details['Os']!r}/{details['Architecture']!r}")
     require(((details.get('Config') or {}).get('Labels') or {}).get(IMAGES.INPUTS_LABEL) == expected['inputs'],
             'loaded candidate image inputs mismatch')
 
@@ -355,7 +397,9 @@ def validate_state(path, context=None):
         expected = identity(group, state['architecture'], context)
         require(entry['inputs'] == expected['inputs'] and entry['tag'] == expected['tag'], 'candidate state image inputs changed')
         if entry['origin']['kind'] != 'published-immutable':
-            api = ARTIFACTS.GitHub(context['repository'], os.environ.get('GH_TOKEN', ''))
+            # UDS tasks can shadow GH_TOKEN with an included task variable.
+            token = os.environ.get('CANDIDATE_API_TOKEN') or os.environ.get('GH_TOKEN', '')
+            api = ARTIFACTS.GitHub(context['repository'], token)
             selected = ARTIFACTS.select_run(api, context, group)
             producer = {**expected['producer'], 'run_id': selected['id'], 'run_attempt': selected['run_attempt']}
             require(entry['origin']['producer'] == producer, 'canonical producer selection changed after candidate preparation')
@@ -468,5 +512,5 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (ValueError, OSError, KeyError, TypeError, subprocess.CalledProcessError) as error:
+    except (ValueError, OSError, KeyError, TypeError, subprocess.CalledProcessError, tarfile.TarError) as error:
         raise SystemExit(f'candidate-consumer: {error}') from error
