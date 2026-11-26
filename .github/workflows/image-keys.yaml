@@ -1,0 +1,37 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+name: Resolve application image keys
+
+on:
+  workflow_call:
+    outputs:
+      cloudtak:
+        description: Immutable CloudTAK image tag for this checkout
+        value: ${{ jobs.resolve.outputs.cloudtak }}
+      postgis:
+        description: Immutable PostGIS image tag for this checkout
+        value: ${{ jobs.resolve.outputs.postgis }}
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      cloudtak: ${{ steps.keys.outputs.cloudtak }}
+      postgis: ${{ steps.keys.outputs.postgis }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve immutable image keys
+        id: keys
+        shell: bash
+        run: |
+          cloudtak="$(./.github/container-and-chart/cloudtak/build.sh --tag)"
+          postgis="$(./.github/container-and-chart/postgis/build.sh --tag)"
+          printf 'cloudtak=%s\npostgis=%s\n' "${cloudtak}" "${postgis}" >> "${GITHUB_OUTPUT}"

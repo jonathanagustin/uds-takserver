@@ -131,6 +131,18 @@ class WorkflowPermissionTests(unittest.TestCase):
                     effective = planner.get('permissions', document['permissions'])
                     self.assertFalse(write_scopes(effective))
 
+    def test_application_image_key_callers_and_resolver_are_read_only(self):
+        resolver_path = './.github/workflows/image-keys.yaml'
+        for name in ('test.yaml', 'cloudtak-image.yaml', 'postgis-image.yaml'):
+            with self.subTest(workflow=name):
+                planner = workflow(name)['jobs']['image-keys']
+                self.assertEqual(planner['uses'], resolver_path)
+                self.assertEqual(planner['permissions'], {'contents': 'read'})
+        resolver = workflow('image-keys.yaml')
+        self.assertEqual(resolver['permissions'], {'contents': 'read'})
+        self.assertFalse(write_scopes(resolver['jobs']['resolve'].get('permissions', {})))
+        self.assertEqual(set(resolver[True]['workflow_call']['outputs']), {'cloudtak', 'postgis'})
+
     def test_container_planner_cannot_publish_even_when_images_are_missing(self):
         document = workflow('container.yaml')
         planner = document['jobs']['plan']

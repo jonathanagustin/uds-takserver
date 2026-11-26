@@ -18,6 +18,7 @@ on:
       - upstream/cloudtak
       - .github/container-and-chart/cloudtak/**
       - .github/workflows/cloudtak-image.yaml
+      - .github/workflows/image-keys.yaml
       - .github/actions/attest-images/**
       - .github/scripts/candidate-*.py
   push:
@@ -28,6 +29,7 @@ on:
       - upstream/cloudtak
       - .github/container-and-chart/cloudtak/**
       - .github/workflows/cloudtak-image.yaml
+      - .github/workflows/image-keys.yaml
       - .github/actions/attest-images/**
       - .github/scripts/candidate-*.py
 
@@ -44,19 +46,9 @@ concurrency:
 
 jobs:
   image-keys:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      cloudtak: ${{ steps.keys.outputs.cloudtak }}
-      postgis: ${{ steps.keys.outputs.postgis }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Resolve immutable image keys
-        id: keys
-        run: |
-          echo "cloudtak=$(./.github/container-and-chart/cloudtak/build.sh --tag)" >> "$GITHUB_OUTPUT"
-          echo "postgis=$(./.github/container-and-chart/postgis/build.sh --tag)" >> "$GITHUB_OUTPUT"
+    uses: ./.github/workflows/image-keys.yaml
+    permissions:
+      contents: read
 
   # One native runner per architecture, each pushing <version>-<key>-<arch>
   # and, on main, <version>-<arch>. index joins them under <version>, the
