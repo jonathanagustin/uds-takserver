@@ -137,12 +137,28 @@ if [[ -z "${SLIM_K3D_EXTRA_ARGS+x}" && ( "${GITHUB_ACTIONS:-}" == "true" || "${C
   extra="--k3s-arg=--kube-apiserver-arg=etcd-compaction-interval=0@server:*"
 fi
 
+report_ci_https_listener() {
+  if [[ "${GITHUB_ACTIONS:-}" == "true" ]] && command -v ss >/dev/null 2>&1; then
+    echo "Host TCP 443 listeners ($1):"
+    timeout 5s sudo -n ss -H -ltnp 'sport = :443' 2>/dev/null ||
+      timeout 5s ss -H -ltnp 'sport = :443' || true
+  fi
+}
+
 echo "Deploying ${files[0]}"
+report_ci_https_listener "before Slim Core deployment"
+deploy_args=()
 if [[ -n "${extra}" ]]; then
   echo "K3D_EXTRA_ARGS=${extra}"
-  "${zarf[@]}" package deploy "${files[0]}" --confirm --features values=true --set-variables "K3D_EXTRA_ARGS=${extra}"
+  deploy_args+=(--set-variables "K3D_EXTRA_ARGS=${extra}")
+fi
+# Bash 3.2 with nounset requires the guarded expansion when the array is empty.
+if "${zarf[@]}" package deploy "${files[0]}" --confirm --features values=true ${deploy_args[@]+"${deploy_args[@]}"}; then
+  :
 else
-  "${zarf[@]}" package deploy "${files[0]}" --confirm --features values=true
+  deploy_status=$?
+  report_ci_https_listener "after Slim Core deployment failure"
+  exit "${deploy_status}"
 fi
 if [[ -n "${extra}" ]] && command -v docker >/dev/null 2>&1; then
   server="$(docker ps --filter name=k3d- --filter name=server-0 --format '{{.Names}}')"
