@@ -10,9 +10,50 @@
   "toolchain image: {root} is the work root, {repo} the repository, {timestamp} a",
   "run-time value that is never rendered, and the other names come from",
   "'variables'. Changing anything a provider's key is derived from gives it, and",
-  "every provider downstream of it, a new key."
+  "every provider downstream of it, a new key.",
+  "'toolchain' is what the toolchain image must be: the base image the Dockerfile",
+  "pins, the environment its ENV lines set, and every gated tool with the command",
+  "and the text the Dockerfile asserts. provider_cache.py probes the local image",
+  "against it; its digest (with the architecture) is the toolchain fingerprint in",
+  "every key. 'wrapper' is what run-in-toolchain.sh gives every command: these",
+  "variables, mounts and working directory. Both are part of the keys, and",
+  "test_provider_cache.py compares them with the Dockerfile and the wrapper.",
+  "'verify', where a provider has it, is the recipe's own cheap re-check of an",
+  "existing output: the command its lane runs after a build. restore runs it on",
+  "a restored tree before the status file says ok. It is not part of the key."
  ],
- "schema": 1,
+ "schema": 2,
+ "toolchain": {
+  "base": "mirror.gcr.io/library/debian:trixie@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6",
+  "environment": {
+   "DEBIAN_FRONTEND": "noninteractive", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "TZ": "UTC",
+   "JAVA_HOME": "/tools/temurin-17.0.21_9/jdk-17.0.21+9",
+   "PATH": "/tools/temurin-17.0.21_9/jdk-17.0.21+9/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  },
+  "gated": [
+   {"name": "gcc", "expect": " 14.2.0", "argv": ["/usr/bin/gcc", "--version"]},
+   {"name": "g++", "expect": " 14.2.0", "argv": ["/usr/bin/g++", "--version"]},
+   {"name": "make", "expect": "GNU Make 4.4.1", "argv": ["/usr/bin/make", "--version"]},
+   {"name": "ld", "expect": " 2.44", "argv": ["/usr/bin/ld", "--version"]},
+   {"name": "as", "expect": " 2.44", "argv": ["/usr/bin/as", "--version"]},
+   {"name": "cmake-apt", "expect": "cmake version 3.31.6", "argv": ["/usr/bin/cmake", "--version"]},
+   {"name": "cmake-venv", "expect": "cmake version 3.31.6",
+    "argv": ["/workspace/takx-native-tools/venv/bin/cmake", "--version"]},
+   {"name": "ninja-venv", "expect": "1.11.1.git.kitware.jobserver-1",
+    "argv": ["/workspace/takx-native-tools/venv/bin/ninja", "--version"]},
+   {"name": "swig", "expect": "SWIG Version 4.3.0", "argv": ["/usr/bin/swig", "-version"]},
+   {"name": "javac", "expect": "javac 17.0.21",
+    "argv": ["/tools/temurin-17.0.21_9/jdk-17.0.21+9/bin/javac", "--version"]},
+   {"name": "java", "expect": "Temurin-17.0.21+9",
+    "argv": ["/tools/temurin-17.0.21_9/jdk-17.0.21+9/bin/java", "-version"]},
+   {"name": "ant", "expect": "Apache Ant", "argv": ["/usr/bin/ant", "-version"]}
+  ]
+ },
+ "wrapper": {
+  "env": ["TAKX_PROTO_ROOT={root}", "TAKX_PROTO_REPO={repo}", "HOME=/tmp"],
+  "mounts": ["{repo}:{repo}:ro", "{root}:{root}"],
+  "workdir": "{root}"
+ },
  "variables": {
   "jdk": "/tools/temurin-17.0.21_9/jdk-17.0.21+9",
   "cmake": "/workspace/takx-native-tools/venv/bin/cmake",
@@ -104,7 +145,9 @@
    "marker": "complete.json",
    "invocation": {"env": [], "argv": [
     "python3", "-B", "{repo}/takx/native-proj/build.py", "--output", "{root}/P/proj",
-    "--cache", "{root}/cache-lane2/proj", "--cmake", "{cmake}", "--fetch-dependencies"]}
+    "--cache", "{root}/cache-lane2/proj", "--cmake", "{cmake}", "--fetch-dependencies"]},
+   "verify": {"env": ["TAKX_NATIVE_PROJ_PROOF={root}/P/proj"], "argv": [
+    "python3", "-B", "-m", "unittest", "discover", "-s", "{repo}/takx/native-proj", "-p", "test_build.py", "-v"]}
   },
   "geos": {
    "lane": "lane2.sh", "recipe": "takx/native-geos", "prerequisites": [],
@@ -113,7 +156,9 @@
    "marker": "complete.json",
    "invocation": {"env": [], "argv": [
     "python3", "-B", "{repo}/takx/native-geos/build.py", "--output", "{root}/P/geos",
-    "--cache", "{root}/cache-lane2/geos", "--fetch-dependencies"]}
+    "--cache", "{root}/cache-lane2/geos", "--fetch-dependencies"]},
+   "verify": {"env": ["TAKX_NATIVE_GEOS_PROOF={root}/P/geos"], "argv": [
+    "python3", "-B", "-m", "unittest", "discover", "-s", "{repo}/takx/native-geos", "-p", "test_build.py", "-v"]}
   },
   "assimp": {
    "lane": "lane2.sh", "recipe": "takx/native-assimp", "prerequisites": [],
@@ -123,7 +168,9 @@
    "invocation": {"env": [], "argv": [
     "python3", "-B", "{repo}/takx/native-assimp/build.py", "--output", "{root}/P/assimp",
     "--cache", "{root}/cache-lane2/assimp", "--jdk-home", "{jdk}", "--cmake", "{cmake}",
-    "--ninja", "{ninja}", "--fetch-dependencies"]}
+    "--ninja", "{ninja}", "--fetch-dependencies"]},
+   "verify": {"env": ["TAKX_NATIVE_ASSIMP_PROOF={root}/P/assimp"], "argv": [
+    "python3", "-B", "-m", "unittest", "discover", "-s", "{repo}/takx/native-assimp", "-p", "test_build.py", "-v"]}
   },
   "spatial": {
    "lane": "lane2.sh", "recipe": "takx/kernel-spatial-db",
@@ -136,7 +183,9 @@
     "--cache", "{root}/cache-lane2/spatial", "--source", "{repo}/upstream/atak-civ",
     "--proj-proof", "{root}/P/proj", "--geos-proof", "{root}/P/geos",
     "--sqlcipher-proof", "{root}/P/sqlcipher", "--zlib-proof", "{root}/P/assimp",
-    "--fetch-dependencies"]}
+    "--fetch-dependencies"]},
+   "verify": {"env": ["TAKX_KERNEL_SPATIAL_DB_PROOF={root}/P/spatial"], "argv": [
+    "python3", "-B", "-m", "unittest", "discover", "-s", "{repo}/takx/kernel-spatial-db", "-p", "test_build.py", "-v"]}
   },
   "crypto": {
    "lane": "lane2.sh", "recipe": "takx/native-crypto", "prerequisites": ["sqlcipher"],
@@ -146,7 +195,9 @@
    "invocation": {"env": [], "argv": [
     "python3", "-B", "{repo}/takx/native-crypto/build.py", "--output", "{root}/P/crypto",
     "--cache", "{root}/cache-lane2/crypto", "--modern-proof", "{root}/P/sqlcipher",
-    "--fetch-dependencies"]}
+    "--fetch-dependencies"]},
+   "verify": {"env": ["TAKX_NATIVE_CRYPTO_PROOF={root}/P/crypto", "TAKX_NATIVE_CRYPTO_MODERN={root}/P/sqlcipher"], "argv": [
+    "python3", "-B", "-m", "unittest", "discover", "-s", "{repo}/takx/native-crypto", "-p", "test_build.py", "-v"]}
   },
   "commoncommo": {
    "lane": "lane2.sh", "recipe": "takx/native-commoncommo",
@@ -172,7 +223,9 @@
    "invocation": {"env": [], "argv": [
     "python3", "-B", "{repo}/takx/native-deps/build.py", "--output", "{root}/P/draco",
     "--source", "{repo}/upstream/atak-civ", "--cache", "{root}/cache-lane3/draco",
-    "--cmake", "{cmake}", "--ninja", "{ninja}", "--jobs", "1", "--fetch-dependencies"]}
+    "--cmake", "{cmake}", "--ninja", "{ninja}", "--jobs", "1", "--fetch-dependencies"]},
+   "verify": {"env": ["TAKX_NATIVE_DEPS_PROOF={root}/P/draco"], "argv": [
+    "python3", "-B", "-m", "unittest", "discover", "-s", "{repo}/takx/native-deps", "-p", "test*.py", "-v"]}
   },
   "las": {
    "lane": "lane3.sh", "recipe": "takx/native-las", "prerequisites": [],
@@ -182,7 +235,9 @@
    "invocation": {"env": [], "argv": [
     "python3", "-B", "{repo}/takx/native-las/build.py", "--output", "{root}/P/las",
     "--cache", "{root}/cache-lane3/las", "--cmake", "{cmake}", "--ninja", "{ninja}",
-    "--fetch-dependencies"]}
+    "--fetch-dependencies"]},
+   "verify": {"env": ["TAKX_NATIVE_LAS_PROOF={root}/P/las"], "argv": [
+    "python3", "-B", "-m", "unittest", "discover", "-s", "{repo}/takx/native-las", "-p", "test*.py", "-v"]}
   },
   "mdb": {
    "lane": "lane3.sh", "recipe": "takx/native-mdbtools", "prerequisites": [],
@@ -201,7 +256,9 @@
    "invocation": {"env": [], "argv": [
     "python3", "-B", "{repo}/takx/native-gles/build.py", "--output", "{root}/P/gles",
     "--cache", "{root}/cache-lane3/gles", "--headers", "{root}/P/draco/install/include",
-    "--ninja", "{ninja}", "--fetch-dependencies"]}
+    "--ninja", "{ninja}", "--fetch-dependencies"]},
+   "verify": {"env": ["TAKX_NATIVE_GLES_PROOF={root}/P/gles"], "argv": [
+    "python3", "-B", "-m", "unittest", "discover", "-s", "{repo}/takx/native-gles", "-p", "test*.py", "-v"]}
   },
   "scene": {
    "lane": "lane3.sh", "recipe": "takx/kernel-scene", "prerequisites": ["proj", "assimp"],
@@ -233,7 +290,9 @@
     "--gdal-archive", "{root}/src/atak-civ-lfs/depends/gdal-2.4.4-mod.tar.gz",
     "--libkml-archive", "{root}/src/atak-civ-lfs/takthirdparty/distfiles/libkml.tar.gz",
     "--proj-proof", "{root}/P/proj", "--assimp-proof", "{root}/P/assimp",
-    "--gis-build", "{root}/P/gis-java", "--java-home", "{jdk}"]}
+    "--gis-build", "{root}/P/gis-java", "--java-home", "{jdk}"]},
+   "verify": {"env": ["GDAL_JNI_PROOF={root}/P/gdal-jni"], "argv": [
+    "python3", "-B", "-m", "unittest", "discover", "-s", "{repo}/takx/native-gdal-jni", "-p", "test*.py", "-v"]}
   },
   "curl": {
    "lane": "lane3.sh", "recipe": "takx/native-curl", "prerequisites": ["sqlcipher", "assimp"],

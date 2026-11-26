@@ -82,6 +82,7 @@ RUN apt-get update \
  && groupadd --gid 10002 takxweb \
  && useradd --uid 10002 --gid 10002 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin takxweb \
  && mkdir -p /run/takx/session /run/takx/vnc /run/takx/identity /run/takx/secret /usr/share/takx-desktop \
+      /opt/takx-addons/video \
  && for tool in nodejs node ffmpeg Xvfb gcc cc; do \
       if command -v "${tool}" >/dev/null; then echo "unexpected tool ${tool}"; exit 1; fi; done
 # The mount points carry the ownership and mode their volumes need: Docker
@@ -106,7 +107,12 @@ RUN dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\t${source
 
 FROM os AS base
 # The tree is copied byte for byte: no patchelf, no symlinks, no repacked JAR,
-# so manifest.json keeps describing exactly what is in the image. File modes
+# so manifest.json keeps describing exactly what is in the image. (The one
+# repacked JAR, the derived copy of the Kernel JAR without the unlicensed
+# font atlases and the RUNPATH of two libraries, is made by the assembly
+# and recorded in that manifest.) The tree ships no FFmpeg natives;
+# /opt/takx-addons/video is an empty mount point for natives a user supplies.
+# File modes
 # stay as assembled (0644/0755, owner root): the client runs as uid 10001 on
 # a read-only root and cannot change them. They must not be made read-only
 # for the owner: TAKX copies conf/Default*.xml into a new project together
@@ -115,13 +121,16 @@ FROM os AS base
 COPY --from=tree --chown=0:0 . /opt/takx
 COPY --chmod=0555 assemble/launch.sh /opt/takx-desktop/launch.sh
 COPY --chmod=0555 image/entrypoint.sh image/healthcheck.sh image/stage_identity.py \
-     image/verify_tree.py image/check_native_closure.py image/elf_audit.sh /opt/takx-desktop/
+     image/verify_tree.py image/check_native_closure.py image/elf_audit.sh image/licence_gate.py /opt/takx-desktop/
+COPY --chmod=0444 image/licence-policy.json /opt/takx-desktop/licence-policy.json
 COPY --chmod=0444 image/web/index.html /opt/takx-desktop/web-root/index.html
 COPY --from=notices --chown=0:0 . /usr/share/takx-desktop/
 RUN test ! -e /var/lib/takx-proto \
  && test -s /usr/share/takx-desktop/NOTICE.md \
  && test -s /usr/share/takx-desktop/SOURCES.json \
- && test -s /usr/share/takx-desktop/LICENSES/GPL-3.0-only.txt
+ && test -s /usr/share/takx-desktop/licence-gate.json \
+ && test -s /usr/share/takx-desktop/LICENSES/GPL-3.0-only.txt \
+ && test -z "$(find /opt/takx-addons -type f)"
 
 # Gates (verify/build_gates.sh). The tools they need (binutils, mesa-utils)
 # live in a stage of their own on top of 'os', so they are not installed
@@ -136,15 +145,22 @@ RUN apt-get update \
 FROM verify-tools AS verify
 ARG TREE_MANIFEST_SHA256
 RUN --mount=type=bind,from=base,source=/opt,target=/opt \
+    --mount=type=bind,from=base,source=/usr/share/takx-desktop,target=/usr/share/takx-desktop \
     --mount=type=bind,source=image/verify/build_gates.sh,target=/tmp/build_gates.sh \
     bash /tmp/build_gates.sh "${TREE_MANIFEST_SHA256}" /verify
 
 FROM base
 ARG TREE_MANIFEST_SHA256
+# Licence identifiers in use in the tree (the licence gate's list) and of the
+# JDK; build.sh passes them. The Debian packages keep their own licences
+# (/usr/share/doc/*/copyright). The image is an aggregate, not one work under
+# one licence.
+ARG IMAGE_LICENSES
 COPY --from=verify /verify /usr/share/takx-desktop/verify
 LABEL org.opencontainers.image.title="TAKX 5.7 desktop prototype (public-source build)" \
       org.opencontainers.image.description="TAKX 5.7 (0b59a9bb) built from public sources on Kernel 8.30.5 + project patches, CommonCommo 1.17.2 patched and the NASA WorldWind interop build; Xtigervnc, openbox, websockify and noVNC from Debian trixie. Prototype: not the official TAKX 5.7 distribution, not qualified." \
-      org.opencontainers.image.licenses="GPL-3.0-only" \
+      org.opencontainers.image.licenses="${IMAGE_LICENSES}" \
+      io.github.jonathanagustin.uds-takserver.takx.publishable="false" \
       org.opencontainers.image.source="https://github.com/jonathanagustin/uds-takserver" \
       io.github.jonathanagustin.uds-takserver.takx.tree-manifest-sha256="${TREE_MANIFEST_SHA256}" \
       io.github.jonathanagustin.uds-takserver.takx.notices="/usr/share/takx-desktop"

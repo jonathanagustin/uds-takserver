@@ -95,6 +95,15 @@ egress:
   # TAKX shows its built-in base map.
   hosts: []
 
+network:
+  # true: an Istio AuthorizationPolicy with action DENY for every port of the
+  # pod other than 6080 (templates/ingress-isolation.yaml). The TAKX JVM
+  # listens on TCP 4242, 8087 and one ephemeral port; ztunnel then refuses
+  # them from any source. The NetworkPolicy that isolates the pod for ingress
+  # is always rendered. Set false only if the deny policy is shown to be in
+  # the way of the gateway path; that path has not been run in a cluster.
+  denyOtherPorts: true
+
 persistence:
   # false: the session directory (ProjectData, home, the JVM's temporary
   # directory) is an emptyDir of `size` and is lost with the pod, including a

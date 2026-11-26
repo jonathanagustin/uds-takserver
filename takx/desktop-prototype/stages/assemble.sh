@@ -12,25 +12,41 @@
 # private artifacts TAKX 5.7 declares; manifest.json names the source and
 # SHA-256 of every file. Nothing is launched here.
 #
-# Usage:
-#   assemble.sh            assemble unless status/assemble.json says ok
-#   TAKX_ASSEMBLE_FORCE=1  move the existing tree to failed/ and assemble again
+# Left out for their licence: the bytedeco FFmpeg native JAR ("nonfree and
+# unredistributable"), the CDDL-only wizard reference JAR and joost. The
+# Kernel JAR in the tree is a derived copy (assemble/derive_jar.py): font
+# atlases without a licence removed, RUNPATH removed from two libraries.
 #
-# Layout (TAKX_PROTO_ROOT, default /var/lib/takx-proto):
-#   dist/takx57/            the tree (boot, load, lib, modules, conf, resources, native)
-#   dist/takx57/manifest.json
-#   P/kernel-overlay/       overlay JAR and receipt (assemble/kernel_overlay.py)
-#   failed/dist-takx57-<n>/ a replaced or failed tree
+# Usage:
+#   assemble.sh               assemble unless status/assemble.json says ok
+#   TAKX_ASSEMBLE_FORCE=1     move the existing tree to failed/ and assemble again
+#   TAKX_ASSEMBLE_NAME=NAME   assemble into dist/NAME and leave dist/takx57, its
+#                             overlay and its status files alone; the overlay,
+#                             the derived Kernel JAR and the status files of
+#                             that tree carry the suffix -NAME
+#
+# Layout (TAKX_PROTO_ROOT, default /var/lib/takx-proto; SUFFIX is empty for
+# the default tree and -NAME otherwise):
+#   dist/takx57/ or dist/NAME/     the tree (boot, load, lib, modules, conf,
+#                                  resources, native, share) and manifest.json
+#   P/kernel-overlay<SUFFIX>/      overlay JAR and receipt (assemble/kernel_overlay.py)
+#   P/kernel-derived<SUFFIX>/      derived Kernel JAR and derive-receipt.json
+#   failed/dist-<tree>-<n>/        a replaced or failed tree
 #   logs/assemble.log
-#   P/compat-system-clock/  libuds_desktop_clock.so (takx/compat recipe)
-#   status/kernel-overlay.json, status/compat-system-clock.json, status/assemble.json
+#   P/compat-system-clock/         libuds_desktop_clock.so (takx/compat recipe)
+#   status/kernel-overlay<SUFFIX>.json, status/kernel-derived<SUFFIX>.json,
+#   status/compat-system-clock.json, status/assemble<SUFFIX>.json
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "${here}/../../.." && pwd)"
 root="${TAKX_PROTO_ROOT:-/var/lib/takx-proto}"
 run="${repo}/takx/desktop-prototype/run-in-toolchain.sh"
-out="${root}/dist/takx57"
+name="${TAKX_ASSEMBLE_NAME:-takx57}"
+[[ "${name}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "assemble: TAKX_ASSEMBLE_NAME must be a plain directory name" >&2; exit 2; }
+suffix=""
+if [[ "${name}" != takx57 ]]; then suffix="-${name}"; fi
+out="${root}/dist/${name}"
 logf="${root}/logs/assemble.log"
 
 mkdir -p "${root}"/{dist,failed,logs,status}
@@ -47,27 +63,27 @@ with open(tmp, 'w') as stream:
 os.replace(tmp, path)
 PY
 }
-status() { stage_status assemble "$@"; }
+status() { stage_status "assemble${suffix}" "$@"; }
 
 retire() {
   [[ -e "${out}" ]] || return 0
   local n=1
-  while [[ -e "${root}/failed/dist-takx57-${n}" ]]; do n=$((n + 1)); done
-  mv "${out}" "${root}/failed/dist-takx57-${n}"
+  while [[ -e "${root}/failed/dist-${name}-${n}" ]]; do n=$((n + 1)); done
+  mv "${out}" "${root}/failed/dist-${name}-${n}"
 }
 
 if [[ "${TAKX_ASSEMBLE_FORCE:-0}" != 1 && -s "${out}/manifest.json" ]] &&
-   grep -q '"status": "ok"' "${root}/status/assemble.json" 2>/dev/null; then
+   grep -q '"status": "ok"' "${root}/status/assemble${suffix}.json" 2>/dev/null; then
   echo "assemble: already ok, skipping" >&2
   exit 0
 fi
 
 # Kernel Java overlay: Kernel classes rebuilt with the recorded prototype
 # patches (assemble/kernel-overlay/*.patch). Rebuilt on every assembly.
-overlay="${root}/P/kernel-overlay"
+overlay="${root}/P/kernel-overlay${suffix}"
 if [[ -e "${overlay}" ]]; then
-  n=1; while [[ -e "${root}/failed/kernel-overlay-${n}" ]]; do n=$((n + 1)); done
-  mv "${overlay}" "${root}/failed/kernel-overlay-${n}"
+  n=1; while [[ -e "${root}/failed/kernel-overlay${suffix}-${n}" ]]; do n=$((n + 1)); done
+  mv "${overlay}" "${root}/failed/kernel-overlay${suffix}-${n}"
 fi
 start=$(date +%s)
 printf '\n===== %s kernel-overlay\n' "$(date -u +%FT%TZ)" >>"${logf}"
@@ -75,11 +91,11 @@ rc=0
 "${run}" -- python3 -I -B "${repo}/takx/desktop-prototype/assemble/kernel_overlay.py" \
   --root "${root}" --output "${overlay}" >>"${logf}" 2>&1 || rc=$?
 if [[ "${rc}" != 0 || ! -s "${overlay}/receipt.json" ]]; then
-  stage_status kernel-overlay failed "$(($(date +%s) - start))" "kernel_overlay.py exit ${rc}: $(tail -n 1 "${logf}" | cut -c1-300)"
+  stage_status "kernel-overlay${suffix}" failed "$(($(date +%s) - start))" "kernel_overlay.py exit ${rc}: $(tail -n 1 "${logf}" | cut -c1-300)"
   echo "assemble: kernel overlay failed (exit ${rc}); see ${logf}" >&2
   exit 1
 fi
-stage_status kernel-overlay ok "$(($(date +%s) - start))" \
+stage_status "kernel-overlay${suffix}" ok "$(($(date +%s) - start))" \
   "Kernel 8.30.5 + project patches, desktop-prototype Java overlay: $(tail -n 1 "${logf}"); Kernel classes rebuilt from their own sources with assemble/kernel-overlay/*.patch (fuzz 0); the Kernel JAR is unchanged and its controls were not rerun with the overlay" \
   "${overlay}/kernel-8.30.5-prototype-java-overlay.jar" "${overlay}/receipt.json"
 
@@ -110,12 +126,37 @@ if [[ ! -s "${clock}/libuds_desktop_clock.so" || "${TAKX_ASSEMBLE_FORCE:-0}" == 
     "${clock}/libuds_desktop_clock.so"
 fi
 
+# The Kernel JAR of the tree: a derived copy of the Kernel stage's JAR
+# (assemble/derive_jar.py). Derived again on every assembly.
+derived="${root}/P/kernel-derived${suffix}"
+kernel_jar="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["jar"]["path"])' "${root}/status/kernel-composed.json")"
+if [[ -e "${derived}" ]]; then
+  n=1; while [[ -e "${root}/failed/kernel-derived${suffix}-${n}" ]]; do n=$((n + 1)); done
+  mv "${derived}" "${root}/failed/kernel-derived${suffix}-${n}"
+fi
+start=$(date +%s)
+printf '\n===== %s kernel-derived\n' "$(date -u +%FT%TZ)" >>"${logf}"
+rc=0
+mkdir -p "${derived}"
+"${run}" -- python3 -I -B "${repo}/takx/desktop-prototype/assemble/derive_jar.py" \
+  --input "${kernel_jar}" --output "${derived}/$(basename "${kernel_jar}" .jar)-tree.jar" \
+  --receipt "${derived}/derive-receipt.json" >>"${logf}" 2>&1 || rc=$?
+if [[ "${rc}" != 0 || ! -s "${derived}/derive-receipt.json" ]]; then
+  stage_status "kernel-derived${suffix}" failed "$(($(date +%s) - start))" "derive_jar.py exit ${rc}: $(tail -n 1 "${logf}" | cut -c1-300)"
+  echo "assemble: deriving the Kernel JAR failed (exit ${rc}); see ${logf}" >&2
+  exit 1
+fi
+stage_status "kernel-derived${suffix}" ok "$(($(date +%s) - start))" \
+  "Kernel 8.30.5 + project patches, derived copy for the tree: $(tail -n 1 "${logf}"); font atlases without a licence removed, RUNPATH removed from libtakengine.so and libtakenginejni.so; the Kernel stage JAR, its receipt and its controls are unchanged and describe the built JAR" \
+  "${derived}/$(basename "${kernel_jar}" .jar)-tree.jar" "${derived}/derive-receipt.json"
+
 retire
 start=$(date +%s)
 printf '\n===== %s assemble\n' "$(date -u +%FT%TZ)" >>"${logf}"
 rc=0
 "${run}" -- python3 -I -B "${repo}/takx/desktop-prototype/assemble/assemble.py" \
-  --root "${root}" --output "${out}" >>"${logf}" 2>&1 || rc=$?
+  --root "${root}" --output "${out}" --overlay "${overlay}" --overlay-status "kernel-overlay${suffix}" \
+  --kernel-derived "${derived}" >>"${logf}" 2>&1 || rc=$?
 seconds=$(($(date +%s) - start))
 if [[ "${rc}" != 0 || ! -s "${out}/manifest.json" ]]; then
   retire
@@ -124,6 +165,6 @@ if [[ "${rc}" != 0 || ! -s "${out}/manifest.json" ]]; then
   exit 1
 fi
 status ok "${seconds}" \
-  "runnable tree mirroring official deployment/bin: $(tail -n 1 "${logf}"); Kernel 8.30.5 + project patches, CommonCommo 1.17.2 patched, NASA WorldWind interop, takx/ui-java rebuilds; hand-written JBoss Modules descriptors; public tak-assets subset only; manifest sha256 $(sha256sum "${out}/manifest.json" | cut -d' ' -f1); nothing launched" \
+  "runnable tree mirroring official deployment/bin: $(tail -n 1 "${logf}"); Kernel 8.30.5 + project patches (derived copy, see status/kernel-derived${suffix}.json), CommonCommo 1.17.2 patched, NASA WorldWind interop, takx/ui-java rebuilds; hand-written JBoss Modules descriptors; public tak-assets subset only; no FFmpeg natives, no wizard reference JAR, no joost; manifest sha256 $(sha256sum "${out}/manifest.json" | cut -d' ' -f1); nothing launched" \
   "${out}" "${out}/manifest.json"
 echo "assemble: ok in ${seconds}s" >&2

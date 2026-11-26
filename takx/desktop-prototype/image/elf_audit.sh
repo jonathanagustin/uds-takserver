@@ -17,10 +17,11 @@
 # of the tree is changed and nothing is left behind.
 #
 # Fails when 'ldd -r' reports a library as not found or a symbol as
-# undefined (one upstream JOGL library is the exception, see below), or when
-# anything resolves below /var/lib/takx-proto. RUNPATH
-# strings that name that directory are printed and counted, not hidden: they
-# are dead as long as the directory does not exist, which is asserted.
+# undefined (one upstream JOGL library is the exception, see below), when
+# anything resolves below /var/lib/takx-proto, when a RPATH or RUNPATH names
+# that directory, or when one has an empty or relative element: glibc reads
+# an empty element as the working directory of the process, which the
+# application user can write. '$ORIGIN' elements are fine.
 set -euo pipefail
 
 report="${1:-}"
@@ -91,7 +92,7 @@ PY
 # leaves the Broadcom VideoCore and EGL helper entry points (and ceil/floor)
 # to lazy binding; a desktop X11 session never calls them.
 upstream_lazy='modules/prototype/libs/main/jogl-all-2.5.0-natives-linux-amd64.jar!/natives/linux-amd64/libnewt_head.so'
-libraries=0; unresolved=0; undefined=0; undefined_upstream=0; proto_resolved=0; proto_runpath=0
+libraries=0; unresolved=0; undefined=0; undefined_upstream=0; proto_resolved=0; proto_runpath=0; unsafe_runpath=0
 java_home="${JAVA_HOME:?JAVA_HOME is not set}"
 jvm_lib="${java_home}/lib:${java_home}/lib/server"
 {
@@ -116,13 +117,26 @@ for needed in facts["needed"]:
 if facts["soname"]:
     print("(SONAME) [%s]" % facts["soname"])
 for kind in ("rpath", "runpath"):
-    if facts[kind]:
-        print("(%s) [%s]" % (kind.upper(), ":".join(facts[kind])))' "${library}")"
+    if kind + "_raw" in facts:
+        print("(%s) [%s]" % (kind.upper(), facts[kind + "_raw"]))' "${library}")"
       fi
       echo "${dynamic}"
       if grep -E 'RPATH|RUNPATH' <<<"${dynamic}" | grep -q '/var/lib/takx-proto'; then
         proto_runpath=$((proto_runpath + 1))
       fi
+      while IFS= read -r paths; do
+        # A trailing or doubled colon is an empty element.
+        if [[ "${paths}" == *: || "${paths}" == :* || "${paths}" == *::* || -z "${paths}" ]]; then
+          unsafe_runpath=$((unsafe_runpath + 1)); continue
+        fi
+        IFS=: read -r -a elements <<<"${paths}"
+        for element in "${elements[@]}"; do
+          # shellcheck disable=SC2016 # a literal $ORIGIN, as it is written in the ELF file
+          if [[ "${element}" != /* && "${element}" != '$ORIGIN'* && "${element}" != '${ORIGIN}'* ]]; then
+            unsafe_runpath=$((unsafe_runpath + 1)); break
+          fi
+        done
+      done < <(grep -E 'RPATH|RUNPATH' <<<"${dynamic}" | sed -E 's/^[^[]*\[(.*)\]$/\1/' || true)
       linked="$(LD_LIBRARY_PATH="${view}:${group}:${jvm_lib}" ldd -r "${library}" 2>&1 | sed "s#${work}#<extracted>#g" || true)"
       echo "${linked}"
       unresolved=$((unresolved + $(grep -c 'not found' <<<"${linked}" || true)))
@@ -141,9 +155,10 @@ for kind in ("rpath", "runpath"):
   echo "ldd_undefined_symbols ${undefined}"
   echo "ldd_undefined_symbols_in_upstream_jogl_libnewt_head ${undefined_upstream}"
   echo "resolved_below_var_lib_takx_proto ${proto_resolved}"
-  echo "libraries_with_dead_runpath_below_var_lib_takx_proto ${proto_runpath}"
+  echo "libraries_with_runpath_below_var_lib_takx_proto ${proto_runpath}"
+  echo "run_paths_with_an_empty_or_relative_element ${unsafe_runpath}"
   echo "var_lib_takx_proto_exists no"
 } >"${transcript}"
 if [[ -n "${report}" ]]; then cp "${transcript}" "${report}"; else cat "${transcript}"; fi
-tail -n 8 "${transcript}" >&2
-((unresolved == 0 && undefined == 0 && proto_resolved == 0))
+tail -n 9 "${transcript}" >&2
+((unresolved == 0 && undefined == 0 && proto_resolved == 0 && proto_runpath == 0 && unsafe_runpath == 0))

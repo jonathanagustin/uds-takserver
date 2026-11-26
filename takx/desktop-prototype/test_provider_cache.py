@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -35,7 +36,51 @@ EXPECTED = {'sqlcipher', 'cesium-acq', 'cesium', 'kml', 'proj', 'geos', 'assimp'
             'commoncommo', 'draco', 'las', 'mdb', 'gles', 'scene', 'gdal-jni', 'curl', 'gis-java',
             'kernel-java', 'worldwind-java', 'worldwind-interop', 'consumers57', 'ui-original',
             'ui-wizard-reference'}
-TOOLCHAIN_ID = 'sha256:' + '1' * 64
+TOOLCHAIN_ID = 'sha256:' + '1' * 64   # image id: what schema-1 keys named, and what the record says was probed
+BASE_LAYER = 'sha256:' + 'b' * 64
+
+
+def toolchain_block():
+    return {'base': 'registry.example/debian:trixie@sha256:' + 'd' * 64,
+            'environment': {'JAVA_HOME': '/jdk', 'TZ': 'UTC'},
+            'gated': [{'name': 'gcc', 'argv': ['/usr/bin/gcc', '--version'], 'expect': ' 14.2.0'},
+                      {'name': 'g++', 'argv': ['/usr/bin/g++', '--version'], 'expect': ' 14.2.0'},
+                      {'name': 'java', 'argv': ['/jdk/bin/java', '-version'], 'expect': 'Temurin-17.0.21+9'}]}
+
+
+def wrapper_block():
+    return {'env': ['TAKX_PROTO_ROOT={root}', 'TAKX_PROTO_REPO={repo}', 'HOME=/tmp'],
+            'mounts': ['{repo}:{repo}:ro', '{root}:{root}'], 'workdir': '{root}'}
+
+
+def probe_text(arch='amd64', **changes):
+    """What the probe prints in an image that is toolchain_block()."""
+    lines = {'arch': None if arch is None else 'arch\t' + arch,
+             'JAVA_HOME': 'env\tJAVA_HOME\t/jdk', 'TZ': 'env\tTZ\tUTC',
+             'gcc': 'tool\tgcc\tgcc (Debian 14.2.0-19) 14.2.0 Copyright (C) 2024 ',
+             'g++': 'tool\tg++\tg++ (Debian 14.2.0-19) 14.2.0 Copyright (C) 2024 ',
+             'java': 'tool\tjava\topenjdk version "17.0.21" OpenJDK Runtime Environment Temurin-17.0.21+9 ',
+             'packages': 'packages\t' + 'e' * 64}
+    lines.update(changes)
+    return ''.join(line + '\n' for line in lines.values() if line is not None)
+
+
+def fingerprint(arch='amd64', layer=BASE_LAYER, block=None):
+    return PC.derive_key(PC.expected_toolchain(block or toolchain_block(), arch, layer))
+
+
+# The fingerprint of toolchain_block() on amd64 over BASE_LAYER, pinned like GOLDEN below.
+FINGERPRINT = '4d9436b46e47938df438c4db49ab9f4deccd660a13065f9f0b31a458f9802dd5'
+
+
+def toolchain_record(image_id=TOOLCHAIN_ID, arch='amd64', layer=BASE_LAYER, block=None, **changes):
+    """A status/toolchain.json as provider_cache.py writes it."""
+    document = PC.expected_toolchain(block or toolchain_block(), arch, layer)
+    record = {'stage': 'toolchain', 'status': 'ok', 'outputs': [PC.TOOLCHAIN], 'seconds': 0, 'notes': 'n',
+              'image': PC.TOOLCHAIN, 'image_id': image_id, 'fingerprint': PC.derive_key(document),
+              'document': document, 'observed': {}, 'packages_sha256': 'e' * 64, 'outputs_before': None}
+    record.update(changes)
+    return record
 
 
 def manifest():
@@ -46,7 +91,8 @@ def manifest():
                 'marker': 'complete.json',
                 'invocation': {'env': [], 'argv': ['python3', '{repo}/' + recipe + '/' + script,
                                                    '--output', '{root}/P/x']}}
-    return {'schema': 1, 'variables': {'jdk': '/jdk'}, 'recipe_exclude': ['__pycache__', '*.pyc', 'README*', 'test_*'],
+    return {'schema': 2, 'variables': {'jdk': '/jdk'}, 'recipe_exclude': ['__pycache__', '*.pyc', 'README*', 'test_*'],
+            'toolchain': toolchain_block(), 'wrapper': wrapper_block(),
             'recipes': {'takx/one': {'uses': []}, 'takx/two': {'uses': ['takx/one', 'takx/shared.py']}},
             'providers': {'base': provider('takx/one', [], 'build.py'),
                           'top': provider('takx/two', ['base'], 'build.py'),
@@ -56,7 +102,7 @@ def manifest():
 def facts(**changes):
     value = {'recipe_files': {'takx/one/build.py': 'a' * 64}, 'locks': {'l': {'sha256': 'b' * 64, 'digests': []}},
              'fetched': [{'kind': 'lock-entry', 'name': 'n', 'digests': {'expected_sha256': 'c' * 64}}],
-             'toolchain': TOOLCHAIN_ID, 'root': '/var/lib/takx-proto', 'repo': '/repo'}
+             'toolchain': FINGERPRINT, 'arch': 'amd64', 'root': '/var/lib/takx-proto', 'repo': '/repo'}
     value.update(changes)
     return value
 
@@ -83,7 +129,8 @@ class Core(unittest.TestCase):
             'pinned digest': facts(locks={'l': {'sha256': 'b' * 64, 'digests': ['f' * 64]}}),
             'fetched input': facts(fetched=[{'kind': 'lock-entry', 'name': 'n',
                                              'digests': {'expected_sha256': 'd' * 64}}]),
-            'toolchain': facts(toolchain='sha256:' + '2' * 64),
+            'toolchain': facts(toolchain='2' * 64),
+            'architecture': facts(arch='arm64'),
             'work root': facts(root='/srv/other'),
             'repository': facts(repo='/elsewhere'),
         }
@@ -104,18 +151,37 @@ class Core(unittest.TestCase):
                 ('argv', lambda m: m['providers']['base']['invocation']['argv'].append('--jobs')),
                 ('env', lambda m: m['providers']['base']['invocation']['env'].append('A=1')),
                 ('variables', lambda m: m['variables'].update(jdk='/other')),
+                ('wrapper variable', lambda m: m['wrapper']['env'].append('A=1')),
+                ('wrapper variable value', lambda m: m['wrapper']['env'].__setitem__(2, 'HOME=/root')),
+                ('wrapper mount', lambda m: m['wrapper']['mounts'].__setitem__(0, '{repo}:{repo}')),
+                ('wrapper working directory', lambda m: m['wrapper'].update(workdir='/')),
                 ('marker', lambda m: m['providers']['base'].update(marker='done.json'))):
             document = manifest()
             edit(document)
             with self.subTest(what=what):
                 self.assertNotEqual(self.keys(document)['base'], reference['base'])
         document = PC.key_document(manifest(), 'base', facts(), {})
-        self.assertNotEqual(PC.derive_key(dict(document, schema=2)), PC.derive_key(document))
+        self.assertEqual(document['schema'], 2)
+        self.assertNotEqual(PC.derive_key(dict(document, schema=3)), PC.derive_key(document))
+
+    def test_the_post_restore_check_is_not_part_of_the_key(self):
+        document = manifest()
+        document['providers']['base']['verify'] = {'env': ['PROOF={root}/P/base'], 'argv': ['check', '{repo}']}
+        self.assertEqual(self.keys(document), self.keys())
 
     def test_key_needs_every_identity_and_every_prerequisite_key(self):
-        for field in ('toolchain', 'root', 'repo'):
+        for field in ('toolchain', 'arch', 'root', 'repo'):
             with self.subTest(field=field), self.assertRaises(PC.CacheError):
                 PC.key_document(manifest(), 'base', facts(**{field: ''}), {})
+        for what, wrong in (('an image id', {'toolchain': TOOLCHAIN_ID}), ('a short digest', {'toolchain': 'a' * 63}),
+                            ('an upper-case digest', {'toolchain': 'A' * 64}),
+                            ('another architecture', {'arch': 'riscv64'}),
+                            ('a machine name', {'arch': 'x86_64'})):
+            with self.subTest(what=what), self.assertRaisesRegex(
+                    PC.CacheError, '^base: the toolchain is not named by a fingerprint and an architecture$'):
+                PC.key_document(manifest(), 'base', facts(**wrong), {})
+        for arch in ('amd64', 'arm64'):
+            self.assertEqual(PC.key_document(manifest(), 'base', facts(arch=arch), {})['arch'], arch)
         with self.assertRaises(PC.CacheError):
             PC.key_document(manifest(), 'base', facts(recipe_files={}), {})
         with self.assertRaises(PC.CacheError):
@@ -136,7 +202,8 @@ class Core(unittest.TestCase):
     def test_manifest_validation_refuses_malformed_entries(self):
         PC.validate_manifest(manifest())
         for what, edit in (
-                ('schema', lambda m: m.update(schema=2)),
+                ('schema', lambda m: m.update(schema=1)),
+                ('schema of the future', lambda m: m.update(schema=3)),
                 ('unknown prerequisite', lambda m: m['providers']['top'].update(prerequisites=['ghost'])),
                 ('unknown recipe', lambda m: m['providers']['top'].update(recipe='takx/ghost')),
                 ('absolute marker', lambda m: m['providers']['top'].update(marker='/etc/passwd')),
@@ -256,12 +323,25 @@ class Core(unittest.TestCase):
     def test_bundle_identity_checks(self):
         key, tar, files = 'a' * 64, 'b' * 64, 'c' * 64
         good = dict(name='p', key=key, root='/r',
-                    meta={'schema': 1, 'provider': 'p', 'key': key, 'root': '/r', 'tar_sha256': tar,
+                    meta={'schema': 2, 'provider': 'p', 'key': key, 'root': '/r', 'tar_sha256': tar,
                           'files_sha256': files, 'prerequisite_markers': {'d': 'e' * 64}},
                     status={'stage': 'p', 'status': 'ok'},
                     labels={'dev.uds.takx.provider': 'p', 'dev.uds.takx.key': key, 'dev.uds.takx.tar-sha256': tar},
                     tar_sha256=tar, recorded_tar_sha256=tar, files_sha256=files, local_markers={'d': 'e' * 64})
         PC.check_bundle(**good)
+        # A bundle of schema 1 is only accepted where the caller asks for one (migrate).
+        legacy = dict(good, meta=dict(good['meta'], schema=1))
+        PC.check_bundle(**legacy, schema=1)
+        for arguments in (legacy, dict(good, schema=1)):
+            with self.assertRaisesRegex(PC.CacheError, '^p: unsupported bundle schema$'):
+                PC.check_bundle(**arguments)
+        # Only the prerequisite binding is the refusal that depends on the local tree.
+        with self.assertRaises(PC.OtherPrerequisites) as caught:
+            PC.check_bundle(**dict(good, local_markers={'d': '0' * 64}))
+        self.assertEqual(str(caught.exception),
+                         'p: it was built against other prerequisite outputs than the ones present here')
+        with self.assertRaises(PC.OtherPrerequisites):
+            PC.check_bundle(**dict(good, local_markers=None))
         bad = {
             'tar': dict(tar_sha256='0' * 64),
             'recorded': dict(recorded_tar_sha256=''),
@@ -272,7 +352,7 @@ class Core(unittest.TestCase):
             'meta key': dict(meta=dict(good['meta'], key='0' * 64)),
             'meta root': dict(meta=dict(good['meta'], root='/other')),
             'meta tar': dict(meta=dict(good['meta'], tar_sha256='0' * 64)),
-            'meta schema': dict(meta=dict(good['meta'], schema=2)),
+            'meta schema': dict(meta=dict(good['meta'], schema=3)),
             'files': dict(files_sha256='0' * 64),
             'status failed': dict(status={'stage': 'p', 'status': 'failed'}),
             'status other': dict(status={'stage': 'q', 'status': 'ok'}),
@@ -280,8 +360,9 @@ class Core(unittest.TestCase):
             'not a dict': dict(meta=[]),
         }
         for what, change in bad.items():
-            with self.subTest(what=what), self.assertRaises(PC.CacheError):
+            with self.subTest(what=what), self.assertRaises(PC.CacheError) as caught:
                 PC.check_bundle(**dict(good, **change))
+            self.assertEqual(isinstance(caught.exception, PC.OtherPrerequisites), what == 'prerequisite', what)
 
     def test_image_reference_and_index(self):
         self.assertEqual(PC.image_ref('reg/x/', 'gdal-jni', 'a' * 64), 'reg/x/gdal-jni:' + 'a' * 64)
@@ -322,12 +403,20 @@ def snapshot(top):
     return result
 
 
+def settled(top, root='root'):
+    """snapshot() without the note a refused restore leaves for a later push."""
+    result = snapshot(top)
+    result.pop(os.path.join(root, 'cache-state', 'refused.json'), None)
+    return result
+
+
 def chain():
     """a <- b <- c <- d, a diamond a <- (b, e) <- f, and an unrelated z."""
     def provider(deps):
         return {'lane': 'lane1.sh', 'recipe': 'takx/one', 'prerequisites': deps, 'locks': [], 'fetched': [],
                 'marker': 'complete.json', 'invocation': {'env': [], 'argv': ['build']}}
-    return {'schema': 1, 'variables': {}, 'recipe_exclude': [], 'recipes': {'takx/one': {'uses': []}},
+    return {'schema': 2, 'variables': {}, 'recipe_exclude': [], 'recipes': {'takx/one': {'uses': []}},
+            'toolchain': toolchain_block(), 'wrapper': wrapper_block(),
             'providers': {'d': provider(['c']), 'c': provider(['b']), 'b': provider(['a']), 'a': provider([]),
                           'e': provider(['a']), 'f': provider(['e', 'b']), 'z': provider([])}}
 
@@ -336,6 +425,15 @@ def chain():
 # form: a change here gives every cached provider a new name, so it must be
 # deliberate (and then SCHEMA should change with it).
 GOLDEN = {
+    'base': '2dbe4b6f1d58aa5c2897fbfca977df1047dda52eee28275346506b7a09fd7e97',
+    'side': '78a05eb413155dec778fb518e1c93f00f1aabc937a9b326e700f935fda84fa5d',
+    'top': '7888f99e4013bd4c72fd66dc43abd0f1606642ab44b4336b06cf3cc03b41cac1',
+}
+# The keys schema 1 gave the same manifest and facts with the toolchain named
+# by TOOLCHAIN_ID. These are the values the suite pinned before schema 2:
+# `migrate` finds the bundles saved under such keys only while
+# legacy_key_document() reproduces them exactly.
+LEGACY_GOLDEN = {
     'base': '88363aae55cf1f04d0eb168957fce37cc727309e135028a7c01e31a537d4d2cf',
     'side': '5af48161ea0a6a1473491230f46d097b0587e88f36706b76bdaa2a8b2ba6c804',
     'top': 'f1a6ae3ab289a0b5645771283d29dcb2cc6f38ee830af92bb68ced94536ec36d',
@@ -360,6 +458,41 @@ class KeyProperties(unittest.TestCase):
 
     def test_keys_have_the_pinned_values(self):
         self.assertEqual(self.keys(), GOLDEN)
+        self.assertEqual(fingerprint(), FINGERPRINT)
+
+    def test_schema_1_keys_are_still_derived_exactly(self):
+        def old(name):
+            return facts(toolchain=TOOLCHAIN_ID, arch=None)
+        derived = PC.derive_keys(manifest(), old, describe=PC.legacy_key_document)
+        self.assertEqual({name: key for name, (key, _) in derived.items()}, LEGACY_GOLDEN)
+        document = derived['top'][1]
+        self.assertEqual(document, {
+            'schema': 1, 'provider': 'top', 'recipe': 'takx/two', 'recipe_files': facts()['recipe_files'],
+            'invocation_sha256': PC.sha256_bytes(PC.canonical({
+                'invocation': manifest()['providers']['top']['invocation'], 'variables': {'jdk': '/jdk'}})),
+            'marker': 'complete.json', 'locks': facts()['locks'], 'fetched': facts()['fetched'],
+            'toolchain': TOOLCHAIN_ID, 'root': '/var/lib/takx-proto', 'repo': '/repo',
+            'prerequisites': {'base': LEGACY_GOLDEN['base']}})
+        # What schema 2 added is no input of a schema-1 key.
+        changed = manifest()
+        changed['wrapper']['env'].append('A=1')
+        changed['toolchain']['gated'][0]['expect'] = ' 15.1.0'
+        derived = PC.derive_keys(changed, old, describe=PC.legacy_key_document)
+        self.assertEqual({name: key for name, (key, _) in derived.items()}, LEGACY_GOLDEN)
+        source = old('base')
+        document = PC.legacy_key_document(manifest(), 'base', source, {})
+        document['recipe_files']['x'] = document['locks']['x'] = 1
+        document['fetched'].append(1)
+        self.assertEqual(source, old('base'))  # the document is a copy
+        for what, wrong in (('a fingerprint', FINGERPRINT), ('nothing', ''), ('no string', None),
+                            ('a short id', 'sha256:' + '1' * 63), ('a trailing newline', TOOLCHAIN_ID + '\n')):
+            with self.subTest(what=what), self.assertRaisesRegex(
+                    PC.CacheError, '^base: a schema-1 key needs the toolchain image id$'):
+                PC.legacy_key_document(manifest(), 'base', facts(toolchain=wrong), {})
+        for bad in ({}, {'side': LEGACY_GOLDEN['side']},
+                    {'base': LEGACY_GOLDEN['base'], 'side': LEGACY_GOLDEN['side']}):
+            with self.subTest(bad=bad), self.assertRaisesRegex(PC.CacheError, '^top: prerequisite keys incomplete$'):
+                PC.legacy_key_document(manifest(), 'top', old('top'), bad)
 
     def test_canonical_form_is_compact_sorted_ascii_json(self):
         self.assertEqual(PC.canonical({'b': [1, 'é'], 'a': {'d': None, 'c': True}}),
@@ -431,7 +564,9 @@ class KeyProperties(unittest.TestCase):
             'fetched name': facts(fetched=[{'kind': 'lock-entry', 'name': 'm',
                                             'digests': {'expected_sha256': 'c' * 64}}]),
             'no fetched input': facts(fetched=[]),
-            'toolchain': facts(toolchain='sha256:' + '1' * 63 + '2'),
+            'toolchain': facts(toolchain=FINGERPRINT[:-1] + '0'),
+            'architecture': facts(arch='arm64'),
+            'toolchain of the other architecture': facts(toolchain=fingerprint('arm64'), arch='arm64'),
             'work root': facts(root='/var/lib/takx-proto2'),
             'repository': facts(repo='/repo2'),
         }
@@ -452,6 +587,10 @@ class KeyProperties(unittest.TestCase):
             'env': lambda m: m['providers']['base']['invocation']['env'].append('A=1'),
             'variable value': lambda m: m['variables'].update(jdk='/jdk2'),
             'variable added': lambda m: m['variables'].update(cmake='/cmake'),
+            'wrapper variable': lambda m: m['wrapper']['env'].append('A=1'),
+            'wrapper variable removed': lambda m: m['wrapper']['env'].pop(),
+            'wrapper mount': lambda m: m['wrapper']['mounts'].pop(),
+            'wrapper working directory': lambda m: m['wrapper'].update(workdir='/tmp'),
             'marker': lambda m: m['providers']['base'].update(marker='done.json'),
             'recipe': lambda m: (m['recipes'].update({'takx/three': {'uses': []}}),
                                  m['providers']['base'].update(recipe='takx/three')),
@@ -470,11 +609,14 @@ class KeyProperties(unittest.TestCase):
         document['providers']['base']['lane'] = 'lane9.sh'
         document['description'] = ['other words']
         document['recipe_exclude'].append('*.orig')  # only what the files then are counts
-        self.assertEqual(self.keys(document), GOLDEN)
+        document['providers']['base']['verify'] = {'env': [], 'argv': ['check']}  # run after a restore, not by a build
+        # The toolchain block reaches the key through the fingerprint in the facts only.
+        document['toolchain']['gated'][0]['expect'] = ' 15.1.0'
+        self.assertEqual(self.keys(PC.validate_manifest(document)), GOLDEN)
 
     def test_schema_version_is_part_of_the_key(self):
-        document = dict(manifest(), schema=2)
-        self.assertEqual(PC.key_document(document, 'base', facts(), {})['schema'], 2)
+        document = dict(manifest(), schema=3)
+        self.assertEqual(PC.key_document(document, 'base', facts(), {})['schema'], 3)
         self.assertNotEqual(PC.derive_key(PC.key_document(document, 'base', facts(), {})), GOLDEN['base'])
 
     def test_prerequisite_key_is_part_of_the_key(self):
@@ -494,11 +636,13 @@ class KeyProperties(unittest.TestCase):
     def test_key_document_names_every_input_and_nothing_else(self):
         document = PC.key_document(manifest(), 'top', facts(), {'base': GOLDEN['base']})
         self.assertEqual(document, {
-            'schema': 1, 'provider': 'top', 'recipe': 'takx/two', 'recipe_files': facts()['recipe_files'],
+            'schema': 2, 'provider': 'top', 'recipe': 'takx/two', 'recipe_files': facts()['recipe_files'],
             'invocation_sha256': PC.sha256_bytes(PC.canonical({
-                'invocation': manifest()['providers']['top']['invocation'], 'variables': {'jdk': '/jdk'}})),
+                'invocation': manifest()['providers']['top']['invocation'], 'variables': {'jdk': '/jdk'},
+                'wrapper': {'env': ['TAKX_PROTO_ROOT={root}', 'TAKX_PROTO_REPO={repo}', 'HOME=/tmp'],
+                            'mounts': ['{repo}:{repo}:ro', '{root}:{root}'], 'workdir': '{root}'}})),
             'marker': 'complete.json', 'locks': facts()['locks'], 'fetched': facts()['fetched'],
-            'toolchain': TOOLCHAIN_ID, 'root': '/var/lib/takx-proto', 'repo': '/repo',
+            'toolchain': FINGERPRINT, 'arch': 'amd64', 'root': '/var/lib/takx-proto', 'repo': '/repo',
             'prerequisites': {'base': GOLDEN['base']}})
         source = facts()
         document = PC.key_document(manifest(), 'base', source, {})
@@ -543,7 +687,8 @@ class FakeRegistry:
     def __init__(self):
         self.images, self.logged_in, self.docker, self.published = {}, True, True, 0
         self.toolchain, self.state = TOOLCHAIN_ID, None
-        self.calls, self.fetched = [], []
+        self.probe_output, self.layer = probe_text(), BASE_LAYER
+        self.calls, self.fetched, self.digests, self.kept = [], [], {}, []
 
     def available(self):
         return self.docker
@@ -551,6 +696,37 @@ class FakeRegistry:
     def image_id(self, image):
         self.calls.append(('image_id', image))
         return self.toolchain
+
+    def probe_toolchain(self, image, script):
+        self.calls.append(('probe_toolchain', image))
+        self.script = script
+        return self.probe_output
+
+    def base_layer(self, image):
+        return self.layer
+
+    def digest(self, ref):
+        self.calls.append(('digest', ref))
+        return self.digests.get(ref)
+
+    def forget(self, ref):
+        self.calls.append(('forget', ref))
+        self.kept.remove(ref)
+
+    def adopt(self, source, ref, context, files, labels):
+        self.calls.append(('adopt', source, ref))
+        assert source in self.kept, 'adopt needs the source image kept by fetch'
+        old_labels, content = self.images[source]
+        content = dict(content)
+        for name in files:
+            content[name] = (Path(context) / name).read_bytes()
+        self.store(ref, dict(old_labels, **labels), content)
+
+    def store(self, ref, labels, content):
+        """Put an image under a reference; every stored image gets a new digest."""
+        self.published += 1
+        self.images[ref] = (labels, content)
+        self.digests[ref] = 'sha256:%064x' % self.published
 
     def probe(self, ref):
         self.calls.append(('probe', ref))
@@ -562,16 +738,19 @@ class FakeRegistry:
 
     def publish(self, ref, context, files, labels):
         self.calls.append(('publish', ref))
-        self.published += 1
-        self.images[ref] = (dict(labels), {name: (Path(context) / name).read_bytes() for name in files})
+        self.store(ref, dict(labels), {name: (Path(context) / name).read_bytes() for name in files})
 
-    def fetch(self, ref, target, files):
+    def fetch(self, ref, target, files, keep=False):
         self.calls.append(('fetch', ref))
         self.fetched.append((ref, list(files)))
         labels, content = self.images[ref]
         for name in files:
+            if name not in content:
+                raise PC.MissingFile('the image holds no /%s' % name, self.digests.get(ref))
             (Path(target) / name).write_bytes(content[name])
-        return json.loads(json.dumps(labels))  # new objects, as when docker prints them
+        if keep:
+            self.kept.append(ref)
+        return json.loads(json.dumps(labels)), self.digests.get(ref)  # new objects, as when docker prints them
 
 
 class ServiceCase(unittest.TestCase):
@@ -593,6 +772,7 @@ class ServiceCase(unittest.TestCase):
         (self.root / 'status').mkdir(parents=True)
         (self.root / 'P').mkdir()
         self.write_json('status/images.json', {'status': 'ok', 'image_ids': {PC.TOOLCHAIN: TOOLCHAIN_ID}})
+        self.write_json('status/toolchain.json', toolchain_record())
         self.write_json('status/fetch.json', {'status': 'ok', 'inputs': [
             {'kind': 'lock-entry', 'name': recipe, 'verified': True, 'expected_sha256': '5' * 64,
              'consumers': [{'recipe': recipe}]} for recipe in ('one', 'two')]})
@@ -600,9 +780,9 @@ class ServiceCase(unittest.TestCase):
         self.messages, self.builds = [], 0
         self.service = self.new_service()
 
-    def new_service(self, prefix='reg.example/cache', override='', root=None):
+    def new_service(self, prefix='reg.example/cache', legacy='', root=None, **options):
         return PC.ProviderCache(manifest(), PC.WorkTree(root or self.root, self.repo), self.registry, prefix,
-                                override, self.messages.append)
+                                legacy, self.messages.append, **options)
 
     def write_json(self, rel, value):
         (self.root / rel).write_text(json.dumps(value))
@@ -686,21 +866,36 @@ class Keys(ServiceCase):
         (self.repo / 'takx/one/new.c').write_text('int x;\n')
         self.assertNotEqual(self.new_service().key('base'), reference['base'])
         os.unlink(self.repo / 'takx/one/new.c')
-        self.assertNotEqual(self.new_service(override='sha256:' + '9' * 64).key('base'), reference['base'])
+        # The image id that schema 1 put into the key does not change one any more.
+        self.assertEqual(self.new_service(legacy='sha256:' + '9' * 64).key('base'), reference['base'])
+        self.write_json('status/images.json', {'status': 'ok', 'image_ids': {PC.TOOLCHAIN: 'sha256:' + '9' * 64}})
+        self.write_json('status/toolchain.json', toolchain_record(image_id='sha256:' + '9' * 64))
+        self.assertEqual(self.new_service().key('base'), reference['base'])
+        # Another toolchain or another architecture does.
+        for what, record in (('architecture', toolchain_record(arch='arm64')),
+                             ('base image', toolchain_record(layer='sha256:' + 'c' * 64))):
+            self.write_json('status/toolchain.json', record)
+            with self.subTest(what=what):
+                self.assertNotEqual(self.new_service().key('base'), reference['base'])
+        self.write_json('status/toolchain.json', toolchain_record())
         other = Path(self.tmp.name).resolve() / 'other-root'
         os.rename(self.root, other)
         self.assertNotEqual(self.new_service(root=other).key('base'), reference['base'])
 
     def test_key_fails_closed_without_its_inputs(self):
+        def no_fingerprint():
+            os.unlink(self.root / 'status/toolchain.json')
+            self.registry.docker = False
+
         for what, action in (
-                ('images.json', lambda: os.unlink(self.root / 'status/images.json')),
+                ('toolchain.json and no docker', no_fingerprint),
                 ('fetch.json', lambda: self.write_json('status/fetch.json', {'status': 'failed', 'inputs': []})),
                 ('unverified input', lambda: self.write_json('status/fetch.json', {'status': 'ok', 'inputs': [
                     {'kind': 'lock-entry', 'name': r, 'verified': r == 'two', 'expected_sha256': '5' * 64,
                      'consumers': [{'recipe': r}]} for r in ('one', 'two')]})),
                 ('lock', lambda: os.unlink(self.repo / 'takx/two/inputs.lock.json')),
                 ('helper', lambda: os.unlink(self.repo / 'takx/shared.py'))):
-            saved = {path: path.read_bytes() for path in (self.root / 'status/images.json',
+            saved = {path: path.read_bytes() for path in (self.root / 'status/toolchain.json',
                                                           self.root / 'status/fetch.json',
                                                           self.repo / 'takx/two/inputs.lock.json',
                                                           self.repo / 'takx/shared.py')}
@@ -709,6 +904,12 @@ class Keys(ServiceCase):
                 self.new_service().key('top')
             for path, data in saved.items():
                 path.write_bytes(data)
+            self.registry.docker = True
+        self.assertEqual(self.registry.calls, [])  # a key from the record asks docker nothing
+        # The image record of schema 1 is no input any more.
+        reference = self.new_service().key('top')
+        os.unlink(self.root / 'status/images.json')
+        self.assertEqual(self.new_service().key('top'), reference)
 
 
 class PushAndRestore(ServiceCase):
@@ -1038,16 +1239,33 @@ class PushAndRestore(ServiceCase):
         self.assertEqual(self.service.tree.pushed(), {})
         self.assertEqual(self.leftovers(), [])
 
-    def test_stale_image_record_is_refused_unless_overridden(self):
+    def test_a_rebuilt_toolchain_image_keeps_the_keys_and_another_toolchain_is_refused(self):
         self.make('base')
+        key = self.service.key('base')
+        # The same toolchain under another image id: probed once, then recorded.
         self.registry.toolchain = 'sha256:' + '7' * 64
-        with self.assertRaises(PC.CacheError):
-            self.service.push('base')
+        rebuilt = self.new_service()
+        ref = rebuilt.push('base')
+        self.assertEqual(ref, 'reg.example/cache/base:' + key)
+        self.assertEqual(self.registry.calls[:2], [('image_id', PC.TOOLCHAIN), ('probe_toolchain', PC.TOOLCHAIN)])
+        record = json.loads((self.root / 'status/toolchain.json').read_text())
+        self.assertEqual((record['image_id'], record['fingerprint']), ('sha256:' + '7' * 64, FINGERPRINT))
+        del self.registry.calls[:]
+        self.new_service().push('base')
+        self.assertNotIn(('probe_toolchain', PC.TOOLCHAIN), self.registry.calls)
+        # Another toolchain, or none: nothing is read from or written to the cache.
+        self.registry.toolchain, self.registry.layer = 'sha256:' + '8' * 64, 'sha256:' + 'c' * 64
+        for action in (self.new_service().push, self.new_service().restore, self.new_service().migrate):
+            del self.registry.calls[:]
+            with self.assertRaisesRegex(PC.CacheError, 'has toolchain fingerprint [0-9a-f]{64}, not the recorded '
+                                        + FINGERPRINT):
+                action('top' if action.__name__ != 'push' else 'base')
+            self.assertEqual(self.registry.calls, [('image_id', PC.TOOLCHAIN), ('probe_toolchain', PC.TOOLCHAIN)])
         self.registry.toolchain = None
-        with self.assertRaises(PC.CacheError):
-            self.service.push('base')
-        self.new_service(override='sha256:' + '8' * 64).push('base')
+        with self.assertRaisesRegex(PC.CacheError, '^there is no local takx-desktop-proto:toolchain image'):
+            self.new_service().push('base')
         self.assertEqual(self.registry.published, 1)
+        self.assertEqual(json.loads((self.root / 'status/toolchain.json').read_text()), record)
 
 
 class CommandLine(ServiceCase):
@@ -1100,7 +1318,7 @@ class CommandLine(ServiceCase):
     def test_environment_selects_root_registry_and_toolchain(self):
         service = PC.build_service({'TAKX_PROTO_ROOT': str(self.root), 'TAKX_PROTO_CACHE': 'off',
                                     'TAKX_PROTO_TOOLCHAIN_ID': 'sha256:' + '3' * 64})
-        self.assertEqual((service.tree.root, service.enabled, service.toolchain()),
+        self.assertEqual((service.tree.root, service.enabled, service.legacy_id),
                          (self.root, False, 'sha256:' + '3' * 64))
         self.assertEqual(service.tree.repo, REPO)
         default = PC.build_service({})
@@ -1138,9 +1356,9 @@ class KeySensitivity(ServiceCase):
         value['providers']['top']['fetched'] = [{'consumer': 'two'}, {'path': 'inputs/tree'}]
         return value
 
-    def new_service(self, prefix='reg.example/cache', override='', root=None, document=None, repo=None):
+    def new_service(self, prefix='reg.example/cache', legacy='', root=None, document=None, repo=None):
         return PC.ProviderCache(document or self.document(), PC.WorkTree(root or self.root, repo or self.repo),
-                                self.registry, prefix, override, self.messages.append)
+                                self.registry, prefix, legacy, self.messages.append)
 
     def changed(self, action=None, **service):
         """The providers whose key differs after `action` (and/or with another service)."""
@@ -1196,8 +1414,10 @@ class KeySensitivity(ServiceCase):
             ('fetched name', self.records_with(0, name='uno'), 'bt'),
             ('fetched revision selected by path', self.records_with(2, expected_revision='3' * 39 + '4'), 't'),
             ('fetched input selected by kind', self.records_with(3, expected_sha256='4' * 63 + '5'), 's'),
-            ('toolchain image', lambda: self.write_json('status/images.json', {
-                'status': 'ok', 'image_ids': {PC.TOOLCHAIN: 'sha256:' + '1' * 63 + '2'}}), 'bst'),
+            ('toolchain of the other architecture',
+             lambda: self.write_json('status/toolchain.json', toolchain_record(arch='arm64')), 'bst'),
+            ('toolchain over another base layer',
+             lambda: self.write_json('status/toolchain.json', toolchain_record(layer=BASE_LAYER[:-1] + 'c')), 'bst'),
         )
         return cases
 
@@ -1235,6 +1455,13 @@ class KeySensitivity(ServiceCase):
                 'status': 'ok', 'inputs': self.records()[::-1], 'seconds': 3})),
             ('another image in the image record', lambda: self.write_json('status/images.json', {
                 'status': 'ok', 'image_ids': {'other:image': 'sha256:' + '9' * 64, PC.TOOLCHAIN: TOOLCHAIN_ID}})),
+            ('toolchain image id in the image record', lambda: self.write_json('status/images.json', {
+                'status': 'ok', 'image_ids': {PC.TOOLCHAIN: 'sha256:' + '1' * 63 + '2'}})),
+            ('no image record', lambda: os.unlink(self.root / 'status/images.json')),
+            ('the same toolchain rebuilt as another image', lambda: self.write_json(
+                'status/toolchain.json', toolchain_record(image_id='sha256:' + '1' * 63 + '2'))),
+            ('what the probe saw beside the gates', lambda: self.write_json('status/toolchain.json', toolchain_record(
+                observed={'gcc': 'gcc (Debian 14.2.0-20) 14.2.0'}, packages_sha256='f' * 64, outputs_before=5))),
             ('provider outputs and status', lambda: self.make('base')),
             ('push records', lambda: self.service.tree.record_push(('base', 'k', 'r', 't'))),
         )
@@ -1248,8 +1475,8 @@ class KeySensitivity(ServiceCase):
             self.setUp()
 
     def test_identity_of_toolchain_root_and_repository(self):
-        self.assertEqual(self.changed(override=TOOLCHAIN_ID), '')  # the override names the same image
-        self.assertEqual(self.changed(override='sha256:' + '9' * 64), 'bst')
+        self.assertEqual(self.changed(legacy=TOOLCHAIN_ID), '')
+        self.assertEqual(self.changed(legacy='sha256:' + '9' * 64), '')  # an image id is no key input any more
         other = self.root.with_name('root2')
 
         def moved():  # the same work root under another path, with its fetch record
@@ -1310,8 +1537,8 @@ class KeySensitivity(ServiceCase):
         self.assertEqual(inputs['fetched'], [
             {'kind': 'git-source', 'name': 'tree', 'digests': {'expected_revision': '3' * 40}},
             {'kind': 'lock-entry', 'name': 'two', 'digests': {'expected_sha256': '5' * 64}}])
-        self.assertEqual((inputs['toolchain'], inputs['root'], inputs['repo']),
-                         (TOOLCHAIN_ID, str(self.root), str(self.repo)))
+        self.assertEqual((inputs['toolchain'], inputs['arch'], inputs['root'], inputs['repo']),
+                         (FINGERPRINT, 'amd64', str(self.root), str(self.repo)))
         self.assertEqual(inputs['prerequisites'], {'base': document.key('base')})
         self.assertEqual(PC.derive_key(inputs), document.key('top'))
         self.assertEqual(document.ref('top'), 'reg.example/cache/top:' + document.key('top'))
@@ -1341,13 +1568,7 @@ class KeySensitivity(ServiceCase):
         for what, rel, value in (
                 ('failed fetch', 'status/fetch.json', {'status': 'failed', 'inputs': self.records()}),
                 ('fetch without inputs', 'status/fetch.json', {'status': 'ok', 'inputs': {}}),
-                ('fetch without status', 'status/fetch.json', {'inputs': self.records()}),
-                ('failed images', 'status/images.json', {'status': 'failed',
-                                                         'image_ids': {PC.TOOLCHAIN: TOOLCHAIN_ID}}),
-                ('other image only', 'status/images.json', {'status': 'ok', 'image_ids': {'x': TOOLCHAIN_ID}}),
-                ('empty image id', 'status/images.json', {'status': 'ok', 'image_ids': {PC.TOOLCHAIN: ''}}),
-                ('image id of another type', 'status/images.json', {'status': 'ok',
-                                                                    'image_ids': {PC.TOOLCHAIN: 7}})):
+                ('fetch without status', 'status/fetch.json', {'inputs': self.records()})):
             saved = (self.root / rel).read_bytes()
             self.write_json(rel, value)
             with self.subTest(what=what), self.assertRaises(PC.CacheError):
@@ -1358,7 +1579,7 @@ class KeySensitivity(ServiceCase):
             self.new_service().key('base')
         self.write_json('status/fetch.json', {'status': 'ok', 'inputs': self.records()})
         os.unlink(self.root / 'status/images.json')
-        self.assertRegex(self.new_service(override='sha256:' + '9' * 64).key('base'), '^[0-9a-f]{64}$')
+        self.assertRegex(self.new_service().key('base'), '^[0-9a-f]{64}$')
 
 
 class Tamper(ServiceCase):
@@ -1370,7 +1591,7 @@ class Tamper(ServiceCase):
         self.good = snapshot(self.top)
         self.ref = self.service.push('base')
         self.set_aside('base')
-        self.before = snapshot(self.tmp.name)
+        self.before = settled(self.tmp.name)
         self.stored = copy.deepcopy(self.registry.images[self.ref])
 
     def pristine(self):
@@ -1406,12 +1627,18 @@ class Tamper(ServiceCase):
         labels['dev.uds.takx.tar-sha256'] = meta['tar_sha256'] = digest
         content['meta.json'] = json.dumps(meta).encode()
 
-    def assert_refused(self, message=None, errors=None):
+    def assert_refused(self, message=None, errors=None, noted='bundle'):
+        (self.root / 'cache-state/refused.json').unlink(missing_ok=True)
         with self.assertRaises(errors or PC.CacheError) as caught:
             self.service.restore('base')
-        self.assertEqual(snapshot(self.tmp.name), self.before)  # no directory, no status, no scratch, no escape
+        self.assertEqual(settled(self.tmp.name), self.before)  # no directory, no status, no scratch, no escape
+        # The one thing a refusal leaves: which entry was judged, for the push after the rebuild.
+        notes = self.service.tree.refusals()
+        self.assertEqual({ref: (note['kind'], note['digest'], note['key']) for ref, note in notes.items()},
+                         {self.ref: (noted, self.registry.digests[self.ref], self.service.key('base'))} if noted
+                         else {})
         self.assertFalse(os.path.lexists(self.root / 'P/base'))
-        self.assertEqual(sorted(os.listdir(self.root / 'status')), ['fetch.json', 'images.json'])
+        self.assertEqual(sorted(os.listdir(self.root / 'status')), ['fetch.json', 'images.json', 'toolchain.json'])
         self.assertEqual(os.listdir(self.root / 'P'), [])
         if message:
             self.assertIn(message, str(caught.exception))
@@ -1490,7 +1717,8 @@ class Tamper(ServiceCase):
             ('label key', lambda: with_label('dev.uds.takx.key', key[:-1] + ('0' if key[-1] != '0' else '1')),
              'another key'),
             ('no label key', lambda: with_label('dev.uds.takx.key', None), 'another key'),
-            ('schema', lambda: with_meta(schema=2), 'bundle schema'),
+            ('schema of the past', lambda: with_meta(schema=1), 'bundle schema'),
+            ('schema of the future', lambda: with_meta(schema=3), 'bundle schema'),
             ('no schema', lambda: with_meta(schema=...), 'bundle schema'),
             ('meta provider', lambda: with_meta(provider='side'), 'another provider or key'),
             ('meta key', lambda: with_meta(key=self.service.key('side')), 'another provider or key'),
@@ -1527,7 +1755,8 @@ class Tamper(ServiceCase):
         for what, change, message in cases:
             change()
             with self.subTest(what=what):
-                self.assert_refused(message)
+                # Only the binding to prerequisites is a refusal that depends on this work root.
+                self.assert_refused(message, noted='prerequisites' if 'prerequisite' in what else 'bundle')
             labels.clear()
             labels.update(original[0])
             content.update(original[1])
@@ -1552,8 +1781,8 @@ class Tamper(ServiceCase):
                     return labels
                 self.registry.fetch = changed
                 with self.subTest(item=item, what=what):
-                    if what == 'missing':
-                        self.assert_refused(errors=OSError)
+                    if what == 'missing':  # lost here after the copy: an error of this machine, no judgement
+                        self.assert_refused(errors=OSError, noted=None)
                     else:
                         self.assert_refused('image file %s is not a regular file' % item)
         self.registry.fetch = fetch
@@ -1565,7 +1794,7 @@ class Tamper(ServiceCase):
             (Path(target) / 'base.tar').write_bytes(b'partial')
             raise PC.CacheError('docker pull failed: connection reset')
         self.registry.fetch = failing
-        self.assert_refused('connection reset')
+        self.assert_refused('connection reset', noted=None)
 
     def test_file_content_differs_from_the_manifest(self):
         self.reseal(members=self.edit_file('base/install/lib/lib.a',
@@ -1856,7 +2085,7 @@ class Tamper(ServiceCase):
             setattr(service.tree, step, interrupted)
             with self.subTest(step=step), self.assertRaises(KeyboardInterrupt):
                 service.restore('base')
-            self.assertEqual(snapshot(self.tmp.name), self.before)
+            self.assertEqual(settled(self.tmp.name), self.before)
 
     def test_prerequisite_that_changes_during_the_restore(self):
         aside = self.root.parent / 'aside-top'
@@ -1865,7 +2094,7 @@ class Tamper(ServiceCase):
         ref = self.service.push('top')
         os.rename(self.root / 'P/top', aside)
         os.unlink(self.root / 'status/top.json')
-        before = snapshot(self.tmp.name)
+        before = settled(self.tmp.name)
         marker = (self.root / 'P/base/complete.json').read_bytes()
         unpack = self.service.tree.unpack
 
@@ -1876,7 +2105,7 @@ class Tamper(ServiceCase):
         with self.assertRaisesRegex(PC.CacheError, '^top: a prerequisite changed during the restore$'):
             self.service.restore('top')
         (self.root / 'P/base/complete.json').write_bytes(marker)
-        self.assertEqual(snapshot(self.tmp.name), before)
+        self.assertEqual(settled(self.tmp.name), before)
         self.assertIn(ref, self.registry.images)
 
 
@@ -1927,7 +2156,8 @@ class Promotion(ServiceCase):
         with mock.patch.object(PC, 'rename_noreplace', renamed), mock.patch.object(PC.os, 'replace', replaced):
             self.assertEqual(self.service.restore('base'), self.ref)
         self.assertEqual(events, ['tar_members', 'unpack', 'entries', 'rename', 'status'])
-        self.assertEqual(sorted(os.listdir(self.root / 'status')), ['base.json', 'fetch.json', 'images.json'])
+        self.assertEqual(sorted(os.listdir(self.root / 'status')),
+                         ['base.json', 'fetch.json', 'images.json', 'toolchain.json'])
         self.assertEqual(os.listdir(self.root / 'P'), ['base'])
         self.assertEqual(self.leftovers(), [])
         self.assertEqual(self.messages[-1], 'provider-cache: restored base from %s (9 entries verified)' % self.ref)
@@ -1941,7 +2171,7 @@ class Promotion(ServiceCase):
                     self.assertRaises(type(error)):
                 self.service.restore('base')
             self.assertFalse(os.path.lexists(self.top))
-            self.assertEqual(sorted(os.listdir(self.root / 'status')), ['fetch.json', 'images.json'])
+            self.assertEqual(sorted(os.listdir(self.root / 'status')), ['fetch.json', 'images.json', 'toolchain.json'])
             self.assertEqual(os.listdir(self.root / 'P'), [])
             self.assertEqual(self.leftovers(), [])
         self.service.restore('base')
@@ -1966,13 +2196,14 @@ class Promotion(ServiceCase):
         self.assertEqual(json.loads(self.status.read_text())['status'], 'ok')
 
     def test_work_root_without_p_and_status_is_created(self):
-        service = self.new_service(override=TOOLCHAIN_ID)
+        service = self.new_service()
         self.assertEqual(service.ref('base'), self.ref)  # the inputs are read before the directory goes
         os.rmdir(self.root / 'P')
         shutil.rmtree(self.root / 'status')
-        service.restore('base')
+        service.restore('base')  # without a record the image is probed and recorded again
         self.assertEqual(snapshot(self.top), self.good)
-        self.assertEqual(os.listdir(self.root / 'status'), ['base.json'])
+        self.assertEqual(sorted(os.listdir(self.root / 'status')), ['base.json', 'toolchain.json'])
+        self.assertEqual(json.loads((self.root / 'status/toolchain.json').read_text())['fingerprint'], FINGERPRINT)
 
     def test_existing_destination_of_any_kind_is_kept(self):
         cases = {
@@ -1985,15 +2216,15 @@ class Promotion(ServiceCase):
         }
         for what, create in cases.items():
             create()
-            before = snapshot(self.tmp.name)
+            before = settled(self.tmp.name)
             for state in (None, 'failed', 'ok'):
                 if state:
                     self.status.write_text(json.dumps({'stage': 'base', 'status': state}))
-                    before = snapshot(self.tmp.name)
+                    before = settled(self.tmp.name)
                 with self.subTest(what=what, state=state):
                     with self.assertRaisesRegex(PC.CacheError, 'already exists and is never overwritten'):
                         self.service.restore('base')
-                    self.assertEqual(snapshot(self.tmp.name), before)
+                    self.assertEqual(settled(self.tmp.name), before)
                     self.assertEqual(self.registry.fetched, [])
             os.unlink(self.status)
             if self.top.is_dir() and not self.top.is_symlink():
@@ -2176,7 +2407,7 @@ class Push(ServiceCase):
         self.assertEqual(content['status.json'], status_bytes)
         marker_sha = hashlib.sha256((self.root / 'P/top/complete.json').read_bytes()).hexdigest()
         self.assertEqual(json.loads(content['meta.json']), {
-            'schema': 1, 'provider': 'top', 'key': key, 'root': str(self.root), 'repo': str(self.repo),
+            'schema': 2, 'provider': 'top', 'key': key, 'root': str(self.root), 'repo': str(self.repo),
             'marker': 'complete.json', 'marker_sha256': marker_sha, 'tar_sha256': tar_sha,
             'files_sha256': hashlib.sha256(content['files.json']).hexdigest(),
             'prerequisite_markers': {'base': hashlib.sha256((top / 'complete.json').read_bytes()).hexdigest()},
@@ -2206,7 +2437,8 @@ class Push(ServiceCase):
             self.assertEqual(archive.extractfile('top/install/tool').read(), b'#!/bin/sh\n')
         self.assertEqual(self.messages, ['provider-cache: pushed %s (9 entries, tar sha256 %s)' % (ref, tar_sha)])
         self.assertEqual((self.root / 'cache-state/pushed.tsv').read_text(),
-                         '\t'.join(('top', key, ref, tar_sha)) + '\n')
+                         '\t'.join(('top', key, ref, tar_sha, marker_sha)) + '\n')
+        self.assertEqual(self.service.tree.pushed_markers(), {ref: marker_sha})
         self.assertEqual(self.leftovers(), [])
 
     def test_hard_linked_files_are_stored_in_full(self):
@@ -2253,8 +2485,8 @@ class Push(ServiceCase):
         self.assertEqual(len(record.splitlines()), 1)
         service.tree.record_push(('base', 'k' * 64, 'ref2', 't' * 64))
         with open(self.root / 'cache-state/pushed.tsv', 'a') as stream:
-            stream.write('short\trow\n\none\ttwo\tthree\tfour\tfive\n')
-        self.assertEqual(service.tree.pushed(), {('base', service.key('base')): record.split('\t')[3].strip(),
+            stream.write('short\trow\n\none\ttwo\tthree\tfour\tfive\tsix\n')
+        self.assertEqual(service.tree.pushed(), {('base', service.key('base')): record.split('\t')[3],
                                                  ('base', 'k' * 64): 't' * 64})
 
     def test_provider_that_changes_while_it_is_archived_is_not_pushed(self):
@@ -2360,25 +2592,32 @@ class Push(ServiceCase):
                 self.service.push('top')
             self.assert_nothing_pushed()
 
-    def test_toolchain_image_must_be_the_recorded_one(self):
+    def test_toolchain_image_must_be_the_recorded_toolchain(self):
         self.make('base')
-        for actual, shown in (('sha256:' + '7' * 64, 'sha256:' + '7' * 64), (None, 'absent'), ('', 'absent')):
+        self.registry.layer = 'sha256:' + 'c' * 64   # an image of another toolchain
+        for actual, message in (('sha256:' + '7' * 64, r'^the local takx-desktop-proto:toolchain image '
+                                 r'\(sha256:7{64}\) has toolchain fingerprint %s, not the recorded %s; if the '
+                                 r'toolchain was changed on purpose, accept it with `provider_cache.py toolchain '
+                                 r'--record`$' % (fingerprint(layer='sha256:' + 'c' * 64), FINGERPRINT)),
+                                (None, '^there is no local takx-desktop-proto:toolchain image to fingerprint$'),
+                                ('', '^there is no local takx-desktop-proto:toolchain image to fingerprint$')):
             self.registry.toolchain = actual
-            with self.subTest(actual=actual), self.assertRaisesRegex(
-                    PC.CacheError, r'the local takx-desktop-proto:toolchain image \(%s\) is not the one recorded'
-                    % shown):
+            with self.subTest(actual=actual), self.assertRaisesRegex(PC.CacheError, message):
                 self.service.push('base')
             self.set_aside('base')
-            with self.subTest(actual=actual, action='restore'), self.assertRaisesRegex(PC.CacheError, 'recorded'):
+            with self.subTest(actual=actual, action='restore'), self.assertRaisesRegex(PC.CacheError, message):
                 self.service.restore('base')
             self.make('base')
-        self.assertEqual(self.registry.calls, [('image_id', PC.TOOLCHAIN)] * 6)
+        self.assertEqual(self.registry.calls, [('image_id', PC.TOOLCHAIN), ('probe_toolchain', PC.TOOLCHAIN)] * 2
+                         + [('image_id', PC.TOOLCHAIN)] * 4)
         self.assert_nothing_pushed()
-        override = self.new_service(override='sha256:' + '7' * 64)
+        self.assertEqual(json.loads((self.root / 'status/toolchain.json').read_text()), toolchain_record())
+        # The image id that was probed is accepted without another probe.
+        self.registry.toolchain = TOOLCHAIN_ID
         del self.registry.calls[:]
-        ref = override.push('base')
-        self.assertEqual([call[0] for call in self.registry.calls], ['probe', 'publish', 'probe'])
-        self.assertNotEqual(ref.rsplit(':', 1)[1], self.service.key('base'))
+        ref = self.new_service().push('base')
+        self.assertEqual([call[0] for call in self.registry.calls], ['image_id', 'probe', 'publish', 'probe'])
+        self.assertEqual(ref.rsplit(':', 1)[1], self.service.key('base'))
 
 
 class OffAndLogin(ServiceCase):
@@ -2393,12 +2632,12 @@ class OffAndLogin(ServiceCase):
         os.unlink(self.root / 'status/base.json')
         del self.registry.calls[:]
         del self.messages[:]
-        self.before = snapshot(self.tmp.name)
+        self.before = settled(self.tmp.name)
         self.stored = copy.deepcopy(self.registry.images)
 
     def assert_untouched(self, calls):
         self.assertEqual(self.registry.calls, calls)
-        self.assertEqual(snapshot(self.tmp.name), self.before)
+        self.assertEqual(settled(self.tmp.name), self.before)
         self.assertEqual((self.registry.published, self.registry.images), (1, self.stored))
         self.assertEqual(self.messages, [])
 
@@ -2463,7 +2702,7 @@ class OffAndLogin(ServiceCase):
             self.service.restore('base')
         with self.assertRaises(PC.CacheError):
             self.service.push('side')
-        self.assertEqual(snapshot(self.tmp.name), self.before)
+        self.assertEqual(settled(self.tmp.name), self.before)
         self.assertEqual((self.registry.published, self.registry.fetched), (1, []))
 
     def test_provider_that_is_ok_here_is_not_fetched(self):
@@ -2659,8 +2898,8 @@ class ExitCodes(ServiceCase):
                   '# Generated by provider_cache.py status --write-index; do not edit.\n'
                   '# Providers cached under their input keys. Restore needs no index: it\n'
                   '# derives the key and pulls <ref>. Keys are specific to:\n'
-                  '# work root %s\n# repository %s\n# toolchain %s\n# name\tkey\tref\ttar sha256\n'
-                  % (self.root, self.repo, TOOLCHAIN_ID))
+                  '# work root %s\n# repository %s\n# toolchain fingerprint %s\n# architecture amd64\n'
+                  '# name\tkey\tref\ttar sha256\n' % (self.root, self.repo, FINGERPRINT))
         row = 'base\t%s\treg.example/cache/base:%s\t%s\n' % (key, key, tar_sha)
         self.assertEqual(self.run_cli('status', '--write-index', str(index))[0], 0)
         self.assertEqual(index.read_text(), header + row)
@@ -2669,8 +2908,9 @@ class ExitCodes(ServiceCase):
         self.assertEqual(index.read_text(), header)  # the registry is asked, and it has nothing
         self.registry.state = 'present'
         self.assertEqual(self.run_cli('status', '--write-index', str(index), '--remote')[0], 0)
-        self.assertEqual(len(index.read_text().splitlines()), 9 + 3)
-        os.unlink(self.root / 'status/images.json')
+        self.assertEqual(len(index.read_text().splitlines()), 10 + 3)
+        os.unlink(self.root / 'status/toolchain.json')
+        self.registry.docker = False
         index.write_text('kept')
         code, out, err = self.run_cli('status', '--write-index', str(index), service=self.new_service())
         self.assertEqual(code, 1)
@@ -2709,6 +2949,17 @@ class ExitCodes(ServiceCase):
         self.assertEqual(self.run_script('push', 'sqlcipher'),
                          (3, '', 'provider-cache: push sqlcipher skipped: status is missing, not ok\n'))
         self.assertEqual(self.run_script('restore', 'ghost'), (1, '', 'provider-cache: unknown provider ghost\n'))
+        # The record in this work root describes another manifest's toolchain, and there is no docker.
+        self.assertEqual(self.run_script('key', 'sqlcipher'), (
+            1, '', 'provider-cache: no toolchain fingerprint is recorded for this manifest (status/toolchain.json) '
+                   'and docker is not available to probe takx-desktop-proto:toolchain\n'))
+        self.assertEqual(self.run_script('toolchain')[0], 1)
+        real = json.loads((HERE / 'providers.json').read_text())['toolchain']
+        self.write_json('status/toolchain.json', toolchain_record(block=real))
+        self.assertEqual(self.run_script('toolchain'), (0, fingerprint(block=real) + '\tamd64\n', ''))
+        code, out, err = self.run_script('toolchain', '--probe-script')
+        self.assertEqual((code, err), (0, ''))
+        self.assertEqual(out, PC.probe_script(real))
         code, out, err = self.run_script('key', 'sqlcipher')
         self.assertEqual((code, out), (1, ''))
         self.assertIn('no fetched input matches', err)
@@ -2803,10 +3054,10 @@ class Details(ServiceCase):
             tree.locks(['takx/none.lock'])
         os.unlink(self.root / 'status/images.json')
         with self.assertRaisesRegex(PC.CacheError, r'^status/images\.json cannot be read: .*No such file'):
-            tree.recorded_toolchain()
+            tree.legacy_toolchain()
 
     def test_key_document_refusals_name_the_provider_and_the_input(self):
-        for field in ('toolchain', 'root', 'repo'):
+        for field in ('toolchain', 'arch', 'root', 'repo'):
             for empty in ('', None):
                 with self.subTest(field=field), self.assertRaisesRegex(PC.CacheError, '^base: no %s identity$' % field):
                     PC.key_document(manifest(), 'base', facts(**{field: empty}), {})
@@ -3023,9 +3274,9 @@ exit 0
     def test_fetch_reads_the_labels_of_the_image(self):
         for text, expected in (('echo null', {}), ('true', {}), ('echo "{}"', {}),
                                ("""echo '{"a":"1","b":"two words"}'""", {'a': '1', 'b': 'two words'})):
-            self.script('image', text)
+            self.script('image', 'case "$*" in *Labels*) %s;; esac' % text)
             with self.subTest(text=text):
-                self.assertEqual(self.registry.fetch('reg/p:tag', self.dir, []), expected)
+                self.assertEqual(self.registry.fetch('reg/p:tag', self.dir, []), (expected, None))
         self.script('create', 'echo "  abc123  "')
         self.script('cp', 'echo "$2 $3" >> "$dir/copies"')
         self.registry.fetch('reg/p:tag', self.dir / 'target', ['p.tar', 'meta.json'])
@@ -3034,9 +3285,142 @@ exit 0
                           'abc123:/meta.json %s/target/meta.json' % self.dir])
         self.assertEqual(self.calls()[-2:], ['rm -f abc123', 'rmi reg/p:tag'])
 
+    def test_fetch_names_the_registry_digest_that_was_pulled(self):
+        one, two = 'sha256:' + '1' * 64, 'sha256:' + '2' * 64
+        for listed, expected in (
+                ('["reg/p@%s"]' % one, one),
+                ('["other/p@%s","reg/p@%s"]' % (two, one), one),
+                ('["reg/p@%s","reg/p@%s"]' % (one, one), one),
+                ('["reg/p@%s","reg/p@%s"]' % (one, two), None),      # two digests: which one is not known
+                ('["reg/pp@%s","xreg/p@%s","reg/p:tag@%s"]' % (one, one, one), None),
+                ('["reg/p@sha256:abc","reg/p@%s0","reg/p@%s"]' % (one, one.upper()), None),
+                ('[7,null,{"reg/p@%s":1}]' % one, None),
+                ('"reg/p@%s"' % one, None), ('null', None), ('[]', None), ('{', None), ('', None)):
+            self.script('image', 'case "$*" in *RepoDigests*) echo \'%s\';; *) echo "{}";; esac' % listed)
+            with self.subTest(listed=listed):
+                self.assertEqual(self.registry.fetch('reg/p:tag', self.dir, []), ({}, expected))
+        self.assertEqual(self.calls()[-5:-2], ['image inspect --format {{json .Config.Labels}} reg/p:tag',
+                                               'image inspect --format {{json .RepoDigests}} reg/p:tag',
+                                               'create reg/p:tag /nonexistent'])
+        # A registry with a port: the repository is everything before the tag.
+        self.script('image', 'case "$*" in *RepoDigests*) echo \'["127.0.0.1:5000/c/p@%s"]\';; *) echo "{}";; esac'
+                    % two)
+        self.assertEqual(self.registry.fetch('127.0.0.1:5000/c/p:tag', self.dir, []), ({}, two))
+        # The second inspection failing means "not known", never an error of the pull.
+        for ending in ('exit 1', 'kill -9 $$'):
+            self.script('image', 'case "$*" in *RepoDigests*) echo \'["reg/p@%s"]\'; %s;; *) echo "{}";; esac'
+                        % (one, ending))
+            self.assertEqual(self.registry.fetch('reg/p:tag', self.dir, []), ({}, None), ending)
+
+    def test_fetch_can_keep_the_image_and_tells_a_missing_file_from_a_failed_copy(self):
+        digest = 'sha256:' + '3' * 64
+        self.script('image', 'case "$*" in *RepoDigests*) echo \'["reg/p@%s"]\';; *) echo "{}";; esac' % digest)
+        self.registry.fetch('reg/p:tag', self.dir, ['p.tar'], keep=True)
+        self.assertEqual(self.calls()[-2:], ['cp :/p.tar %s/p.tar' % self.dir, 'rm -f '])
+        self.registry.forget('reg/p:tag')
+        self.assertEqual(self.calls()[-1], 'rmi reg/p:tag')
+        self.script('rmi', 'echo "image is being used" >&2; exit 1')
+        self.registry.forget('reg/p:tag')  # cleaning up may fail
+        # ... and a failing clean-up does not hide what went wrong before it.
+        self.script('cp', 'echo "write: broken pipe" >&2; exit 1')
+        with self.assertRaisesRegex(PC.CacheError, '^docker cp failed: write: broken pipe$'):
+            self.registry.fetch('reg/p:tag', self.dir, ['p.tar'])
+        (self.dir / 'script-rmi').unlink()
+        (self.dir / 'script-cp').unlink()
+        for text in ('Error response from daemon: Could not find the file /meta.json in container abc',
+                     'lstat /var/lib/docker/overlay2/x/merged/meta.json: no such file or directory'):
+            self.script('cp', 'echo "%s" >&2; exit 1' % text)
+            for keep in (False, True):  # a failure never leaves the image behind
+                with self.subTest(text=text, keep=keep), self.assertRaisesRegex(
+                        PC.MissingFile, '^the image holds no /meta.json$') as caught:
+                    self.registry.fetch('reg/p:tag', self.dir, ['meta.json', 'p.tar'], keep=keep)
+                self.assertEqual(caught.exception.digest, digest)
+                self.assertEqual(self.calls()[-3:], ['cp :/meta.json %s/meta.json' % self.dir, 'rm -f ',
+                                                     'rmi reg/p:tag'])
+        self.script('cp', 'echo "write %s/p.tar: no space left on device" >&2; exit 1' % self.dir)
+        with self.assertRaisesRegex(PC.CacheError, '^docker cp failed: write .* no space left on device$') as caught:
+            self.registry.fetch('reg/p:tag', self.dir, ['p.tar'], keep=True)
+        self.assertNotIsInstance(caught.exception, PC.MissingFile)
+        self.assertEqual(self.calls()[-1], 'rmi reg/p:tag')
+        # Only the end of a long message is kept, and what is said there decides.
+        self.script('cp', 'printf "%s" >&2; printf "y%%.0s" {1..400} >&2; exit 1' % 'no such file ')
+        with self.assertRaises(PC.CacheError) as caught:
+            self.registry.fetch('reg/p:tag', self.dir, ['p.tar'])
+        self.assertEqual(str(caught.exception), 'docker cp failed: ' + 'y' * 400)
+        self.assertNotIsInstance(caught.exception, PC.MissingFile)
+        self.script('cp', 'printf "x%.0s" {1..600} >&2; echo " No Such File or directory" >&2; exit 1')
+        with self.assertRaisesRegex(PC.MissingFile, '^the image holds no /p.tar$'):
+            self.registry.fetch('reg/p:tag', self.dir, ['p.tar'])
+        self.script('cp', 'echo " COULD NOT FIND THE FILE /p.tar in container" >&2; exit 1')
+        with self.assertRaisesRegex(PC.MissingFile, '^the image holds no /p.tar$'):
+            self.registry.fetch('reg/p:tag', self.dir, ['p.tar'])
+
+    def test_digest_is_what_the_registry_serves_now_or_nothing(self):
+        digest = 'sha256:' + '4' * 64
+        for text, expected in (
+                ('echo \'{"Ref":"reg/p:tag","Descriptor":{"digest":"%s","size":480}}\'' % digest, digest),
+                ('echo \'[{"Descriptor":{"digest":"%s"}}]\'' % digest, None),   # an image index
+                ('echo \'{"Descriptor":{"digest":"sha256:abc"}}\'', None),
+                ('echo \'{"Descriptor":{"digest":7}}\'', None),
+                ('echo \'{"Descriptor":null}\'', None), ('echo \'{"digest":"%s"}\'' % digest, None),
+                ('echo "{"', None), ('true', None),
+                ('echo \'{"Descriptor":{"digest":"%s"}}\'; exit 1' % digest, None)):
+            self.script('manifest', text)
+            with self.subTest(text=text):
+                self.assertEqual(self.registry.digest('reg/p:tag'), expected)
+        self.assertEqual(self.calls()[-1], 'manifest inspect --verbose reg/p:tag')
+        for ref, insecure in (('localhost:5000/c/p:tag', True), ('127.0.0.1:5000/c/p:tag', True),
+                              ('ghcr.io/c/p:tag', False), ('localhost.example:5000/c/p:tag', False)):
+            self.registry.digest(ref)
+            self.assertEqual(self.calls()[-1], 'manifest inspect --verbose %s%s' % ('--insecure ' if insecure else '',
+                                                                                    ref))
+
+    def test_toolchain_probe_runs_offline_and_reads_the_first_layer(self):
+        self.script('run', 'echo "arch	amd64"; echo warning >&2')
+        self.assertEqual(self.registry.probe_toolchain('some:image', 'printf x'), 'arch\tamd64\n')
+        self.assertEqual(self.calls()[-1], 'run --rm --network none --entrypoint /bin/bash some:image -c printf x')
+        self.script('run', 'echo "no such image" >&2; exit 125')
+        with self.assertRaisesRegex(PC.CacheError, '^docker run failed: no such image$'):
+            self.registry.probe_toolchain('some:image', 'true')
+        one, two = 'sha256:' + '5' * 64, 'sha256:' + '6' * 64
+        for text, expected in (('echo \'["%s","%s"]\'' % (one, two), one), ('echo \'["%s"]\'' % two, two),
+                               ('echo "[]"', None), ('echo null', None), ('echo \'"%s"\'' % one, None),
+                               ('echo "[7]"', None), ('echo "{"', None), ('true', None),
+                               ('echo \'["%s"]\'; exit 1' % one, None), ('echo \'["%s"]\'; kill -9 $$' % one, None)):
+            self.script('image', text)
+            with self.subTest(text=text):
+                self.assertEqual(self.registry.base_layer('some:image'), expected)
+        self.assertEqual(self.calls()[-1], 'image inspect --format {{json .RootFS.Layers}} some:image')
+
+    def test_adopt_adds_one_layer_to_a_local_image_and_pushes_it(self):
+        (self.context / 'meta.json').write_text('{}')
+        self.script('create', 'echo "  abc123  "')
+        self.registry.adopt('reg/p:old', 'reg/p:new', self.context, ['meta.json', 'p.tar'],
+                            {'z.label': 'a "quoted" value', 'a.label': 'new'})
+        self.assertEqual(self.calls(), [
+            'create reg/p:old /nonexistent', 'cp %s/meta.json abc123:/meta.json' % self.context,
+            'cp %s/p.tar abc123:/p.tar' % self.context,
+            'commit --change LABEL "a.label"="new" --change LABEL "z.label"="a \\"quoted\\" value" abc123 reg/p:new',
+            'rm -f abc123', 'push -q reg/p:new', 'rmi reg/p:new'])
+        for failing, expected in (('create', ['create']), ('cp', ['create', 'cp', 'rm']),
+                                  ('commit', ['create', 'cp', 'cp', 'commit', 'rm']),
+                                  ('push', ['create', 'cp', 'cp', 'commit', 'rm', 'push', 'rmi'])):
+            self.script(failing, 'echo broken >&2; exit 1')
+            (self.dir / 'calls').unlink()
+            with self.subTest(failing=failing), self.assertRaisesRegex(
+                    PC.CacheError, '^docker %s failed: broken$' % failing):
+                self.registry.adopt('reg/p:old', 'reg/p:new', self.context, ['meta.json', 'p.tar'], {})
+            self.assertEqual([call.split()[0] for call in self.calls()], expected)
+            (self.dir / ('script-' + failing)).unlink()
+        self.script('rm', 'exit 1')
+        self.script('rmi', 'exit 1')
+        self.registry.adopt('reg/p:old', 'reg/p:new', self.context, [], {})  # cleaning up may fail
+        self.assertEqual(self.calls()[-4:], ['commit  reg/p:new', 'rm -f ', 'push -q reg/p:new', 'rmi reg/p:new'])
+
     def test_fetch_cleans_up_whatever_fails(self):
-        for failing, expected in (('image', ['pull', 'image', 'rmi']), ('create', ['pull', 'image', 'create', 'rmi']),
-                                  ('cp', ['pull', 'image', 'create', 'cp', 'rm', 'rmi'])):
+        for failing, expected in (('image', ['pull', 'image', 'rmi']),
+                                  ('create', ['pull', 'image', 'image', 'create', 'rmi']),
+                                  ('cp', ['pull', 'image', 'image', 'create', 'cp', 'rm', 'rmi'])):
             self.script(failing, 'echo broken >&2; exit 1')
             (self.dir / 'calls').unlink(missing_ok=True)
             with self.subTest(failing=failing), self.assertRaisesRegex(
@@ -3047,7 +3431,7 @@ exit 0
         # Cleaning up may fail; the result still counts.
         self.script('rm', 'exit 1')
         self.script('rmi', 'exit 1')
-        self.assertEqual(self.registry.fetch('reg/p:tag', self.dir, []), {})
+        self.assertEqual(self.registry.fetch('reg/p:tag', self.dir, []), ({}, None))
         self.registry.publish('reg/p:tag', self.context, ['p.tar'], {})
 
     def test_publish_writes_one_flat_layer_with_quoted_labels(self):
@@ -3164,7 +3548,7 @@ class MoreDetails(ServiceCase):
     def test_bundle_identity_is_exact_in_both_directions(self):
         key, tar, files = 'b' * 64, 'c' * 64, 'd' * 64
         good = dict(name='mm', key=key, root='/r',
-                    meta={'schema': 1, 'provider': 'mm', 'key': key, 'root': '/r', 'tar_sha256': tar,
+                    meta={'schema': 2, 'provider': 'mm', 'key': key, 'root': '/r', 'tar_sha256': tar,
                           'files_sha256': files, 'prerequisite_markers': {}},
                     status={'stage': 'mm', 'status': 'ok'},
                     labels={'dev.uds.takx.provider': 'mm', 'dev.uds.takx.key': key, 'dev.uds.takx.tar-sha256': tar},
@@ -3202,7 +3586,7 @@ class MoreDetails(ServiceCase):
                           'mm: bundled status is not an ok status of this provider'))
         for other in ('/', '/q', '/s', '/r/', '/r2', ''):
             cases.append((with_meta(root=other), 'mm: bundle was built under another work root'))
-        for other in (0, 2, '1', None, 1.5):
+        for other in (0, 1, 3, '2', None, 2.5):
             cases.append((with_meta(schema=other), 'mm: unsupported bundle schema'))
         for other in ('', None, 'x' * 64, tar.upper(), tar + '\n', tar[:-1]):
             cases.append((dict(recorded_tar_sha256=other, tar_sha256=other, labels=dict(
@@ -3222,12 +3606,12 @@ class MoreDetails(ServiceCase):
         self.make('base')
         self.service.push('base')
         self.set_aside('base')
-        before = snapshot(self.tmp.name)
+        before = settled(self.tmp.name)
         with mock.patch.object(PC.Path, 'write_text', side_effect=OSError(28, 'No space left on device')), \
                 self.assertRaises(OSError) as caught:
             self.service.restore('base')
         self.assertEqual(caught.exception.errno, 28)
-        self.assertEqual(snapshot(self.tmp.name), before)
+        self.assertEqual(settled(self.tmp.name), before)
 
     def test_scratch_that_cannot_be_removed_does_not_undo_the_result(self):
         self.make('base')
@@ -3266,9 +3650,94 @@ class Refusals(ServiceCase):
     def test_manifest_must_be_complete_and_typed(self):
         cases = (
             (lambda m: m.update(schema=0), '^unsupported manifest schema 0$'),
-            (lambda m: m.update(schema=2), '^unsupported manifest schema 2$'),
+            (lambda m: m.update(schema=1), '^unsupported manifest schema 1$'),
+            (lambda m: m.update(schema=3), '^unsupported manifest schema 3$'),
             (lambda m: m.pop('schema'), '^unsupported manifest schema None$'),
-            (lambda m: m.update(schema='1'), "^unsupported manifest schema '1'$"),
+            (lambda m: m.update(schema='2'), "^unsupported manifest schema '2'$"),
+            (lambda m: m.pop('toolchain'), '^manifest needs a toolchain with a base image pinned by digest$'),
+            (lambda m: m.update(toolchain=[]), '^manifest needs a toolchain with a base image pinned by digest$'),
+            (lambda m: m['toolchain'].pop('base'), '^manifest needs a toolchain with a base image pinned by digest$'),
+            (lambda m: m['toolchain'].update(base=7),
+             '^manifest needs a toolchain with a base image pinned by digest$'),
+            (lambda m: m['toolchain'].update(base='debian:trixie'),
+             '^manifest needs a toolchain with a base image pinned by digest$'),
+            (lambda m: m['toolchain'].update(base='debian@sha256:' + 'd' * 63),
+             '^manifest needs a toolchain with a base image pinned by digest$'),
+            (lambda m: m['toolchain'].update(base='debian@sha256:' + 'd' * 64 + '\n'),
+             '^manifest needs a toolchain with a base image pinned by digest$'),
+            (lambda m: m['toolchain'].update(base='@sha256:' + 'd' * 64),
+             '^manifest needs a toolchain with a base image pinned by digest$'),
+            (lambda m: m['toolchain'].update(base='a b@sha256:' + 'd' * 64),
+             '^manifest needs a toolchain with a base image pinned by digest$'),
+            (lambda m: m['toolchain'].update(base='debian@sha256:' + 'D' * 64),
+             '^manifest needs a toolchain with a base image pinned by digest$'),
+            (lambda m: m['toolchain'].pop('environment'),
+             '^toolchain environment must map variable names to one-line values$'),
+            (lambda m: m['toolchain'].update(environment=[]),
+             '^toolchain environment must map variable names to one-line values$'),
+            (lambda m: m['toolchain']['environment'].update({'1X': 'v'}),
+             '^toolchain environment must map variable names to one-line values$'),
+            (lambda m: m['toolchain']['environment'].update({'A B': 'v'}),
+             '^toolchain environment must map variable names to one-line values$'),
+            (lambda m: m['toolchain']['environment'].update({'A\n': 'v'}),
+             '^toolchain environment must map variable names to one-line values$'),
+            (lambda m: m['toolchain']['environment'].update({'': 'v'}),
+             '^toolchain environment must map variable names to one-line values$'),
+            (lambda m: m['toolchain']['environment'].update(TZ=7),
+             '^toolchain environment must map variable names to one-line values$'),
+            (lambda m: m['toolchain']['environment'].update(TZ='a\nb'),
+             '^toolchain environment must map variable names to one-line values$'),
+            (lambda m: m['toolchain']['environment'].update(TZ='a\tb'),
+             '^toolchain environment must map variable names to one-line values$'),
+            (lambda m: m['toolchain'].pop('gated'), '^toolchain needs its gated tools$'),
+            (lambda m: m['toolchain'].update(gated=[]), '^toolchain needs its gated tools$'),
+            (lambda m: m['toolchain'].update(gated={}), '^toolchain needs its gated tools$'),
+            (lambda m: m['toolchain'].update(gated={'gcc': {}}), '^toolchain needs its gated tools$'),
+            (lambda m: m['toolchain']['gated'].append('gcc'), "^malformed gated tool 'gcc'$"),
+            (lambda m: m['toolchain']['gated'][1].pop('expect'), '^malformed gated tool '),
+            (lambda m: m['toolchain']['gated'][1].update(extra=1), '^malformed gated tool '),
+            (lambda m: m['toolchain']['gated'][1].update(name=7), '^malformed gated tool '),
+            (lambda m: m['toolchain']['gated'][1].update(name='a b'), '^malformed gated tool '),
+            (lambda m: m['toolchain']['gated'][1].update(name='x;y'), '^malformed gated tool '),
+            (lambda m: m['toolchain']['gated'][1].update(name='-x'), '^malformed gated tool '),
+            (lambda m: m['toolchain']['gated'][1].update(name='x\n'), '^malformed gated tool '),
+            (lambda m: m['toolchain']['gated'][1].update(name=''), '^malformed gated tool '),
+            (lambda m: m['toolchain']['gated'][1].update(argv=[]), '^malformed gated tool '),
+            (lambda m: m['toolchain']['gated'][1].update(argv='/usr/bin/g++'), '^malformed gated tool '),
+            (lambda m: m['toolchain']['gated'][1].update(argv=['/usr/bin/g++', 7]), '^malformed gated tool '),
+            (lambda m: m['toolchain']['gated'][1].update(expect=''), '^malformed gated tool '),
+            (lambda m: m['toolchain']['gated'][1].update(expect='  '), '^malformed gated tool '),
+            (lambda m: m['toolchain']['gated'][1].update(expect=14), '^malformed gated tool '),
+            (lambda m: m['toolchain']['gated'][2].update(name='gcc'), '^gated tool gcc is listed twice$'),
+            (lambda m: m.pop('wrapper'), '^manifest needs a wrapper with env, mounts and workdir$'),
+            (lambda m: m.update(wrapper=[]), '^manifest needs a wrapper with env, mounts and workdir$'),
+            (lambda m: m['wrapper'].pop('env'), '^manifest needs a wrapper with env, mounts and workdir$'),
+            (lambda m: m['wrapper'].pop('mounts'), '^manifest needs a wrapper with env, mounts and workdir$'),
+            (lambda m: m['wrapper'].pop('workdir'), '^manifest needs a wrapper with env, mounts and workdir$'),
+            (lambda m: m['wrapper'].update(extra=1), '^manifest needs a wrapper with env, mounts and workdir$'),
+            (lambda m: m['wrapper'].update(env='HOME=/tmp'), '^manifest needs a wrapper with env, mounts and workdir$'),
+            (lambda m: m['wrapper'].update(env=[7]), '^manifest needs a wrapper with env, mounts and workdir$'),
+            (lambda m: m['wrapper'].update(mounts={}), '^manifest needs a wrapper with env, mounts and workdir$'),
+            (lambda m: m['wrapper'].update(mounts=[None]), '^manifest needs a wrapper with env, mounts and workdir$'),
+            (lambda m: m['wrapper'].update(workdir=['{root}']),
+             '^manifest needs a wrapper with env, mounts and workdir$'),
+            (lambda m: m['providers']['top'].update(verify=[]), '^top: verify needs argv and env$'),
+            (lambda m: m['providers']['top'].update(verify={'argv': ['x']}), '^top: verify needs argv and env$'),
+            (lambda m: m['providers']['top'].update(verify={'env': []}), '^top: verify needs argv and env$'),
+            (lambda m: m['providers']['top'].update(verify={'argv': [], 'env': []}),
+             '^top: verify needs argv and env$'),
+            (lambda m: m['providers']['top'].update(verify={'argv': 'x', 'env': []}),
+             '^top: verify needs argv and env$'),
+            (lambda m: m['providers']['top'].update(verify={'argv': ['x', 1], 'env': []}),
+             '^top: verify needs argv and env$'),
+            (lambda m: m['providers']['top'].update(verify={'argv': ['x'], 'env': 'A=1'}),
+             '^top: verify needs argv and env$'),
+            (lambda m: m['providers']['top'].update(verify={'argv': ['x'], 'env': [1]}),
+             '^top: verify needs argv and env$'),
+            (lambda m: m['providers']['top'].update(verify={'argv': ['x', '{nope}/y'], 'env': []}),
+             r"^top: verify names an unknown variable in '\{nope\}/y'$"),
+            (lambda m: m['providers']['top'].update(verify={'argv': ['x'], 'env': ['A={timestamp}']}),
+             r"^top: verify names an unknown variable in 'A=\{timestamp\}'$"),
             (lambda m: m.update(recipes=[]), '^manifest needs recipes and providers$'),
             (lambda m: m.pop('recipes'), '^manifest needs recipes and providers$'),
             (lambda m: m.update(providers=[]), '^manifest needs recipes and providers$'),
@@ -3320,11 +3789,26 @@ class Refusals(ServiceCase):
                 PC.validate_manifest(document)
         document = manifest()
         self.assertIs(PC.validate_manifest(document), document)
+        # Accepted: the names real tools have, an empty environment, a check that uses every kind of variable.
+        document['toolchain']['gated'] += [{'name': name, 'argv': ['x'], 'expect': 'v'}
+                                           for name in ('cmake-venv', 'c++', 'python3.13', 'a_b', 'X', '7z')]
+        document['toolchain']['environment'] = {'_A1': '', 'b': 'two words'}
+        document['wrapper'].update(env=[], mounts=[], workdir='')
+        document['providers']['top']['verify'] = {'argv': ['{jdk}/bin/java', '{root}/P/top', '{repo}/x'], 'env': []}
+        document['providers']['base']['verify'] = {'argv': ['x'], 'env': ['A={root}', 'B=1']}
+        self.assertIs(PC.validate_manifest(document), document)
+        # {root} and {repo} are known whatever the manifest's own variables are called.
+        document['variables'].update(root='/shadowed', repo='/shadowed')
+        self.assertIs(PC.validate_manifest(document), document)
+        # One token may use every known name.
+        document = manifest()
+        document['providers']['base']['verify'] = {'argv': ['{jdk}:{root}:{repo}'], 'env': []}
+        self.assertIs(PC.validate_manifest(document), document)
         for selector in ({'consumer': 'x'}, {'kind': 'x'}, {'path': 'x'}):
             document['providers']['top']['fetched'] = [selector]
             PC.validate_manifest(document)
         with self.assertRaises(PC.CacheError):
-            PC.ProviderCache(dict(manifest(), schema=2), None, None, 'reg')
+            PC.ProviderCache(dict(manifest(), schema=1), None, None, 'reg')
 
     def test_fetched_inputs_are_selected_exactly(self):
         records = [
@@ -3407,7 +3891,7 @@ class Refusals(ServiceCase):
             self.write_json('status/images.json', {'status': status, 'image_ids': {PC.TOOLCHAIN: TOOLCHAIN_ID}})
             with self.subTest(status=status), self.assertRaisesRegex(
                     PC.CacheError, r'^status/images\.json records no toolchain image id$'):
-                tree.recorded_toolchain()
+                tree.legacy_toolchain()
         for status in ('okay', 'zz', 'OK', 'failed', '', None):
             self.write_json('status/fetch.json', {'status': status, 'inputs': []})
             with self.subTest(status=status), self.assertRaisesRegex(
@@ -3441,25 +3925,25 @@ class Refusals(ServiceCase):
         self.set_aside('top')
         os.rename(self.root / 'P/base', self.root / 'P/real')
         os.symlink('real', self.root / 'P/base')
-        before = snapshot(self.tmp.name)
+        before = settled(self.tmp.name)
         with self.assertRaisesRegex(PC.CacheError, '^base: the provider directory already exists'):
             self.service.restore('base')
         with self.assertRaisesRegex(PC.Skip, '^a prerequisite provider is not ok here$'):
             self.service.restore('top')
         with self.assertRaisesRegex(PC.CacheError, '^base: status is ok but the completion marker is missing$'):
             self.service.push('base')
-        self.assertEqual(snapshot(self.tmp.name), before)
+        self.assertEqual(settled(self.tmp.name), before)
 
     def test_complete_directory_with_another_status_is_kept_and_not_called_ok(self):
         top = self.make('base')
         self.service.push('base')
         for status in ('running', 'zz', 'okay', 'failed', 'OK'):
             self.write_json('status/base.json', {'stage': 'base', 'status': status})
-            before = snapshot(self.tmp.name)
+            before = settled(self.tmp.name)
             with self.subTest(status=status), self.assertRaisesRegex(
                     PC.CacheError, '^base: the provider directory already exists and is never overwritten$'):
                 self.service.restore('base')
-            self.assertEqual(snapshot(self.tmp.name), before)
+            self.assertEqual(settled(self.tmp.name), before)
         self.assertTrue((top / 'complete.json').is_file())
 
     def test_prerequisite_with_another_status_is_not_ok(self):
@@ -3510,7 +3994,7 @@ class Refusals(ServiceCase):
         self.assertEqual(PC.build_service({'TAKX_PROTO_CACHE_TIMEOUT': '7'}).registry.timeout, 7)
         self.assertEqual(PC.build_service({}).registry.docker, 'docker')
         service = PC.build_service({'TAKX_PROTO_ROOT': 'relative/root', 'TAKX_PROTO_CACHE': 'reg.example/x'})
-        self.assertEqual((service.tree.root, service.prefix, service.override),
+        self.assertEqual((service.tree.root, service.prefix, service.legacy_id),
                          (Path(os.path.abspath('relative/root')), 'reg.example/x', ''))
         self.assertEqual(set(service.manifest['providers']), EXPECTED)
 
@@ -3529,7 +4013,7 @@ class Refusals(ServiceCase):
         self.assertEqual(caught.exception.code, 0)
         self.assertIn('Input-keyed cache of the desktop-prototype provider outputs.', out.getvalue())
         self.assertIn('usage: provider_cache.py ', out.getvalue())
-        self.assertIn('{key,restore,push,status}', out.getvalue())
+        self.assertIn('{key,restore,push,migrate,status,toolchain}', out.getvalue())
 
 class Archiving(ServiceCase):
     def test_archive_listing_names_every_kind_of_member(self):
@@ -3673,6 +4157,1412 @@ class Archiving(ServiceCase):
         self.assertEqual(rows['base'], {'name': 'base', 'key': service.key('base'), 'ref': service.ref('base'),
                                         'local': 'absent', 'remote': 'unknown', 'tar_sha256': '-'})
         self.assertEqual(self.messages, ['provider-cache: top has no key: no fetched input matches consumer=two'])
+
+
+class ToolchainCore(unittest.TestCase):
+    """The toolchain fingerprint as a pure function of the manifest block and the probe."""
+
+    def observed(self, **changes):
+        return PC.parse_probe(probe_text(**changes))
+
+    def test_probe_is_this_exact_program(self):
+        self.assertEqual(PC.probe_script(toolchain_block()), '\n'.join([
+            "set -u",
+            """printf 'arch\\t%s\\n' "$(dpkg --print-architecture)\"""",
+            """printf 'env\\t%s\\t%s\\n' JAVA_HOME "${JAVA_HOME-}\"""",
+            """printf 'env\\t%s\\t%s\\n' TZ "${TZ-}\"""",
+            """printf 'tool\\t%s\\t%s\\n' gcc "$(/usr/bin/gcc --version 2>&1 | head -n 3 | tr '\\n\\t' '  ')\"""",
+            """printf 'tool\\t%s\\t%s\\n' g++ "$(/usr/bin/g++ --version 2>&1 | head -n 3 | tr '\\n\\t' '  ')\"""",
+            """printf 'tool\\t%s\\t%s\\n' java "$(/jdk/bin/java -version 2>&1 | head -n 3 | tr '\\n\\t' '  ')\"""",
+            """printf 'packages\\t%s\\n' "$(dpkg-query -W -f '${Package} ${Version} ${Architecture}\\n'"""
+            """ | sha256sum | cut -d' ' -f1)\"""", '']))
+
+    def test_probe_reports_what_the_commands_print(self):
+        # The generated program, run by a real bash over stand-ins for dpkg and the gated tools.
+        with tempfile.TemporaryDirectory() as temporary:
+            tools = Path(temporary) / 'my tools'
+            tools.mkdir()
+            scripts = {
+                'dpkg': 'echo arm64',
+                'dpkg-query': r"""[ "$*" = '-W -f ${Package} ${Version} ${Architecture}\n' ] && """
+                              r"""printf 'a 1 all\nb 2 arm64\n'""",
+                'plain': 'echo "plain 1.2"',
+                'stderr': 'echo "to stderr 3.4" >&2',
+                'long': r"""printf 'one\ntwo\tx\nthree\nfour\n'""",
+                'args': r"""printf '<%s>' "$@"; echo""",
+                'fails': 'echo "broken"; exit 3',
+            }
+            for name, text in scripts.items():
+                (tools / name).write_text('#!/bin/bash\n' + text + '\n')
+                os.chmod(tools / name, 0o755)
+            block = {'base': toolchain_block()['base'], 'environment': {'SET': 'x', 'UNSET': '', 'EMPTY': ''},
+                     'gated': [{'name': name, 'argv': argv, 'expect': 'x'} for name, argv in (
+                         ('plain', [str(tools / 'plain')]), ('c++', [str(tools / 'stderr')]),
+                         ('long', [str(tools / 'long')]), ('fails', [str(tools / 'fails')]),
+                         ('args', [str(tools / 'args'), 'two words', "it's", '$HOME', '-v']),
+                         ('missing', [str(tools / 'no such tool')]))]}
+            done = subprocess.run(['/bin/bash', '-c', PC.probe_script(block)], stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, timeout=60, stdin=subprocess.DEVNULL,
+                                  env={'PATH': '%s:/usr/bin:/bin' % tools, 'SET': 'the value', 'EMPTY': ''})
+            self.assertEqual((done.returncode, done.stderr), (0, b''))
+            facts = PC.parse_probe(done.stdout.decode())
+            self.assertEqual(facts['arch'], 'arm64')
+            self.assertEqual(facts['environment'], {'SET': 'the value', 'UNSET': '', 'EMPTY': ''})
+            self.assertEqual(facts['packages'], hashlib.sha256(b'a 1 all\nb 2 arm64\n').hexdigest())
+            missing = facts['tools'].pop('missing')
+            self.assertIn('No such file or directory', missing)
+            self.assertEqual(facts['tools'], {
+                'plain': 'plain 1.2 ', 'c++': 'to stderr 3.4 ', 'long': 'one two x three ', 'fails': 'broken ',
+                'args': "<two words><it's><$HOME><-v> "})
+
+    def test_probe_output_is_parsed_strictly(self):
+        self.assertEqual(self.observed(), {
+            'arch': 'amd64', 'environment': {'JAVA_HOME': '/jdk', 'TZ': 'UTC'}, 'packages': 'e' * 64,
+            'tools': {'gcc': 'gcc (Debian 14.2.0-19) 14.2.0 Copyright (C) 2024 ',
+                      'g++': 'g++ (Debian 14.2.0-19) 14.2.0 Copyright (C) 2024 ',
+                      'java': 'openjdk version "17.0.21" OpenJDK Runtime Environment Temurin-17.0.21+9 '}})
+        self.assertEqual(PC.parse_probe(''), {'arch': None, 'environment': {}, 'tools': {}, 'packages': None})
+        self.assertEqual(PC.parse_probe('\n\narch\tarm64\n\n')['arch'], 'arm64')
+        self.assertEqual(PC.parse_probe('env\tA\t\nenv\tB\t b \ntool\tx\t\n'),
+                         {'arch': None, 'environment': {'A': '', 'B': ' b '}, 'tools': {'x': ''}, 'packages': None})
+        for line in ('arch', 'arch\tamd64\textra', 'env\tA', 'env\tA\tb\tc', 'tool\tgcc', 'tool\tgcc\ta\tb',
+                     'packages', 'packages\ta\tb', 'warning: something', ' arch\tamd64', 'ARCH\tamd64', '\t',
+                     'x' * 200):
+            with self.subTest(line=line), self.assertRaises(PC.CacheError) as caught:
+                PC.parse_probe('arch\tamd64\n' + line + '\n')
+            self.assertEqual(str(caught.exception),
+                             'unexpected line in the toolchain probe output: %r' % (line[:80],))
+
+    def test_fingerprint_document_names_what_the_toolchain_is(self):
+        document = PC.toolchain_document(toolchain_block(), self.observed(), BASE_LAYER)
+        self.assertEqual(document, {
+            'schema': 1, 'arch': 'amd64', 'base': 'sha256:' + 'd' * 64, 'base_layer': BASE_LAYER,
+            'environment': {'JAVA_HOME': '/jdk', 'TZ': 'UTC'},
+            'gated': [{'name': 'gcc', 'argv': ['/usr/bin/gcc', '--version'], 'expect': ' 14.2.0'},
+                      {'name': 'g++', 'argv': ['/usr/bin/g++', '--version'], 'expect': ' 14.2.0'},
+                      {'name': 'java', 'argv': ['/jdk/bin/java', '-version'], 'expect': 'Temurin-17.0.21+9'}]})
+        self.assertEqual(document, PC.expected_toolchain(toolchain_block(), 'amd64', BASE_LAYER))
+        self.assertEqual(PC.derive_key(document), FINGERPRINT)
+        # The base is named by the digest alone: what follows the last '@'.
+        odd = dict(toolchain_block(), base='user@registry.example/debian@sha256:' + 'd' * 64)
+        self.assertEqual(PC.expected_toolchain(odd, 'amd64', BASE_LAYER), document)
+        block = toolchain_block()
+        document['environment']['X'] = document['gated'][0]['argv'][0] = 'changed'
+        document['gated'][1]['name'] = 'changed'
+        self.assertEqual(block, toolchain_block())  # the document is a copy
+        # What the probe saw beside the gates is not in it: a rebuilt image is the same toolchain.
+        rebuilt = self.observed(gcc='tool\tgcc\tgcc (Debian 14.2.0-23+b1) 14.2.0 Copyright (C) 2025 ',
+                                packages='packages\t' + 'f' * 64)
+        self.assertEqual(PC.derive_key(PC.toolchain_document(toolchain_block(), rebuilt, BASE_LAYER)), FINGERPRINT)
+
+    def test_everything_the_toolchain_is_changes_the_fingerprint(self):
+        def edited(edit):
+            block = toolchain_block()
+            edit(block)
+            return fingerprint(block=block)
+        seen = {FINGERPRINT}
+        for what, value in (
+                ('architecture', fingerprint('arm64')),
+                ('first layer', fingerprint(layer=BASE_LAYER[:-1] + 'c')),
+                ('base digest', edited(lambda b: b.update(base=b['base'][:-1] + 'e'))),
+                ('environment value', edited(lambda b: b['environment'].update(TZ='Europe/Berlin'))),
+                ('environment variable added', edited(lambda b: b['environment'].update(LANG='C.UTF-8'))),
+                ('environment variable removed', edited(lambda b: b['environment'].pop('TZ'))),
+                ('gated version', edited(lambda b: b['gated'][0].update(expect=' 14.3.0'))),
+                ('gated command', edited(lambda b: b['gated'][0].update(argv=['/usr/local/bin/gcc', '--version']))),
+                ('gated name', edited(lambda b: b['gated'][0].update(name='cc'))),
+                ('gated tool added', edited(lambda b: b['gated'].append(
+                    {'name': 'make', 'argv': ['/usr/bin/make', '--version'], 'expect': 'GNU Make 4.4.1'}))),
+                ('gated tool removed', edited(lambda b: b['gated'].pop())),
+                ('gated order', edited(lambda b: b['gated'].reverse()))):
+            with self.subTest(what=what):
+                self.assertRegex(value, '^[0-9a-f]{64}$')
+                self.assertNotIn(value, seen)
+                seen.add(value)
+        # The registry host the base is pulled through is not what the base is.
+        self.assertEqual(edited(lambda b: b.update(base='mirror.example/library/debian@sha256:' + 'd' * 64)),
+                         FINGERPRINT)
+
+    def test_image_that_is_not_the_toolchain_has_no_fingerprint(self):
+        cases = (
+            (dict(arch='s390x'), BASE_LAYER,
+             "^the toolchain image reports architecture 's390x' \\(amd64 and arm64 only\\)$"),
+            (dict(arch='x86_64'), BASE_LAYER, "^the toolchain image reports architecture 'x86_64' "),
+            (dict(arch=''), BASE_LAYER, "^the toolchain image reports architecture '' "),
+            (dict(arch=None), BASE_LAYER, '^the toolchain image reports architecture None '),
+            ({}, None, '^the toolchain image names no first layer$'),
+            ({}, '', '^the toolchain image names no first layer$'),
+            ({}, 'b' * 64, '^the toolchain image names no first layer$'),
+            ({}, BASE_LAYER + '\n', '^the toolchain image names no first layer$'),
+            ({}, 7, '^the toolchain image names no first layer$'),
+            (dict(TZ='env\tTZ\tEurope/Berlin'), BASE_LAYER,
+             "^the toolchain image sets TZ to 'Europe/Berlin', not to 'UTC'$"),
+            (dict(TZ='env\tTZ\t'), BASE_LAYER, "^the toolchain image sets TZ to '', not to 'UTC'$"),
+            (dict(JAVA_HOME=None), BASE_LAYER, "^the toolchain image sets JAVA_HOME to None, not to '/jdk'$"),
+            (dict(gcc='tool\tgcc\tgcc (Debian 15.1.0-2) 15.1.0 '), BASE_LAYER,
+             "^gated tool gcc: wanted ' 14.2.0' in 'gcc \\(Debian 15.1.0-2\\) 15.1.0 '$"),
+            (dict(gcc='tool\tgcc\tgcc-14.2.0'), BASE_LAYER, "^gated tool gcc: wanted ' 14.2.0' in 'gcc-14.2.0'$"),
+            (dict(java='tool\tjava\t/bin/bash: line 7: /jdk/bin/java: No such file or directory '), BASE_LAYER,
+             "^gated tool java: wanted 'Temurin-17.0.21\\+9' in "),
+            (dict(java='tool\tjava\t'), BASE_LAYER, "^gated tool java: wanted 'Temurin-17.0.21\\+9' in ''$"),
+            (dict(**{'g++': None}), BASE_LAYER, "^gated tool g\\+\\+: wanted ' 14.2.0' in None$"),
+        )
+        for changes, layer, message in cases:
+            with self.subTest(changes=changes, layer=layer), self.assertRaisesRegex(PC.CacheError, message):
+                PC.toolchain_document(toolchain_block(), self.observed(**changes), layer)
+        for arch in ('amd64', 'arm64'):
+            self.assertEqual(PC.toolchain_document(toolchain_block(), self.observed(arch=arch), BASE_LAYER)['arch'],
+                             arch)
+        # The first failing gate is the one named.
+        both = self.observed(gcc='tool\tgcc\tgcc 13', java='tool\tjava\tjava 21')
+        with self.assertRaisesRegex(PC.CacheError, '^gated tool gcc: '):
+            PC.toolchain_document(toolchain_block(), both, BASE_LAYER)
+
+    def test_record_counts_only_while_it_describes_this_manifest(self):
+        good = toolchain_record()
+        self.assertEqual(PC.recorded_toolchain(toolchain_block(), good), (FINGERPRINT, 'amd64', TOOLCHAIN_ID))
+        self.assertEqual(PC.recorded_toolchain(toolchain_block(), toolchain_record('sha256:x', 'arm64')),
+                         (fingerprint('arm64'), 'arm64', 'sha256:x'))
+        # Fields that are no part of the fingerprint may be anything.
+        loose = toolchain_record(observed=None, packages_sha256=None, outputs_before=7, notes=None, extra=1)
+        self.assertEqual(PC.recorded_toolchain(toolchain_block(), loose), (FINGERPRINT, 'amd64', TOOLCHAIN_ID))
+
+        def document(**fields):
+            value = dict(good['document'], **fields)
+            return dict(good, document=value, fingerprint=PC.derive_key(value))
+        other = toolchain_block()
+        other['gated'][0]['expect'] = ' 14.3.0'
+        bad = {
+            'not a record': [good], 'no record': None, 'a string': json.dumps(good),
+            'status failed': dict(good, status='failed'), 'no status': {k: v for k, v in good.items() if k != 'status'},
+            'status OK': dict(good, status='OK'),
+            'no document': {k: v for k, v in good.items() if k != 'document'},
+            'document is a list': dict(good, document=[]),
+            'no image id': {k: v for k, v in good.items() if k != 'image_id'},
+            'empty image id': dict(good, image_id=''), 'image id is a number': dict(good, image_id=7),
+            'fingerprint of something else': dict(good, fingerprint=fingerprint('arm64')),
+            'no fingerprint': {k: v for k, v in good.items() if k != 'fingerprint'},
+            'fingerprint with a newline': dict(good, fingerprint=FINGERPRINT + '\n'),
+            'unknown architecture': document(arch='s390x'), 'no architecture': document(arch=None),
+            'layer that is no digest': document(base_layer='b' * 64), 'no layer': document(base_layer=None),
+            'layer is a number': document(base_layer=7),
+            'another base': document(base='sha256:' + 'e' * 64),
+            'another environment': document(environment={'JAVA_HOME': '/jdk', 'TZ': 'CET'}),
+            'another gate': document(gated=other['gated']),
+            'one gate fewer': document(gated=good['document']['gated'][:-1]),
+            'another document schema': document(schema=2),
+            'an extra field': document(note='x'),
+        }
+        for what, record in bad.items():
+            with self.subTest(what=what):
+                self.assertIsNone(PC.recorded_toolchain(toolchain_block(), record))
+        # The record of another manifest's toolchain is no record of this one, and the other way round.
+        self.assertIsNone(PC.recorded_toolchain(other, good))
+        self.assertEqual(PC.recorded_toolchain(other, toolchain_record(block=other))[0], fingerprint(block=other))
+
+    def test_templates_are_rendered_from_known_names_only(self):
+        values = {'root': '/r', 'repo': '/src', 'jdk': '/jdk'}
+        self.assertEqual(PC.render('{root}/P/x', values), '/r/P/x')
+        self.assertEqual(PC.render('A={repo}:{root}:{repo}', values), 'A=/src:/r:/src')
+        self.assertEqual(PC.render('plain', values), 'plain')
+        self.assertEqual(PC.render('', values), '')
+        self.assertEqual(PC.render('{Root} {a1} {} ${HOME}', values), '{Root} {a1} {} ${HOME}')  # no placeholders
+        for token, name in (('{nope}', 'nope'), ('{root}/{timestamp}', 'timestamp')):
+            with self.subTest(token=token), self.assertRaises(PC.CacheError) as caught:
+                PC.render(token, values)
+            self.assertEqual(str(caught.exception), 'unknown variable {%s} in %r' % (name, token))
+
+
+class ReplaceDecision(unittest.TestCase):
+    """decide_replace: the one case in which a cached entry may be overwritten."""
+
+    KEY, DIGEST, OTHER = 'a' * 64, 'sha256:' + '1' * 64, 'sha256:' + '2' * 64
+    PRESENT = 'already cached under this key'
+
+    def note(self, **changes):
+        value = {'name': 'top', 'key': self.KEY, 'digest': self.DIGEST, 'kind': 'bundle', 'markers': {'base': 'm' * 64},
+                 'reason': 'top: archive digest differs from the recorded one', 'at': 1}
+        value.update(changes)
+        return {key: item for key, item in value.items() if item is not ...}
+
+    def decide(self, note, remote=..., markers=..., cached=True, key=None):
+        return PC.decide_replace(note, key or self.KEY, self.DIGEST if remote is ... else remote,
+                                 {'base': 'm' * 64} if markers is ... else markers, cached)
+
+    def test_entry_refused_for_what_it_is_is_replaced_while_the_tag_still_names_it(self):
+        self.assertEqual(self.decide(self.note()), (
+            'replace', 'restore refused the cached entry (top: archive digest differs from the recorded one)'))
+        # Its prerequisites play no part.
+        for markers, cached in (({}, False), (None, False), ({'base': 'x' * 64}, True)):
+            self.assertEqual(self.decide(self.note(), markers=markers, cached=cached)[0], 'replace')
+
+    def test_without_a_usable_note_the_entry_stays(self):
+        for what, note in (('no note', None), ('a list', [self.note()]), ('a string', 'bundle'),
+                           ('note for another key', self.note(key='b' * 64)), ('no key', self.note(key=...)),
+                           ('no digest', self.note(digest=...)), ('digest is null', self.note(digest=None)),
+                           ('digest is a number', self.note(digest=7)), ('short digest', self.note(digest='sha256:1')),
+                           ('bare hex', self.note(digest='1' * 64)),
+                           ('digest with a newline', self.note(digest=self.DIGEST + '\n')),
+                           ('unknown kind', self.note(kind='other')), ('no kind', self.note(kind=...))):
+            with self.subTest(what=what):
+                usable = isinstance(note, dict) and isinstance(note.get('digest'), str)
+                remote = note['digest'] if usable else self.DIGEST
+                self.assertEqual(self.decide(note, remote=remote), ('keep', self.PRESENT))
+        self.assertEqual(self.decide(self.note(), key='b' * 64), ('keep', self.PRESENT))
+
+    def test_entry_that_is_not_the_refused_one_stays_and_the_note_goes(self):
+        self.assertEqual(self.decide(self.note(), remote=self.OTHER),
+                         ('forget', self.PRESENT + '; it is not the entry that was refused here'))
+        self.assertEqual(self.decide(self.note(), remote='sha256:' + '0' * 64),
+                         ('forget', self.PRESENT + '; it is not the entry that was refused here'))
+        self.assertEqual(self.decide(self.note(digest=self.OTHER), remote=self.DIGEST)[0], 'forget')
+        self.assertEqual(self.decide(self.note(kind='prerequisites'), remote=self.OTHER)[0], 'forget')
+        # Not knowing what the tag names now is no licence to overwrite; the note stays for the next push.
+        for remote in (None, '', self.DIGEST[:-1], self.DIGEST + '\n', 7, self.DIGEST.upper()):
+            with self.subTest(remote=remote):
+                self.assertEqual(self.decide(self.note(), remote=remote), (
+                    'keep', self.PRESENT + '; the registry did not name the entry, so the one refused here is not '
+                                           'replaced'))
+
+    def test_entry_bound_to_other_prerequisites_is_replaced_only_when_the_local_ones_are_the_cached_ones(self):
+        note = self.note(kind='prerequisites')
+        self.assertEqual(self.decide(note), (
+            'replace', 'the cached entry is bound to other prerequisite outputs than the cached ones'))
+        self.assertEqual(self.decide(note, cached=False), (
+            'keep', self.PRESENT + '; it is bound to other prerequisite outputs, and the ones here are not the '
+                                   'cached ones, so it may be usable elsewhere and is not replaced'))
+        for markers in ({'base': 'x' * 64}, {}, None, {'base': 'm' * 64, 'more': 'm' * 64}):
+            with self.subTest(markers=markers):
+                self.assertEqual(self.decide(note, markers=markers), (
+                    'forget', self.PRESENT + '; the prerequisites here changed since it was refused'))
+                self.assertEqual(self.decide(note, markers=markers, cached=False)[0], 'forget')
+
+
+class Toolchain(ServiceCase):
+    """The service side of the fingerprint: probing, the record, the local check."""
+
+    def record(self):
+        return json.loads((self.root / 'status/toolchain.json').read_text())
+
+    def test_first_use_probes_the_local_image_and_records_what_it_is(self):
+        os.unlink(self.root / 'status/toolchain.json')
+        with mock.patch.object(PC.time, 'time', return_value=1000.5):
+            self.assertEqual(self.service.toolchain(), (FINGERPRINT, 'amd64'))
+        self.assertEqual(self.registry.calls, [('image_id', PC.TOOLCHAIN), ('probe_toolchain', PC.TOOLCHAIN)])
+        self.assertEqual(self.registry.script, PC.probe_script(toolchain_block()))
+        self.assertEqual(self.record(), {
+            'stage': 'toolchain', 'status': 'ok', 'outputs': [PC.TOOLCHAIN], 'seconds': 0,
+            'notes': 'toolchain fingerprint of the provider cache keys (provider_cache.py toolchain); observed '
+                     'and packages_sha256 are what the probe saw and are not part of it',
+            'image': PC.TOOLCHAIN, 'image_id': TOOLCHAIN_ID, 'fingerprint': FINGERPRINT,
+            'document': PC.expected_toolchain(toolchain_block(), 'amd64', BASE_LAYER),
+            'observed': PC.parse_probe(probe_text())['tools'], 'packages_sha256': 'e' * 64, 'outputs_before': None})
+        self.assertEqual(self.messages, ['provider-cache: toolchain fingerprint %s (amd64, image %s)'
+                                         % (FINGERPRINT, TOOLCHAIN_ID)])
+        self.assertEqual(sorted(os.listdir(self.root / 'status')), ['fetch.json', 'images.json', 'toolchain.json'])
+        # From then on a key asks docker nothing, in this process or another.
+        del self.registry.calls[:]
+        self.assertEqual(self.service.key('base'), self.new_service().key('base'))
+        self.assertEqual(self.new_service().toolchain(), (FINGERPRINT, 'amd64'))
+        self.assertEqual(self.registry.calls, [])
+        self.assertEqual(PC.recorded_toolchain(toolchain_block(), self.record()), (FINGERPRINT, 'amd64', TOOLCHAIN_ID))
+
+    def test_the_architecture_of_the_image_is_the_architecture_of_the_keys(self):
+        amd64 = self.service.explain('base')
+        os.unlink(self.root / 'status/toolchain.json')
+        self.registry.probe_output = probe_text('arm64')
+        service = self.new_service()
+        self.assertEqual(service.toolchain(), (fingerprint('arm64'), 'arm64'))
+        arm64 = service.explain('base')
+        self.assertEqual((arm64['arch'], arm64['toolchain']), ('arm64', fingerprint('arm64')))
+        self.assertEqual({field for field in amd64 if amd64[field] != arm64[field]}, {'arch', 'toolchain'})
+        self.assertNotEqual(service.key('base'), self.service.key('base'))
+
+    def test_record_that_does_not_describe_the_manifest_is_not_used(self):
+        other = toolchain_block()
+        other['gated'][0]['expect'] = ' 14.3.0'
+        stale = toolchain_record(block=other)
+        cases = {'record of another manifest': stale, 'failed record': toolchain_record(status='failed'),
+                 'record without image id': toolchain_record(image_id='')}
+        for what, record in cases.items():
+            self.write_json('status/toolchain.json', record)
+            self.registry.docker = False
+            del self.registry.calls[:]
+            with self.subTest(what=what, docker=False), self.assertRaisesRegex(
+                    PC.CacheError, r'^no toolchain fingerprint is recorded for this manifest \(status/toolchain\.json\)'
+                                   r' '
+                                   r'and docker is not available to probe takx-desktop-proto:toolchain$'):
+                self.new_service().key('base')
+            self.assertEqual(self.registry.calls, [])
+            self.registry.docker = True
+        # With docker the image is probed. A record that named another fingerprint is not replaced silently.
+        self.write_json('status/toolchain.json', stale)
+        with self.assertRaisesRegex(PC.CacheError, 'has toolchain fingerprint %s, not the recorded %s; '
+                                    % (FINGERPRINT, stale['fingerprint'])):
+            self.new_service().key('base')
+        self.assertEqual(self.record(), stale)
+        # One that named this fingerprint (or none) is brought up to date.
+        for what, record in (('failed record', cases['failed record']), ('no fingerprint', {'status': 'ok'}),
+                             ('record without image id', cases['record without image id'])):
+            self.write_json('status/toolchain.json', record)
+            with self.subTest(what=what):
+                self.assertEqual(self.new_service().toolchain(), (FINGERPRINT, 'amd64'))
+                self.assertEqual(self.record()['image_id'], TOOLCHAIN_ID)
+                self.assertEqual(self.record()['status'], 'ok')
+        for text in ('{not json', '[]', '"text"', ''):
+            (self.root / 'status/toolchain.json').write_text(text)
+            with self.subTest(text=text):
+                self.assertEqual(self.new_service().toolchain(), (FINGERPRINT, 'amd64'))
+                self.assertEqual(self.record()['fingerprint'], FINGERPRINT)
+
+    def test_image_that_fails_a_gate_is_never_recorded(self):
+        os.unlink(self.root / 'status/toolchain.json')
+        for what, change, message in (
+                ('gate', lambda: setattr(self.registry, 'probe_output', probe_text(gcc='tool\tgcc\tgcc 15.1.0 ')),
+                 "^gated tool gcc: wanted ' 14.2.0' in 'gcc 15.1.0 '$"),
+                ('environment', lambda: setattr(self.registry, 'probe_output', probe_text(TZ='env\tTZ\tCET')),
+                 "^the toolchain image sets TZ to 'CET', not to 'UTC'$"),
+                ('architecture', lambda: setattr(self.registry, 'probe_output', probe_text('riscv64')),
+                 "^the toolchain image reports architecture 'riscv64'"),
+                ('probe output', lambda: setattr(self.registry, 'probe_output', 'bash: dpkg: command not found\n'),
+                 '^unexpected line in the toolchain probe output'),
+                ('layer', lambda: setattr(self.registry, 'layer', None), '^the toolchain image names no first layer$'),
+                ('no image', lambda: setattr(self.registry, 'toolchain', None),
+                 '^there is no local takx-desktop-proto:toolchain image to fingerprint$')):
+            self.registry.probe_output, self.registry.layer, self.registry.toolchain = (
+                probe_text(), BASE_LAYER, TOOLCHAIN_ID)
+            change()
+            with self.subTest(what=what), self.assertRaisesRegex(PC.CacheError, message):
+                self.new_service().key('base')
+            self.assertFalse((self.root / 'status/toolchain.json').exists())
+        self.assertEqual(self.messages, [])
+
+    def test_record_command_accepts_another_toolchain_and_holds_back_what_was_built_before(self):
+        self.make('base')
+        old_key = self.service.key('base')
+        self.registry.toolchain, self.registry.layer = 'sha256:' + '9' * 64, 'sha256:' + 'c' * 64
+        new = fingerprint(layer='sha256:' + 'c' * 64)
+        out = io.StringIO()
+        service = self.new_service()
+        with mock.patch.object(PC.time, 'time', return_value=5000.9):
+            self.assertEqual(PC.main(['toolchain', '--record'], service=service, out=out), 0)
+        self.assertEqual(out.getvalue(), new + '\tamd64\n')
+        record = self.record()
+        self.assertEqual((record['fingerprint'], record['image_id'], record['outputs_before']),
+                         (new, 'sha256:' + '9' * 64, 5001))
+        new_key = self.new_service().key('base')
+        self.assertNotEqual(new_key, old_key)
+        status = self.root / 'status/base.json'
+        for written in (5000.999, 4000, 0):  # ok before the change: not an output of the toolchain the key names
+            os.utime(status, (written, written))
+            with self.subTest(written=written), self.assertRaisesRegex(
+                    PC.CacheError, '^base: it was ok before the toolchain record was replaced, so it is not an '
+                                   'output of the toolchain its key would name; rebuild it or restore it$'):
+                self.new_service().push('base')
+        self.assertEqual((self.registry.published, self.leftovers()), (0, []))
+        for written in (5001, 5001.5, 9000):  # built or restored since
+            os.utime(status, (written, written))
+            self.registry.images.clear()
+            with self.subTest(written=written):
+                self.assertEqual(self.new_service().push('base'), 'reg.example/cache/base:' + new_key)
+        # Recording the same toolchain again, also as another image, changes neither the keys nor that time.
+        self.registry.toolchain = 'sha256:' + '8' * 64
+        for argv in (['toolchain', '--record'], ['toolchain']):
+            out = io.StringIO()
+            with mock.patch.object(PC.time, 'time', return_value=7000.0):
+                self.assertEqual(PC.main(argv, service=self.new_service(), out=out), 0)
+            self.assertEqual(out.getvalue(), new + '\tamd64\n')
+        self.assertEqual((self.record()['outputs_before'], self.record()['image_id']), (5001, 'sha256:' + '8' * 64))
+        self.new_service().push('base')
+        self.assertEqual((self.record()['outputs_before'], self.record()['image_id']), (5001, 'sha256:' + '8' * 64))
+        # Without --record the command only reads; it never accepts another toolchain.
+        self.write_json('status/toolchain.json', toolchain_record())
+        del self.registry.calls[:]
+        out = io.StringIO()
+        self.assertEqual(PC.main(['toolchain'], service=self.new_service(), out=out), 0)
+        self.assertEqual((out.getvalue(), self.registry.calls), (FINGERPRINT + '\tamd64\n', []))
+        self.assertEqual(self.record(), toolchain_record())
+
+    def test_record_command_always_probes_and_reports_failures(self):
+        out = io.StringIO()
+        self.assertEqual(PC.main(['toolchain', '--record'], service=self.service, out=out), 0)
+        self.assertEqual(self.registry.calls, [('image_id', PC.TOOLCHAIN), ('probe_toolchain', PC.TOOLCHAIN)])
+        self.assertEqual(self.record()['outputs_before'], None)  # the same toolchain: nothing is held back
+        self.registry.docker = False
+        with mock.patch.object(PC.sys, 'stderr', io.StringIO()) as errors:
+            self.assertEqual(PC.main(['toolchain', '--record'], service=self.new_service(), out=out), 1)
+        self.assertIn('docker is not available', errors.getvalue())
+        out = io.StringIO()
+        self.assertEqual(PC.main(['toolchain', '--probe-script'], service=self.new_service(), out=out), 0)
+        self.assertEqual(out.getvalue(), PC.probe_script(toolchain_block()))
+
+    def test_recorded_image_id_is_accepted_only_when_it_is_exactly_the_local_one(self):
+        self.assertEqual(self.service.toolchain(local=True), (FINGERPRINT, 'amd64'))
+        self.assertEqual(self.registry.calls, [('image_id', PC.TOOLCHAIN)])
+        self.assertEqual(self.service._check_toolchain(), (FINGERPRINT, 'amd64'))
+        self.registry.layer = 'sha256:' + 'c' * 64   # what a probe would find: another toolchain
+        for recorded in ('sha256:' + '0' * 64, 'sha256:' + 'f' * 64, TOOLCHAIN_ID + '0', TOOLCHAIN_ID[:-1]):
+            self.write_json('status/toolchain.json', toolchain_record(image_id=recorded))
+            del self.registry.calls[:]
+            with self.subTest(recorded=recorded), self.assertRaisesRegex(PC.CacheError, 'has toolchain fingerprint'):
+                self.new_service().toolchain(local=True)
+            self.assertEqual(self.registry.calls, [('image_id', PC.TOOLCHAIN), ('probe_toolchain', PC.TOOLCHAIN)])
+
+    def test_keys_derived_from_another_record_are_dropped_by_the_local_check(self):
+        self.make('base')
+        amd64 = self.service.key('base')
+        # Another process replaced the record while this one already held keys.
+        self.write_json('status/toolchain.json', toolchain_record(arch='arm64'))
+        ref = self.service.push('base')
+        arm64 = self.new_service().key('base')
+        self.assertNotEqual(arm64, amd64)
+        self.assertEqual(ref, 'reg.example/cache/base:' + arm64)
+        self.assertEqual(json.loads(self.registry.images[ref][1]['meta.json'])['key_inputs']['arch'], 'arm64')
+        self.assertEqual(self.service.key('base'), arm64)
+
+    def test_work_tree_reads_and_writes_the_record(self):
+        tree = self.service.tree
+        self.assertEqual(tree.toolchain_record(), toolchain_record())
+        tree.record_toolchain({'b': 1, 'a': [2]})
+        self.assertEqual((self.root / 'status/toolchain.json').read_text(), '{\n "a": [\n  2\n ],\n "b": 1\n}\n')
+        self.assertEqual(sorted(os.listdir(self.root / 'status')), ['fetch.json', 'images.json', 'toolchain.json'])
+        for text in ('[1]', '"x"', '7', 'null', '{', ''):
+            (self.root / 'status/toolchain.json').write_text(text)
+            self.assertIsNone(tree.toolchain_record(), text)
+        os.unlink(self.root / 'status/toolchain.json')
+        self.assertIsNone(tree.toolchain_record())
+        shutil.rmtree(self.root / 'status')
+        tree.record_toolchain({'a': 1})  # the directory is made when needed
+        self.assertEqual(tree.toolchain_record(), {'a': 1})
+        with mock.patch.object(PC.os, 'replace', side_effect=OSError(28, 'No space left on device')), \
+                self.assertRaises(OSError):
+            tree.record_toolchain({'a': 2})
+        self.assertEqual(os.listdir(self.root / 'status'), ['toolchain.json'])  # no temporary file stays
+        self.assertEqual(tree.toolchain_record(), {'a': 1})
+
+    def test_work_tree_reads_the_status_of_a_provider(self):
+        tree = self.service.tree
+        self.assertEqual((tree.status_json('base'), tree.status_time('base')), ({}, None))
+        self.make('base')
+        self.assertEqual(tree.status_json('base')['status'], 'ok')
+        os.utime(self.root / 'status/base.json', (10, 1234.5))
+        self.assertEqual(tree.status_time('base'), 1234.5)
+        for text in ('[1]', '"ok"', '{', ''):
+            (self.root / 'status/base.json').write_text(text)
+            self.assertEqual(tree.status_json('base'), {}, text)
+
+
+class Replace(ServiceCase):
+    """An entry restore had to refuse is replaced by the push after the rebuild; a healthy one never is."""
+
+    def setUp(self):
+        super().setUp()
+        self.make('base')
+        self.ref = self.service.push('base')
+        self.digest = self.registry.digests[self.ref]
+        self.set_aside('base')
+        del self.registry.calls[:]
+        del self.messages[:]
+
+    def notes(self):
+        path = self.root / 'cache-state/refused.json'
+        return json.loads(path.read_text()) if path.exists() else None
+
+    def corrupt(self, ref=None, name='base'):
+        """One changed byte in the stored archive; the registry digest stays, as for a bad upload."""
+        content = self.registry.images[ref or self.ref][1]
+        data = bytearray(content[name + '.tar'])
+        data[len(data) // 2] ^= 1
+        content[name + '.tar'] = bytes(data)
+
+    def refuse(self, name='base', error=PC.CacheError):
+        with self.assertRaises(error) as caught:
+            self.service.restore(name)
+        self.assertFalse(os.path.lexists(self.root / 'P' / name))
+        self.assertEqual(self.leftovers(), [])
+        return str(caught.exception)
+
+    def test_refused_entry_is_replaced_by_the_push_after_the_rebuild(self):
+        self.corrupt()
+        with mock.patch.object(PC.time, 'time', return_value=1234.9):
+            message = self.refuse()
+        self.assertEqual(message, 'base: archive digest differs from the recorded one')
+        key = self.service.key('base')
+        self.assertEqual(self.notes(), {self.ref: {'name': 'base', 'key': key, 'digest': self.digest, 'kind': 'bundle',
+                                                  'markers': {}, 'reason': message, 'at': 1234}})
+        self.assertEqual(self.registry.published, 1)
+        rebuilt = self.make('base')
+        good = snapshot(rebuilt)
+        del self.registry.calls[:]
+        self.assertEqual(self.service.push('base'), self.ref)
+        self.assertEqual(self.registry.calls, [('image_id', PC.TOOLCHAIN), ('probe', self.ref), ('digest', self.ref),
+                                               ('publish', self.ref), ('probe', self.ref), ('digest', self.ref)])
+        self.assertEqual(self.registry.published, 2)
+        self.assertNotEqual(self.registry.digests[self.ref], self.digest)
+        self.assertIsNone(self.notes() or None)   # the note is used up
+        tar_sha = hashlib.sha256(self.registry.images[self.ref][1]['base.tar']).hexdigest()
+        self.assertEqual(self.messages, [
+            'provider-cache: base: restore refused the cached entry (%s); replacing %s@%s'
+            % (message, self.ref, self.digest),
+            'provider-cache: replaced %s (9 entries, tar sha256 %s)' % (self.ref, tar_sha)])
+        self.assertEqual(self.service.tree.pushed()[('base', key)], tar_sha)
+        # The next machine gets the rebuilt output, and a push there leaves it alone.
+        self.set_aside('base')
+        self.service.restore('base')
+        self.assertEqual(snapshot(rebuilt), good)
+        del self.registry.calls[:]
+        self.service.push('base')
+        self.assertEqual(self.registry.calls, [('image_id', PC.TOOLCHAIN), ('probe', self.ref)])
+        self.assertEqual(self.registry.published, 2)
+
+    def test_every_judgement_of_the_bundle_is_noted_with_the_digest_that_was_pulled(self):
+        labels, content = self.registry.images[self.ref]
+        stored = dict(labels), dict(content)
+
+        def meta(**fields):
+            content['meta.json'] = json.dumps(dict(json.loads(stored[1]['meta.json']), **fields)).encode()
+        cases = (
+            ('archive bytes', self.corrupt, 'archive digest differs from the recorded one'),
+            ('label', lambda: labels.update({'dev.uds.takx.key': '0' * 64}), 'image is labelled with another key'),
+            ('metadata', lambda: meta(root='/elsewhere'), 'bundle was built under another work root'),
+            ('schema of the past', lambda: meta(schema=1), 'unsupported bundle schema'),
+            ('marker digest', lambda: meta(marker_sha256='0' * 64), 'completion marker differs'),
+            ('metadata that is no JSON', lambda: content.update({'meta.json': b'{'}), 'not JSON'),
+            ('file manifest', lambda: content.update({'files.json': b'{}'}), 'file manifest differs'),
+            ('archive that is no archive', lambda: (content.update({'base.tar': b'x' * 2048}), labels.update(
+                {'dev.uds.takx.tar-sha256': hashlib.sha256(b'x' * 2048).hexdigest()}), content.update(
+                {'tar.sha256': hashlib.sha256(b'x' * 2048).hexdigest().encode()}), meta(
+                tar_sha256=hashlib.sha256(b'x' * 2048).hexdigest())), ''),
+            ('a file the image lacks', lambda: content.pop('meta.json'), 'the image holds no /meta.json'),
+        )
+        for what, change, message in cases:
+            labels.clear()
+            labels.update(stored[0])
+            content.clear()
+            content.update(stored[1])
+            (self.root / 'cache-state/refused.json').unlink(missing_ok=True)
+            change()
+            with self.subTest(what=what):
+                self.assertIn(message, self.refuse(error=(PC.CacheError, tarfile.TarError)))
+                note = self.notes()[self.ref]
+                self.assertEqual((note['kind'], note['digest'], note['key'], note['name'], note['markers']),
+                                 ('bundle', self.digest, self.service.key('base'), 'base', {}))
+                self.assertIn(message, note['reason'])
+                self.assertLessEqual(len(note['reason']), 300)
+
+    def test_what_is_no_judgement_of_the_entry_is_not_noted(self):
+        def raising(error):
+            def action(*arguments, **options):
+                raise error
+            return action
+        cases = (
+            ('registry error on the pull', mock.patch.object(self.registry, 'fetch', raising(PC.CacheError(
+                'docker pull failed: net/http: TLS handshake timeout'))), PC.CacheError),
+            ('copy that failed here', mock.patch.object(self.registry, 'fetch', raising(PC.CacheError(
+                'docker cp failed: no space left on device'))), PC.CacheError),
+            ('full disk while unpacking', mock.patch.object(self.service.tree, 'unpack', raising(
+                OSError(28, 'No space left on device'))), OSError),
+            ('unreadable scratch file', mock.patch.object(PC, 'sha256_file', raising(
+                OSError(5, 'Input/output error'))), OSError),
+            ('directory that appeared meanwhile', mock.patch.object(self.service.tree, 'install', raising(
+                FileExistsError('x'))), PC.CacheError),
+            ('status that cannot be written', mock.patch.object(self.service.tree, 'install', raising(
+                OSError(28, 'No space left on device'))), OSError),
+        )
+        for what, patch, error in cases:
+            with self.subTest(what=what), patch:
+                self.refuse(error=error)
+            self.assertIsNone(self.notes(), what)
+        # A prerequisite that changes during the restore is a local race, too.
+        self.service.restore('base')
+        self.make('top')
+        top = self.service.push('top')
+        self.set_aside('top')
+        real = self.service._markers
+        answers = iter([real('top'), {'base': '0' * 64}])
+        with mock.patch.object(self.service, '_markers', lambda name: next(answers)):
+            self.assertEqual(self.refuse('top'), 'top: a prerequisite changed during the restore')
+        self.assertIsNone(self.notes())
+        self.assertIn(top, self.registry.images)
+        # So the entry stays whatever is built and pushed afterwards.
+        self.set_aside('base')
+        self.make('base')
+        self.service.push('base')
+        self.assertEqual((self.registry.published, self.registry.digests[self.ref]), (2, self.digest))
+
+    def test_long_reason_is_cut_in_the_note(self):
+        def failing(*arguments, **options):
+            raise PC.CacheError('base: ' + 'x' * 500)
+        with mock.patch.object(self.service, '_examine', failing):
+            self.refuse()
+        self.assertEqual(self.notes()[self.ref]['reason'], 'base: ' + 'x' * 294)
+
+    def test_healthy_entry_is_never_overwritten(self):
+        key = self.service.key('base')
+        self.make('base')
+        stored = copy.deepcopy(self.registry.images[self.ref])
+        notes = {
+            'no note for this reference': {self.ref + 'x': {'key': key, 'digest': self.digest, 'kind': 'bundle'}},
+            'note of another key': {self.ref: {'key': '0' * 64, 'digest': self.digest, 'kind': 'bundle'}},
+            'note without a digest': {self.ref: {'key': key, 'kind': 'bundle'}},
+            'note of an unknown kind': {self.ref: {'key': key, 'digest': self.digest, 'kind': 'whim'}},
+            'note that is no object': {self.ref: 'bundle'},
+        }
+        for what, value in notes.items():
+            self.write_json('cache-state/refused.json', value)
+            del self.messages[:]
+            with self.subTest(what=what):
+                self.assertEqual(self.service.push('base'), self.ref)
+                self.assertEqual(self.messages, ['provider-cache: base is already cached under this key: ' + self.ref])
+                self.assertEqual(self.notes(), value)
+        self.assertEqual((self.registry.published, self.registry.images[self.ref]), (1, stored))
+        self.assertEqual(self.registry.digests[self.ref], self.digest)
+
+    def test_entry_someone_else_pushed_meanwhile_is_kept_and_the_note_dropped(self):
+        self.corrupt()
+        self.refuse()
+        other = self.ref.replace('/base:', '/side:')
+        self.service.tree.note_refusal(other, {'key': 'k', 'digest': self.digest, 'kind': 'bundle'})
+        labels, content = copy.deepcopy(self.registry.images[self.ref])
+        self.registry.store(self.ref, labels, content)   # another machine replaced it first
+        theirs = self.registry.digests[self.ref]
+        self.assertNotEqual(theirs, self.digest)
+        self.make('base')
+        del self.messages[:]
+        self.assertEqual(self.service.push('base'), self.ref)
+        self.assertEqual(self.messages, ['provider-cache: base is already cached under this key; it is not the entry '
+                                         'that was refused here: ' + self.ref])
+        self.assertEqual((self.registry.published, self.registry.digests[self.ref]), (2, theirs))
+        self.assertEqual(self.notes(), {other: {'key': 'k', 'digest': self.digest, 'kind': 'bundle'}})
+
+    def test_without_a_registry_digest_nothing_is_replaced(self):
+        # docker names no digest for the pulled image: the refusal cannot be tied to an entry.
+        self.corrupt()
+        del self.registry.digests[self.ref]
+        self.refuse()
+        self.assertIsNone(self.notes())
+        self.assertEqual(self.messages, [
+            'provider-cache: base: docker named no registry digest for %s, so the refusal is not noted and a later '
+            'push will not replace the entry' % self.ref])
+        # The registry does not say what the tag names at push time: the note stays, the entry too.
+        self.registry.digests[self.ref] = self.digest
+        self.refuse()
+        note = self.notes()
+        self.assertEqual(note[self.ref]['digest'], self.digest)
+        del self.registry.digests[self.ref]
+        self.make('base')
+        del self.messages[:]
+        self.service.push('base')
+        self.assertEqual(self.messages, ['provider-cache: base is already cached under this key; the registry did not '
+                                         'name the entry, so the one refused here is not replaced: ' + self.ref])
+        self.assertEqual((self.registry.published, self.notes()), (1, note))
+
+    def test_push_that_leaves_the_refused_entry_under_the_tag_is_an_error(self):
+        self.corrupt()
+        self.refuse()
+        note = self.notes()
+        self.make('base')
+        with mock.patch.object(self.registry, 'store', lambda ref, labels, content: None), self.assertRaisesRegex(
+                PC.CacheError, '^base: pushed, but %s still names the refused entry %s$'
+                % (re.escape(self.ref), self.digest)):
+            self.service.push('base')
+        self.assertEqual(self.notes(), note)
+        self.assertEqual(self.leftovers(), [])
+
+    def chain(self):
+        """base and top cached as a consistent pair, nothing local."""
+        self.service.restore('base')
+        self.make('top')
+        top = self.service.push('top')
+        self.set_aside('top')
+        self.set_aside('base')
+        del self.messages[:]
+        return top
+
+    def test_entry_bound_to_a_local_only_prerequisite_is_healthy_for_others_and_stays(self):
+        top = self.chain()
+        digest = self.registry.digests[top]
+        self.make('base')                       # built here although the cache has one: another marker
+        self.service.push('base')               # "already cached": the cache keeps serving the first one
+        self.assertEqual(self.refuse('top', PC.OtherPrerequisites),
+                         'top: it was built against other prerequisite outputs than the ones present here')
+        note = self.notes()[top]
+        marker = hashlib.sha256((self.root / 'P/base/complete.json').read_bytes()).hexdigest()
+        self.assertEqual((note['kind'], note['digest'], note['markers']), ('prerequisites', digest, {'base': marker}))
+        self.make('top')
+        del self.messages[:]
+        self.assertEqual(self.service.push('top'), top)
+        self.assertEqual(self.messages, [
+            'provider-cache: top is already cached under this key; it is bound to other prerequisite outputs, and '
+            'the ones here are not the cached ones, so it may be usable elsewhere and is not replaced: ' + top])
+        self.assertEqual((self.registry.published, self.registry.digests[top]), (2, digest))
+        self.assertEqual(self.notes()[top], note)
+        # A fresh machine still restores the pair that is cached.
+        self.set_aside('top')
+        self.set_aside('base')
+        self.service.restore('base')
+        self.service.restore('top')
+
+    def test_entry_orphaned_by_a_replaced_prerequisite_is_replaced_too(self):
+        top = self.chain()
+        self.corrupt()
+        self.refuse('base')
+        self.make('base')
+        self.service.push('base')               # replaces base: top in the cache is bound to the old one
+        self.assertEqual(self.registry.published, 3)
+        self.refuse('top', PC.OtherPrerequisites)
+        self.make('top')
+        del self.messages[:]
+        self.assertEqual(self.service.push('top'), top)
+        self.assertEqual(self.messages[0], 'provider-cache: top: the cached entry is bound to other prerequisite '
+                         'outputs than the cached ones; replacing %s@sha256:%064x' % (top, 2))
+        self.assertEqual(self.registry.published, 4)
+        self.assertEqual(self.notes(), {})
+        good = {name: snapshot(self.root / 'P' / name) for name in ('base', 'top')}
+        self.set_aside('top')
+        self.set_aside('base')
+        self.service.restore('base')
+        self.service.restore('top')
+        self.assertEqual({name: snapshot(self.root / 'P' / name) for name in ('base', 'top')}, good)
+
+    def test_entry_is_replaced_when_the_prerequisite_was_restored_from_the_cache(self):
+        top = self.chain()
+        # Another machine replaced base; top in the cache is still bound to the first one.
+        self.service.restore('base')
+        self.set_aside('base')
+        self.make('base')
+        labels, content = self.registry.images[self.ref]
+        scratch = PC.ProviderCache(manifest(), self.service.tree, FakeRegistry(), 'reg.example/cache',
+                                   log=self.messages.append)
+        scratch.push('base')
+        self.registry.store(self.ref, *scratch.registry.images[self.ref])
+        self.set_aside('base')
+        os.unlink(self.root / 'cache-state/pushed.tsv')   # nothing was pushed from this work root
+        self.service.restore('base')
+        self.refuse('top', PC.OtherPrerequisites)
+        self.make('top')
+        self.assertEqual(self.service.push('top'), top)
+        self.assertEqual(self.registry.digests[top], 'sha256:%064x' % 4)
+        self.assertEqual(self.notes(), {})
+        # Restored under another key or from another reference does not count as the cached one.
+        for field, value in (('cache_key', '0' * 64), ('cache_key', 'f' * 64), ('cache_key', None),
+                             ('restored_from', self.ref + 'x'), ('restored_from', self.ref[:-1]),
+                             ('restored_from', None)):
+            status = json.loads((self.root / 'status/base.json').read_text())
+            self.write_json('status/base.json', dict(status, **{field: value}))
+            with self.subTest(field=field):
+                self.assertFalse(self.service._prerequisites_cached('top'))
+            self.write_json('status/base.json', status)
+        self.assertTrue(self.service._prerequisites_cached('top'))
+        self.assertTrue(self.service._prerequisites_cached('base'))   # nothing to be bound to
+
+    def test_note_about_prerequisites_that_changed_again_is_dropped(self):
+        top = self.chain()
+        self.make('base')
+        self.refuse('top', PC.OtherPrerequisites)
+        self.set_aside('base')
+        self.make('base')                       # a third base
+        self.make('top')
+        del self.messages[:]
+        self.service.push('top')
+        self.assertEqual(self.messages, ['provider-cache: top is already cached under this key; the prerequisites '
+                                         'here changed since it was refused: ' + top])
+        self.assertEqual((self.registry.published, self.notes()), (2, {}))
+
+    def test_notes_are_kept_per_reference(self):
+        tree = self.service.tree
+        self.assertEqual(tree.refusals(), {})
+        tree.note_refusal('r/a:1', None)  # forgetting what was never noted writes nothing
+        self.assertFalse((self.root / 'cache-state/refused.json').exists())
+        tree.note_refusal('r/a:1', {'key': 'k1'})
+        tree.note_refusal('r/b:2', {'key': 'k2'})
+        tree.note_refusal('r/a:1', {'key': 'k3'})
+        self.assertEqual(tree.refusals(), {'r/a:1': {'key': 'k3'}, 'r/b:2': {'key': 'k2'}})
+        tree.note_refusal('r/a:1', None)
+        tree.note_refusal('r/c:3', None)
+        self.assertEqual(tree.refusals(), {'r/b:2': {'key': 'k2'}})
+        tree.note_refusal('r/b:2', None)
+        self.assertEqual((tree.refusals(), self.notes()), ({}, {}))
+        self.assertEqual(sorted(os.listdir(self.root / 'cache-state')), ['pushed.tsv', 'refused.json'])
+        for text in ('[1]', '"x"', '{', ''):
+            (self.root / 'cache-state/refused.json').write_text(text)
+            self.assertEqual(tree.refusals(), {}, text)
+        shutil.rmtree(self.root / 'cache-state')
+        self.assertEqual((tree.refusals(), tree.pushed_markers()), ({}, {}))
+        tree.note_refusal('r/a:1', {'key': 'k1'})  # the directory is made when needed
+        self.assertEqual(tree.refusals(), {'r/a:1': {'key': 'k1'}})
+        tree.record_push(('a', 'k', 'r/a:1', 't', 'm1'))
+        tree.record_push(('b', 'k', 'r/b:2', 't', 'm2'))
+        tree.record_push(('a', 'k', 'r/a:1', 't', 'm3'))   # pushed again: the later output is the served one
+        tree.record_push(('c', 'k', 'r/c:3', 't'))         # a row written by schema 1 names no output
+        (self.root / 'cache-state/pushed.tsv').write_text(
+            (self.root / 'cache-state/pushed.tsv').read_text() + 'short\trow\na\tk\tr/d:4\tt\tm\tsix\n')
+        self.assertEqual(tree.pushed_markers(), {'r/a:1': 'm3', 'r/b:2': 'm2'})
+        self.assertEqual(tree.pushed(), {('a', 'k'): 't', ('b', 'k'): 't', ('c', 'k'): 't'})
+
+    def test_two_writers_do_not_lose_a_note(self):
+        tree = self.service.tree
+        started, release = threading.Event(), threading.Event()
+        real = PC.WorkTree._write_json
+
+        def slow(path, value):
+            started.set()
+            release.wait(5)
+            real(path, value)
+        with mock.patch.object(PC.WorkTree, '_write_json', staticmethod(slow)):
+            first = threading.Thread(target=tree.note_refusal, args=('r/a:1', {'key': 'k1'}))
+            first.start()
+            self.assertTrue(started.wait(5))
+        second = threading.Thread(target=tree.note_refusal, args=('r/b:2', {'key': 'k2'}))
+        second.start()
+        second.join(0.3)
+        self.assertTrue(second.is_alive())  # it waits for the first writer
+        release.set()
+        first.join(5)
+        second.join(5)
+        self.assertEqual(tree.refusals(), {'r/a:1': {'key': 'k1'}, 'r/b:2': {'key': 'k2'}})
+
+
+class FakeRunner:
+    """Runner port: records the call, looks at the work root, answers with a code."""
+
+    def __init__(self, root, code=0):
+        self.root, self.code, self.calls, self.seen = Path(root), code, [], []
+
+    def run(self, name, env, argv, log):
+        self.calls.append((name, list(env), list(argv), str(log)))
+        self.seen.append({'tree': sorted(os.listdir(self.root / 'P' / name)),
+                          'status': (self.root / 'status' / (name + '.json')).exists(),
+                          'logs': (self.root / 'logs').is_dir()})
+        if isinstance(self.code, Exception):
+            raise self.code
+        return self.code
+
+
+class PostRestoreCheck(ServiceCase):
+    """The recipe's own re-check of a restored tree (providers.json 'verify')."""
+
+    def document(self):
+        value = manifest()
+        value['providers']['base']['verify'] = {
+            'env': ['PROOF={root}/P/base', 'JDK={jdk}'],
+            'argv': ['python3', '-B', '-m', 'unittest', 'discover', '-s', '{repo}/takx/one', '-p', 'test_build.py']}
+        return value
+
+    def setUp(self):
+        super().setUp()
+        self.runner = FakeRunner(self.root)
+        self.service = self.checked()
+        self.top = self.make('base')
+        self.good = snapshot(self.top)
+        self.ref = self.service.push('base')
+        self.digest = self.registry.digests[self.ref]
+        self.set_aside('base')
+        del self.messages[:]
+
+    def checked(self, **options):
+        options.setdefault('runner', self.runner)
+        return PC.ProviderCache(self.document(), PC.WorkTree(self.root, self.repo), self.registry,
+                                'reg.example/cache', '', self.messages.append, **options)
+
+    def notes(self):
+        path = self.root / 'cache-state/refused.json'
+        return json.loads(path.read_text()) if path.exists() else None
+
+    def test_check_does_not_change_the_key(self):
+        self.assertEqual(self.service.key('base'), self.new_service().key('base'))
+
+    def test_check_runs_on_the_tree_in_place_before_the_status_says_ok(self):
+        self.assertEqual(self.service.restore('base'), self.ref)
+        self.assertEqual(self.runner.calls, [(
+            'base', ['PROOF=%s/P/base' % self.root, 'JDK=/jdk'],
+            ['python3', '-B', '-m', 'unittest', 'discover', '-s', '%s/takx/one' % self.repo, '-p', 'test_build.py'],
+            '%s/logs/base-verify.log' % self.root)])
+        self.assertEqual(self.runner.seen, [{'tree': sorted(os.listdir(self.top)), 'status': False, 'logs': True}])
+        self.assertEqual(snapshot(self.top), self.good)
+        self.assertEqual(self.service.tree.status_of('base'), 'ok')
+        self.assertEqual(self.messages, ["provider-cache: restored base from %s (9 entries verified, the recipe's "
+                                         "own check passed)" % self.ref])
+        self.assertIsNone(self.notes())
+
+    def test_rejected_tree_is_taken_out_again_and_the_entry_is_replaced_after_the_rebuild(self):
+        (self.root / 'status/base.json').write_text('{"stage": "base", "status": "failed"}\n')
+        before = settled(self.tmp.name)
+        self.runner.code = 1
+        with self.assertRaises(PC.Rejected) as caught:
+            self.service.restore('base')
+        self.assertEqual(str(caught.exception), "base: the recipe's own check rejects the restored output; see "
+                                                "logs/base-verify.log")
+        self.assertEqual(self.runner.seen, [{'tree': sorted(os.listdir(Path(self.tmp.name) / os.listdir(
+            self.tmp.name)[0])) if False else self.runner.seen[0]['tree'], 'status': True, 'logs': True}])
+        after = settled(self.tmp.name)
+        after.pop('root/logs')
+        self.assertEqual(after, before)           # no tree, the earlier status untouched, no scratch
+        self.assertFalse(os.path.lexists(self.root / 'P/base'))
+        self.assertEqual((self.root / 'status/base.json').read_text(), '{"stage": "base", "status": "failed"}\n')
+        note = self.notes()[self.ref]
+        self.assertEqual((note['kind'], note['digest'], note['reason']), ('bundle', self.digest, str(caught.exception)))
+        # The lane builds; its push replaces what the check rejected.
+        os.unlink(self.root / 'status/base.json')
+        self.make('base')
+        self.service.push('base')
+        self.assertEqual(self.registry.published, 2)
+        self.assertNotEqual(self.registry.digests[self.ref], self.digest)
+
+    def test_check_that_could_not_run_is_no_judgement_of_the_entry(self):
+        before = settled(self.tmp.name)
+        for code in (2, 125, 126, 127, 137, -9, CacheErrorFromRunner):
+            self.runner.code = code() if code is CacheErrorFromRunner else code
+            with self.subTest(code=code), self.assertRaises(PC.CacheError) as caught:
+                self.service.restore('base')
+            self.assertNotIsInstance(caught.exception, PC.Rejected)
+            if code is not CacheErrorFromRunner:
+                self.assertEqual(str(caught.exception), "base: the recipe's own check could not be run here (exit %s); "
+                                                        "see logs/base-verify.log" % code)
+            after = settled(self.tmp.name)
+            after.pop('root/logs')
+            self.assertEqual(after, before)
+            self.assertIsNone(self.notes())
+        self.make('base')
+        self.service.push('base')
+        self.assertEqual((self.registry.published, self.registry.digests[self.ref]), (1, self.digest))
+
+    def test_check_is_not_run_when_switched_off_or_not_declared(self):
+        for what, service, name in (('switched off', self.checked(verify=False), 'base'),
+                                    ('no runner', self.checked(runner=None), 'base'),
+                                    ('not declared', self.service, 'side')):
+            if name == 'side':
+                self.make('side')
+                self.service.push('side')
+                self.set_aside('side')
+            del self.messages[:]
+            with self.subTest(what=what):
+                ref = service.restore(name)
+                self.assertEqual(self.runner.calls, [])
+                self.assertEqual(self.messages, ['provider-cache: restored %s from %s (9 entries verified)'
+                                                 % (name, ref)])
+            if name == 'base':
+                self.set_aside('base')
+
+    def test_command_line_and_environment_switch_the_check_off(self):
+        with mock.patch.object(PC.sys, 'stderr', io.StringIO()):
+            self.assertEqual(PC.main(['restore', '--no-verify', 'base'], service=self.service), 0)
+        self.assertEqual(self.runner.calls, [])
+        self.set_aside('base')
+        fresh = self.checked()
+        with mock.patch.object(PC.sys, 'stderr', io.StringIO()):
+            self.assertEqual(PC.main(['restore', 'base'], service=fresh), 0)
+        self.assertEqual(len(self.runner.calls), 1)
+        self.runner.code = 1
+        self.set_aside('base')
+        errors = io.StringIO()
+        with mock.patch.object(PC.sys, 'stderr', errors):
+            self.assertEqual(PC.main(['restore', 'base'], service=self.checked()), 1)
+        self.assertEqual(errors.getvalue(), "provider-cache: restore base failed: base: the recipe's own check "
+                                            "rejects the restored output; see logs/base-verify.log\n")
+        for environment, verify, timeout in (({}, True, 900), ({'TAKX_PROTO_CACHE_VERIFY': 'off'}, False, 900),
+                                             ({'TAKX_PROTO_CACHE_VERIFY': ''}, True, 900),
+                                             ({'TAKX_PROTO_CACHE_VERIFY': 'OFF'}, True, 900),
+                                             ({'TAKX_PROTO_CACHE_VERIFY_TIMEOUT': '30'}, True, 30),
+                                             ({'TAKX_PROTO_CACHE_VERIFY_TIMEOUT': ''}, True, 900)):
+            service = PC.build_service(environment)
+            with self.subTest(environment=environment):
+                self.assertEqual((service.verify, service.runner.timeout), (verify, timeout))
+                self.assertEqual((service.runner.wrapper, service.runner.docker),
+                                 (str(HERE / 'run-in-toolchain.sh'), 'docker'))
+        with mock.patch.object(PC.sys, 'stderr', io.StringIO()), self.assertRaises(SystemExit):
+            PC.main(['push', '--no-verify', 'base'], service=self.service)
+
+    def test_install_runs_the_check_between_the_rename_and_the_status(self):
+        tree = self.service.tree
+        source = Path(self.tmp.name) / 'unpacked'
+        shutil.copytree(self.set_aside_copy(), source, symlinks=True)
+        events = []
+
+        def check():
+            events.append((os.path.lexists(self.root / 'P/base'), os.path.lexists(source),
+                           (self.root / 'status/base.json').exists()))
+        tree.install(source, 'base', '{"status": "ok"}\n', check)
+        self.assertEqual(events, [(True, False, False)])
+        self.assertEqual((self.root / 'status/base.json').read_text(), '{"status": "ok"}\n')
+        # A check that raises: the tree goes back where it came from, whatever was raised.
+        for error in (PC.Rejected('no'), PC.CacheError('could not run'), OSError(5, 'io'), KeyboardInterrupt()):
+            os.rename(self.root / 'P/base', source)
+            os.unlink(self.root / 'status/base.json')
+
+            def failing():
+                raise error
+            with self.subTest(error=error), self.assertRaises(type(error)):
+                tree.install(source, 'base', '{"status": "ok"}\n', failing)
+            self.assertTrue(source.is_dir())
+            self.assertFalse(os.path.lexists(self.root / 'P/base'))
+            self.assertEqual(sorted(os.listdir(self.root / 'status')), ['fetch.json', 'images.json', 'toolchain.json'])
+            tree.install(source, 'base', '{"status": "ok"}\n')
+
+    def set_aside_copy(self):
+        """A tree like the one that was pushed (set aside in setUp)."""
+        return next(path for path in Path(self.tmp.name).iterdir() if path.name.startswith('aside-base-'))
+
+
+class CacheErrorFromRunner(PC.CacheError):
+    def __init__(self):
+        super().__init__('the check of base did not finish in 900 s')
+
+
+RUNNER_WRAPPER = r"""#!/bin/bash
+# Stands in for run-in-toolchain.sh: records its arguments, then does what the file next to it says.
+dir="$(dirname "$0")"
+{ printf 'CALL\n'; printf 'ARG %s\n' "$@"; } >> "$dir/wrapper-calls"
+echo "to stdout"; echo "to stderr" >&2
+if [[ -f "$dir/wrapper-behaviour" ]]; then source "$dir/wrapper-behaviour"; fi
+exit 0
+"""
+
+
+class Runner(unittest.TestCase):
+    """ToolchainRunner against a stand-in for the wrapper; no docker involved."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        (self.dir / 'wrapper').write_text(RUNNER_WRAPPER)
+        (self.dir / 'docker').write_text('#!/bin/bash\nprintf \'%s\\n\' "$*" >> "$(dirname "$0")/docker-calls"\n')
+        for name in ('wrapper', 'docker'):
+            os.chmod(self.dir / name, 0o755)
+        self.log = self.dir / 'check.log'
+        self.runner = PC.ToolchainRunner(self.dir / 'wrapper', 30, str(self.dir / 'docker'))
+
+    def calls(self):
+        text = (self.dir / 'wrapper-calls').read_text()
+        return [[line[4:] for line in block.split('\n') if line.startswith('ARG ')]
+                for block in text.split('CALL\n')[1:]]
+
+    def test_defaults(self):
+        runner = PC.ToolchainRunner('/x/run-in-toolchain.sh')
+        self.assertEqual((runner.wrapper, runner.timeout, runner.docker), ('/x/run-in-toolchain.sh', 900, 'docker'))
+
+    def test_command_goes_through_the_wrapper_and_its_output_into_the_log(self):
+        self.log.write_text('earlier\n')
+        code = self.runner.run('proj', ['A=1', 'B=two words'], ['python3', '-m', 'unittest', 'x y'], self.log)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.calls(), [['--name', 'takx-verify-proj-%d' % os.getpid(), '-e', 'A=1', '-e',
+                                         'B=two words', '--', 'python3', '-m', 'unittest', 'x y']])
+        self.assertEqual(self.log.read_text(), 'earlier\n\n===== provider-cache restore proj: python3 -m unittest '
+                                               'x y\nto stdout\nto stderr\n')
+        self.assertFalse((self.dir / 'docker-calls').exists())
+        self.runner.run('proj', [], ['true'], self.log)
+        self.assertEqual(self.calls()[1], ['--name', 'takx-verify-proj-%d' % os.getpid(), '--', 'true'])
+
+    def test_exit_status_is_passed_on(self):
+        for code in (1, 2, 125):
+            (self.dir / 'wrapper-behaviour').write_text('exit %d\n' % code)
+            self.assertEqual(self.runner.run('proj', [], ['x'], self.log), code)
+        (self.dir / 'wrapper-behaviour').write_text('kill -9 $$\n')
+        self.assertEqual(self.runner.run('proj', [], ['x'], self.log), -9)
+
+    def test_standard_input_is_not_inherited(self):
+        (self.dir / 'wrapper-behaviour').write_text('cat; echo "end of input"\n')
+        self.assertEqual(self.runner.run('proj', [], ['x'], self.log), 0)
+        self.assertTrue(self.log.read_text().endswith('to stderr\nend of input\n'))
+
+    def test_check_that_does_not_finish_is_stopped_with_everything_it_started(self):
+        # The wrapper and what it starts ignore every signal that can be ignored.
+        (self.dir / 'wrapper-behaviour').write_text(
+            'trap "" HUP INT QUIT USR1 USR2 TERM FPE ALRM PIPE\nsleep 300 & echo $! > "$dir/child"; wait\n')
+        runner = PC.ToolchainRunner(self.dir / 'wrapper', 1, str(self.dir / 'docker'))
+        outcome = []
+
+        def run():
+            try:
+                runner.run('proj', [], ['x'], self.log)
+            except PC.CacheError as error:
+                outcome.append(str(error))
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        thread.join(15)
+        child = int((self.dir / 'child').read_text())
+        if thread.is_alive():  # not stopped: do it here so that nothing outlives the test
+            os.killpg(os.getpgid(child), 9)
+            thread.join(15)
+            self.fail('the check was not stopped')
+        self.assertEqual(outcome, ['the check of proj did not finish in 1 s'])
+        for _ in range(50):  # the kill is asynchronous
+            try:
+                os.kill(child, 0)
+            except ProcessLookupError:
+                break
+            threading.Event().wait(0.1)
+        else:
+            self.fail('the process the wrapper started is still running')
+        self.assertEqual((self.dir / 'docker-calls').read_text(), 'rm -f takx-verify-proj-%d\n' % os.getpid())
+
+    def test_wrapper_or_log_that_cannot_be_used_is_a_refusal(self):
+        missing = PC.ToolchainRunner(self.dir / 'no-wrapper', 30)
+        with self.assertRaisesRegex(PC.CacheError, '^the check of proj could not be started: .*No such file'):
+            missing.run('proj', [], ['x'], self.log)
+        with self.assertRaisesRegex(PC.CacheError, '^the check of proj could not be started: '):
+            self.runner.run('proj', [], ['x'], self.dir / 'no-directory' / 'check.log')
+
+
+class Migrate(ServiceCase):
+    """Bundles saved under schema-1 keys made addressable under the current keys."""
+
+    def setUp(self):
+        super().setUp()
+        self.top = self.make('base')
+        self.good = snapshot(self.top)
+        self.old_ref = self.legacy_push('base')
+        del self.registry.calls[:]
+        del self.messages[:]
+
+    def legacy_push(self, name, service=None):
+        """Store what schema 1 pushed: the bundle under the key that names the toolchain image."""
+        service = service or self.service
+        entry = manifest()['providers'][name]
+        old_key, old_document = service.legacy_keys([name])[name]
+        context = Path(tempfile.mkdtemp(dir=self.tmp.name))
+        entries, tar_sha = service._bundle(name, old_key, entry, context, service._markers(name),
+                                           service.tree.status_bytes(name),
+                                           service.tree.marker_sha256(name, entry['marker']))
+        meta = json.loads((context / 'meta.json').read_text())
+        meta.update(schema=1, key_inputs=old_document)
+        (context / 'meta.json').write_text(json.dumps(meta, sort_keys=True, indent=1) + '\n')
+        files = [name + '.tar', *PC.IMAGE_FILES]
+        ref = PC.image_ref('reg.example/cache', name, old_key)
+        self.registry.store(ref, service._labels(name, old_key, tar_sha),
+                            {item: (context / item).read_bytes() for item in files})
+        return ref
+
+    def test_schema_1_key_is_the_pinned_derivation_from_the_local_inputs(self):
+        keys = self.service.legacy_keys()
+        self.assertEqual(sorted(keys), ['base', 'side', 'top'])
+        document = keys['top'][1]
+        self.assertEqual((document['schema'], document['toolchain'], document['prerequisites']),
+                         (1, TOOLCHAIN_ID, {'base': keys['base'][0]}))
+        self.assertNotIn('arch', document)
+        current = self.service.explain('top')
+        self.assertEqual({field for field in document if document[field] != current.get(field)},
+                         {'schema', 'toolchain', 'invocation_sha256', 'prerequisites'})
+        self.assertEqual(self.old_ref, 'reg.example/cache/base:' + keys['base'][0])
+        # The image id comes from the image record unless it is given.
+        given = self.new_service(legacy='sha256:' + '3' * 64).legacy_keys(['base'])['base']
+        self.assertEqual(given[1]['toolchain'], 'sha256:' + '3' * 64)
+        self.assertNotEqual(given[0], keys['base'][0])
+        os.unlink(self.root / 'status/images.json')
+        with self.assertRaisesRegex(PC.CacheError, r'^status/images\.json cannot be read'):
+            self.new_service().legacy_keys(['base'])
+        self.assertEqual(self.new_service(legacy=TOOLCHAIN_ID).legacy_keys(['base'])['base'], keys['base'])
+
+    def test_bundle_becomes_addressable_under_the_current_key_without_its_archive_again(self):
+        old_labels, old_content = copy.deepcopy(self.registry.images[self.old_ref])
+        old_digest = self.registry.digests[self.old_ref]
+        key = self.service.key('base')
+        ref = self.service.migrate('base')
+        self.assertEqual(ref, 'reg.example/cache/base:' + key)
+        self.assertEqual(self.registry.calls, [
+            ('image_id', PC.TOOLCHAIN), ('probe', ref), ('probe', self.old_ref), ('fetch', self.old_ref),
+            ('adopt', self.old_ref, ref), ('forget', self.old_ref), ('probe', ref)])
+        self.assertEqual(self.registry.kept, [])
+        self.assertEqual(self.registry.images[self.old_ref], (old_labels, old_content))   # the old tag is not touched
+        labels, content = self.registry.images[ref]
+        self.assertEqual(labels, dict(old_labels, **{'dev.uds.takx.key': key}))
+        self.assertEqual({name for name in content if content[name] != old_content[name]}, {'meta.json'})
+        self.assertEqual(sorted(content), sorted(old_content))
+        meta, old_meta = json.loads(content['meta.json']), json.loads(old_content['meta.json'])
+        self.assertEqual(meta, dict(old_meta, schema=2, key=key, key_inputs=self.service.explain('base'), adopted_from={
+            'schema': 1, 'key': old_meta['key'], 'ref': self.old_ref, 'digest': old_digest,
+            'toolchain_image_id': TOOLCHAIN_ID}))
+        self.assertTrue(content['meta.json'].endswith(b'\n'))
+        tar_sha = hashlib.sha256(content['base.tar']).hexdigest()
+        self.assertEqual(self.messages, ['provider-cache: base is now also %s (was %s, 9 entries verified, tar sha256 '
+                                         '%s)' % (ref, self.old_ref, tar_sha)])
+        self.assertEqual(self.service.tree.pushed(), {('base', key): tar_sha})
+        self.assertEqual(self.leftovers(), [])
+        self.assertEqual(snapshot(self.top), self.good)
+        # It restores like any bundle pushed under the current key.
+        self.set_aside('base')
+        self.assertEqual(self.service.restore('base'), ref)
+        self.assertEqual(snapshot(self.top), self.good)
+        status = json.loads((self.root / 'status/base.json').read_text())
+        self.assertEqual((status['restored_from'], status['cache_key']), (ref, key))
+        # Once is enough.
+        with self.assertRaisesRegex(PC.Skip, r'^already cached under the current key \(%s\)$' % re.escape(ref)):
+            self.service.migrate('base')
+
+    def test_downstream_bundle_is_found_under_the_key_its_old_prerequisite_key_gave(self):
+        self.make('top')
+        old_top = self.legacy_push('top')
+        self.assertEqual(json.loads(self.registry.images[old_top][1]['meta.json'])['key_inputs']['prerequisites'],
+                         {'base': self.old_ref.rsplit(':', 1)[1]})
+        self.service.migrate('base')
+        ref = self.service.migrate('top')
+        meta = json.loads(self.registry.images[ref][1]['meta.json'])
+        self.assertEqual(meta['key_inputs']['prerequisites'], {'base': self.service.key('base')})
+        good = snapshot(self.root / 'P/top')
+        self.set_aside('top')
+        self.service.restore('top')
+        self.assertEqual(snapshot(self.root / 'P/top'), good)
+
+    def test_nothing_to_do_is_a_clean_skip(self):
+        other = self.new_service(legacy='sha256:' + '4' * 64)
+        absent = PC.image_ref('reg.example/cache', 'base', other.legacy_keys(['base'])['base'][0])
+        cases = (
+            ('nothing under the old key', other, r'^nothing cached under the schema-1 key \(%s\)$' % re.escape(absent)),
+            ('cache off', self.new_service(prefix='off'), '^cache is off$'),
+        )
+        for what, service, message in cases:
+            with self.subTest(what=what), self.assertRaisesRegex(PC.Skip, message):
+                service.migrate('base')
+        self.registry.docker = False
+        with self.assertRaisesRegex(PC.Skip, '^docker is not available$'):
+            self.service.migrate('base')
+        self.registry.docker, self.registry.logged_in = True, False
+        with self.assertRaisesRegex(PC.Skip, '^docker is not logged in to the cache registry$'):
+            self.service.migrate('base')
+        self.registry.logged_in = True
+        self.make('top')
+        self.legacy_push('top')
+        self.set_aside('base')
+        with self.assertRaisesRegex(PC.Skip, '^a prerequisite provider is not ok here$'):
+            self.service.migrate('top')
+        self.assertEqual((self.registry.published, self.registry.fetched), (2, []))
+        with self.assertRaisesRegex(PC.CacheError, '^unknown provider ghost$'):
+            self.service.migrate('ghost')
+
+    def test_registry_that_cannot_be_asked_is_a_refusal(self):
+        self.registry.state = 'error'
+        with self.assertRaisesRegex(PC.CacheError, '^base: the registry could not be queried$'):
+            self.service.migrate('base')
+        self.registry.state = None
+        answers = iter(['absent', 'error'])
+        with mock.patch.object(self.registry, 'probe', lambda ref: next(answers)), self.assertRaisesRegex(
+                PC.CacheError, '^base: the registry could not be queried for %s$' % re.escape(self.old_ref)):
+            self.service.migrate('base')
+        answers = iter(['absent', 'unauthorized'])
+        with mock.patch.object(self.registry, 'probe', lambda ref: next(answers)), self.assertRaises(PC.CacheError):
+            self.service.migrate('base')
+        for last in ('absent', 'unauthorized', 'error'):
+            answers = iter(['absent', 'present', last])
+            self.registry.images.pop(self.service.ref('base'), None)
+            with self.subTest(last=last), mock.patch.object(self.registry, 'probe', lambda ref: next(answers)), \
+                    self.assertRaisesRegex(PC.CacheError, '^base: adopted, but the registry does not show '):
+                self.service.migrate('base')
+        self.assertEqual(self.service.tree.pushed(), {})
+        self.assertEqual((self.registry.kept, self.leftovers()), ([], []))
+
+    def test_scratch_directory_is_removed_whatever_happens_to_it(self):
+        real, calls = shutil.rmtree, []
+
+        def recording(path, ignore_errors=False):
+            calls.append((Path(path).name.split('.')[1], ignore_errors))
+            real(path, ignore_errors=True)
+        with mock.patch.object(PC.shutil, 'rmtree', recording):
+            self.service.migrate('base')
+            self.set_aside('base')
+            self.service.restore('base')
+            self.registry.images.clear()
+            self.service.push('base')
+        self.assertEqual(calls, [('migrate-base', True), ('restore-base', True), ('push-base', True)])
+
+    def test_bundle_that_does_not_verify_is_not_adopted(self):
+        labels, content = self.registry.images[self.old_ref]
+        stored = dict(labels), dict(content)
+
+        def meta(**fields):
+            content['meta.json'] = json.dumps(dict(json.loads(stored[1]['meta.json']), **fields)).encode()
+
+        def flip():
+            data = bytearray(content['base.tar'])
+            data[len(data) // 2] ^= 1
+            content['base.tar'] = bytes(data)
+        inputs = json.loads(stored[1]['meta.json'])['key_inputs']
+        cases = (
+            ('archive bytes', flip, '^base: archive digest differs from the recorded one$'),
+            ('label of the current key', lambda: labels.update({'dev.uds.takx.key': self.service.key('base')}),
+             '^base: image is labelled with another key$'),
+            ('bundle of the current schema', lambda: meta(schema=2), '^base: unsupported bundle schema$'),
+            ('other recorded inputs', lambda: meta(key_inputs=dict(inputs, repo='/elsewhere')),
+             '^base: the bundle under %s records other key inputs than the ones derived here$'
+             % re.escape(self.old_ref)),
+            ('no recorded inputs', lambda: meta(key_inputs=None), 'records other key inputs'),
+            ('inputs of the current schema', lambda: meta(key_inputs=self.service.explain('base')),
+             'records other key inputs'),
+            ('other prerequisites', lambda: meta(prerequisite_markers={'side': '0' * 64}),
+             'other prerequisite outputs'),
+            ('marker digest', lambda: meta(marker_sha256='0' * 64), 'completion marker differs'),
+            ('a file the image lacks', lambda: content.pop('files.json'), '^the image holds no /files.json$'),
+        )
+        before = settled(self.tmp.name)
+        for what, change, message in cases:
+            labels.clear()
+            labels.update(stored[0])
+            content.clear()
+            content.update(stored[1])
+            change()
+            with self.subTest(what=what), self.assertRaisesRegex(PC.CacheError, message):
+                self.service.migrate('base')
+            self.assertEqual(self.registry.kept, [], what)        # the pulled image does not stay
+            self.assertEqual(settled(self.tmp.name), before, what)
+        self.assertEqual((self.registry.published, sorted(self.registry.images)), (1, [self.old_ref]))
+        self.assertFalse((self.root / 'cache-state').exists())  # migrate judges nothing for a later push
+
+    def test_failure_while_adopting_leaves_nothing_behind(self):
+        def failing(*arguments):
+            raise PC.CacheError('docker push failed: denied')
+        before = settled(self.tmp.name)
+        with mock.patch.object(self.registry, 'adopt', failing), self.assertRaisesRegex(
+                PC.CacheError, '^docker push failed: denied$'):
+            self.service.migrate('base')
+        self.assertEqual((self.registry.kept, sorted(self.registry.images)), ([], [self.old_ref]))
+        self.assertEqual(settled(self.tmp.name), before)
+        # A prerequisite that changes while the old bundle is checked stops it, too.
+        self.make('top')
+        self.legacy_push('top')
+        real = self.service._markers
+        answers = iter([real('top'), {'base': '0' * 64}])
+        with mock.patch.object(self.service, '_markers', lambda name: next(answers)), self.assertRaisesRegex(
+                PC.CacheError, '^top: a prerequisite changed during the migration$'):
+            self.service.migrate('top')
+        self.assertEqual((self.registry.kept, self.leftovers()), ([], []))
+
+    def test_toolchain_must_be_the_recorded_one(self):
+        self.registry.layer = 'sha256:' + 'c' * 64
+        self.registry.toolchain = 'sha256:' + '7' * 64
+        with self.assertRaisesRegex(PC.CacheError, 'has toolchain fingerprint'):
+            self.service.migrate('base')
+        self.assertEqual(self.registry.calls, [('image_id', PC.TOOLCHAIN), ('probe_toolchain', PC.TOOLCHAIN)])
+
+    def test_command_line(self):
+        errors = io.StringIO()
+        with mock.patch.object(PC.sys, 'stderr', errors):
+            self.assertEqual(PC.main(['migrate', 'base', 'side'], service=self.service), 3)
+        self.assertRegex(errors.getvalue(), r'^provider-cache: migrate side skipped: nothing cached under the '
+                                            r'schema-1 key \(reg\.example/cache/side:[0-9a-f]{64}\)\n$')
+        self.assertEqual(self.registry.published, 2)
+        errors = io.StringIO()
+        with mock.patch.object(PC.sys, 'stderr', errors):
+            self.assertEqual(PC.main(['migrate'], service=self.new_service()), 3)
+        self.assertEqual(len(errors.getvalue().splitlines()), 3)
+        self.assertIn('migrate base skipped: already cached under the current key', errors.getvalue())
+        # --from-toolchain-id names the image the old keys were derived from.
+        self.registry.images.clear()
+        self.write_json('status/images.json', {'status': 'ok', 'image_ids': {PC.TOOLCHAIN: 'sha256:' + '5' * 64}})
+        self.legacy_push('base', self.new_service(legacy=TOOLCHAIN_ID))
+        with mock.patch.object(PC.sys, 'stderr', io.StringIO()):
+            self.assertEqual(PC.main(['migrate', 'base'], service=self.new_service()), 3)
+            self.assertEqual(PC.main(['migrate', '--from-toolchain-id', TOOLCHAIN_ID, 'base'],
+                                     service=self.new_service()), 0)
+        self.registry.images[self.old_ref][1]['tar.sha256'] = b'0' * 64
+        del self.registry.images[self.service.ref('base')]
+        errors = io.StringIO()
+        with mock.patch.object(PC.sys, 'stderr', errors):
+            self.assertEqual(PC.main(['migrate', '--from-toolchain-id', TOOLCHAIN_ID, 'base'],
+                                     service=self.new_service()), 1)
+        self.assertEqual(errors.getvalue(), 'provider-cache: migrate base failed: base: archive digest differs from '
+                                            'the recorded one\n')
+        service = PC.build_service({'TAKX_PROTO_TOOLCHAIN_ID': 'sha256:' + '6' * 64})
+        self.assertEqual(service.legacy_id, 'sha256:' + '6' * 64)
 
 
 RUN_STUB = r"""#!/bin/bash
@@ -3912,10 +5802,12 @@ class DockerAdapter(unittest.TestCase):
     def test_fetch_copies_the_named_files_and_removes_container_and_image(self):
         target = self.dir / 'target'
         target.mkdir()
-        labels = self.registry.fetch('reg/p:tag', target, ['p.tar', 'meta.json'])
+        labels, digest = self.registry.fetch('reg/p:tag', target, ['p.tar', 'meta.json'])
         self.assertEqual(labels, {'dev.uds.takx.provider': 'p'})
+        self.assertIsNone(digest)  # this docker lists no registry digest
         self.assertEqual(self.calls(), [
             'pull -q reg/p:tag', 'image inspect --format {{json .Config.Labels}} reg/p:tag',
+            'image inspect --format {{json .RepoDigests}} reg/p:tag',
             'create reg/p:tag /nonexistent', 'cp container-id:/p.tar %s/p.tar' % target,
             'cp container-id:/meta.json %s/meta.json' % target, 'rm -f container-id', 'rmi reg/p:tag'])
         (self.dir / 'calls').unlink()
@@ -4050,6 +5942,98 @@ class RepositoryManifest(unittest.TestCase):
                 'write_status "$name" ok', 'cache_push "$name"')]
             self.assertEqual(order, sorted(order), lane)
 
+    def test_toolchain_block_is_what_the_dockerfile_pins_sets_and_asserts(self):
+        # The fingerprint in every key is derived from this block; the Dockerfile is where the facts are.
+        block = self.manifest['toolchain']
+        text = (HERE / 'Dockerfile').read_text()
+        self.assertEqual(re.findall(r'^ARG BASE=(\S+)$', text, re.M), [block['base']])
+        stage = text[text.index('FROM ${BASE} AS toolchain\n'):text.index('\nFROM toolchain AS runtime\n')]
+        environment = {}
+        for line in re.findall(r'^ENV (.+)$', stage, re.M):
+            for assignment in shlex.split(line):
+                name, value = assignment.split('=', 1)
+                environment[name] = value
+        self.assertEqual(environment, block['environment'])
+        gates = []
+        for line in re.findall(r'^\s*want (.+?); \\$', stage, re.M):
+            name, expect, *command = shlex.split(line.replace('$JAVA_HOME', environment['JAVA_HOME']))
+            gates.append({'name': name, 'expect': expect, 'argv': command})
+        self.assertEqual(gates, block['gated'])
+        self.assertEqual(len(gates), 12)
+        self.assertEqual(stage.count('    want '), len(gates))  # no gate is written in a way this misses
+        # The probe reads the output the way the Dockerfile's `want` does.
+        self.assertIn('got="$("$@" 2>&1 | head -n 3 | tr \'\\n\' \' \')"', stage)
+        self.assertIn('case "$got" in *"$expect"*)', stage)
+        for gate in block['gated']:
+            self.assertIn('$(%s 2>&1 | head -n 3 | tr ' % ' '.join(gate['argv']), PC.probe_script(block))
+        self.assertEqual(block['environment']['JAVA_HOME'], self.manifest['variables']['jdk'])
+        self.assertEqual('PATH=' + block['environment']['PATH'], self.manifest['variables']['javapath'])
+
+    def test_wrapper_block_is_what_run_in_toolchain_gives_every_command(self):
+        # The real wrapper against a docker that only records. What it adds beside the
+        # block is listed here: none of it is part of a key.
+        outside_the_key = {'SSL_CERT_FILE', 'CURL_CA_BUNDLE', 'GIT_SSL_CAINFO', 'PIP_CERT', 'REQUESTS_CA_BUNDLE',
+                           'TAKX_JAVA_TRUSTSTORE'}
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            (base / 'bin').mkdir()
+            (base / 'bin/docker').write_text('#!/bin/bash\nprintf \'%s\\n\' "$@" > "$STUB_ARGS"\n')
+            os.chmod(base / 'bin/docker', 0o755)
+            for ca in ('', str(base / 'ca.crt')):
+                if ca:
+                    Path(ca).write_text('not a certificate; only its presence counts here\n')
+                environment = {'PATH': '%s:/usr/bin:/bin' % (base / 'bin'), 'HOME': str(base),
+                               'TAKX_PROTO_ROOT': str(base / 'root'), 'STUB_ARGS': str(base / 'args')}
+                if ca:
+                    environment['TAKX_PROTO_CA'] = ca
+                done = subprocess.run(['/bin/bash', str(HERE / 'run-in-toolchain.sh'), '-e', 'STEP=1', '--',
+                                       'python3', '-B', 'x.py'], env=environment, stdin=subprocess.DEVNULL,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+                self.assertEqual((done.returncode, done.stderr), (0, b''))
+                arguments = (base / 'args').read_text().split('\n')[:-1]
+                self.assertEqual(arguments[0], 'run')
+                image = arguments.index(PC.TOOLCHAIN)
+                self.assertEqual(arguments[image + 1:], ['python3', '-B', 'x.py'])
+                options = arguments[1:image]
+                values = {'root': str(base / 'root'), 'repo': str(REPO)}
+                wrapper = self.manifest['wrapper']
+
+                def given(flag):
+                    return [options[index + 1] for index, option in enumerate(options) if option == flag]
+                expected = [PC.render(token, values) for token in wrapper['env']]
+                variables = given('-e')
+                self.assertEqual(variables[:len(expected)], expected)
+                self.assertEqual(variables[-1], 'STEP=1')
+                extra = {item.split('=', 1)[0] for item in variables[len(expected):-1]}
+                self.assertLessEqual(extra, outside_the_key)
+                if ca:
+                    self.assertIn('SSL_CERT_FILE', extra)
+                mounts = given('-v')
+                expected = [PC.render(token, values) for token in wrapper['mounts']]
+                self.assertEqual(mounts[:len(expected)], expected)
+                self.assertEqual([mount.split(':', 1)[1] for mount in mounts[len(expected):]],
+                                 ['/ca.crt:ro'] * (len(mounts) - len(expected)))
+                self.assertEqual(given('-w'), [PC.render(wrapper['workdir'], values)])
+                self.assertNotIn('--platform', options)   # only with TAKX_PROTO_ARCH set
+
+    def test_post_restore_checks_are_declared_for_exactly_these_providers(self):
+        declared = {name: entry['verify'] for name, entry in self.manifest['providers'].items() if 'verify' in entry}
+        self.assertEqual(sorted(declared), ['assimp', 'crypto', 'draco', 'gdal-jni', 'geos', 'gles', 'las', 'proj',
+                                            'spatial'])
+        for name, call in declared.items():
+            entry = self.manifest['providers'][name]
+            with self.subTest(provider=name):
+                # The recipe's own tests, pointed at this provider's output by the recipe's proof variable.
+                self.assertEqual(call['argv'][:6], ['python3', '-B', '-m', 'unittest', 'discover', '-s'])
+                self.assertEqual(call['argv'][6], '{repo}/' + entry['recipe'])
+                self.assertIn(call['env'][0].split('=', 1)[1], ['{root}/P/' + name])
+                variable = call['env'][0].split('=', 1)[0]
+                tests = ''.join(path.read_text() for path in (REPO / entry['recipe']).glob('test*.py'))
+                self.assertIn("os.environ.get('%s')" % variable, tests)
+                # Everything else a check reads is a prerequisite, which restore requires to be ok.
+                for item in call['env'][1:]:
+                    self.assertRegex(item, r'^[A-Z_]+=\{root\}/P/(%s)$' % '|'.join(entry['prerequisites']))
+
     def test_wrappers_delegate_to_the_module(self):
         for script, command in (('push-cache.sh', 'push'), ('restore-cache.sh', 'restore')):
             text = (HERE / script).read_text()
@@ -4178,6 +6162,36 @@ class LaneInvocations(unittest.TestCase):
                     for value, token in zip(actual, template):
                         self.assertRegex(value, r'\A%s\Z' % self.pattern(token, root),
                                          '%s of %s differs from providers.json' % (label, name))
+
+    def test_every_lane_checks_a_fresh_output_with_the_command_restore_runs(self):
+        # 'verify' in providers.json is the lane's own acceptance step after a build. A lane that
+        # changes that step without the manifest would let restore accept what the lane rejects.
+        declared = {name: entry['verify'] for name, entry in self.manifest['providers'].items() if 'verify' in entry}
+        self.assertTrue(declared)
+        for name, call in sorted(declared.items()):
+            with self.subTest(provider=name):
+                text, calls, cache, root = self.recorded(name)
+                checks = [recorded for recorded in calls if 'unittest' in recorded]
+                self.assertEqual(len(checks), 1, text)
+                options, command = checks[0][:checks[0].index('--')], checks[0][checks[0].index('--') + 1:]
+                environment = [options[index + 1] for index, option in enumerate(options) if option in ('-e', '--env')]
+                for label, actual, template in (('env', environment, call['env']), ('argv', command, call['argv'])):
+                    self.assertEqual(len(actual), len(template), '%s of %s: %r' % (label, name, actual))
+                    for value, token in zip(actual, template):
+                        self.assertRegex(value, r'\A%s\Z' % self.pattern(token, root),
+                                         'check %s of %s differs from providers.json' % (label, name))
+        # The comparison is exact here, too.
+        lane = self.repo / 'takx/desktop-prototype/stages/lane2.sh'
+        original = lane.read_text()
+        self.addCleanup(lane.write_text, original)
+        self.assertIn(' -p test_build.py -v ', original)
+        lane.write_text(original.replace(' -p test_build.py -v ', ' -p test_other.py -v '))
+        text, calls, cache, root = self.recorded('proj')
+        command = [recorded for recorded in calls if 'unittest' in recorded][0]
+        command = command[command.index('--') + 1:]
+        differing = [value for value, token in zip(command, declared['proj']['argv'])
+                     if not re.match(r'\A%s\Z' % self.pattern(token, root), value)]
+        self.assertEqual(differing, ['test_other.py'])
 
     def test_a_changed_lane_argument_is_noticed(self):
         # The comparison above is exact: one changed value in a lane fails it.

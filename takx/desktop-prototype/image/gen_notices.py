@@ -12,6 +12,13 @@ Writes, for /usr/share/takx-desktop in the image (and the package attachments):
                  of TAKX, atak-civ (with THIRDPARTY.md), NASA WorldWind Java
                  and every native provider, and every LICENSE/NOTICE/COPYING
                  file found inside the JARs of the tree; INDEX.tsv lists them
+  LICENSES/texts one text per licence identifier of licence-policy.json:
+                 SPDX texts fetched once into --texts-cache and verified
+                 against the SHA-256 in the policy, texts taken from a JAR,
+                 and composed or stated ones
+  licence-gate.json  report of licence_gate.py over the tree and these
+                 notices. The run fails when the gate says the build may
+                 not proceed (something denied or unknown)
   patches/       every patch a build receipt names, verified against the
                  SHA-256 in that receipt (taken from the git history when the
                  working tree no longer has that version), and the other
@@ -23,7 +30,9 @@ Writes, for /usr/share/takx-desktop in the image (and the package attachments):
                  the tree mapped to a component, every patch with its digest
 
 SOURCES.json identifies the corresponding source; it is not the source. It
-says "publishable": false while any component is unresolved, and lists why.
+says "publishable": false while the licence gate flags anything or any
+component is unresolved, and lists why. Its counts are computed from the
+records, per category; nothing is rounded up to "with URL and SHA-256".
 Every file of the tree must map to a component, and every patch a receipt
 names must be found with its recorded digest, or the run fails.
 """
@@ -35,7 +44,11 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.request
 import zipfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import licence_gate  # noqa: E402  (the script directory is added above for python3 -I)
 
 LABEL = ("TAKX 5.7 (0b59a9bb) built from public sources on Kernel 8.30.5 + project patches, "
          "CommonCommo 1.17.2 patched and the NASA WorldWind Java v2.2.1 interop build; "
@@ -58,7 +71,8 @@ COMPONENTS = {
     "atak-civ-assets": ("icons, icon sets and data files from atak-civ", "GPL-3.0 (LICENSE.md), THIRDPARTY.md",
                         ATAK + " revision 9f6893dd657feacc35ec5de03dad721c2e44170e", True,
                         "Git LFS objects are verified against their pointers (fetched_inputs)"),
-    "kernel": ("Kernel 8.30.5 + project patches, unqualified; substitute for the private 8.57.11",
+    "kernel": ("Kernel 8.30.5 + project patches, unqualified; substitute for the private 8.57.11; the JAR in the tree "
+               "is a derived copy (tree.kernel_jar_derivation)",
                "GPL-3.0 (atak-civ LICENSE.md); statically linked third-party code under its own licences",
                ATAK + " revision 9f6893dd657feacc35ec5de03dad721c2e44170e, takkernel/ and takthirdparty/", True,
                "patches in patches/ (receipts.kernel-composed); third-party archives in fetched_inputs; "
@@ -79,8 +93,12 @@ COMPONENTS = {
                   "https://github.com/NASAWorldWind/WorldWindJava", True,
                   "revision in repository_sources; patches takx/worldwind-java/*.patch"),
     "ui-java": ("source rebuilds of UI libraries; substitutes for private artifacts",
-                "LGPL-2.1-or-later, Apache-2.0, BSD, CDDL-1.0 (per artifact, receipts.ui-original and ui-wizard-reference)",
-                "source archives with URL and SHA-256 in those receipts", True, ""),
+                "LGPL-2.1-or-later, Apache-2.0, BSD (per artifact, receipts.ui-original)",
+                "source archives with URL and SHA-256 in that receipt", True,
+                "the CDDL-only wizard reference JAR of takx/ui-java is not in the tree"),
+    "provider-data": ("data directories of GDAL 2.4.4 and PROJ 4.9.1 as installed by the native lanes",
+                      "MIT (GDAL LICENSE.TXT, PROJ COPYING); tables derived from EPSG, ESRI and IGNF under their own terms",
+                      "the GDAL and PROJ source archives in fetched_inputs", True, ""),
     "maven": ("unmodified public Maven artifacts", "per artifact; texts found inside are in LICENSES/jars",
               "coordinates and repository in files[].origin; binary URL and SHA-256 in fetched_inputs", False,
               "binaries as published; their source archives are not recorded or archived here"),
@@ -119,6 +137,8 @@ def component_of(entry):
         ("hand-written JBoss Modules descriptor", "uds-takserver"),
         ("launcher fact: ", "uds-takserver"),
         ("takx/compat/build-system-clock.py", "uds-takserver"),
+        ("GDAL 2.4.4 data directory", "provider-data"),
+        ("PROJ 4.9.1 data directory", "provider-data"),
     )
     for prefix, component in rules:
         if origin.startswith(prefix):
@@ -155,8 +175,77 @@ def copy_licence(source, target, index, origin):
     index.append((target, origin))
 
 
-def collect_licences(out, tree, root, repo, problems):
-    index = []
+# Licence files of code linked into the bundled native libraries that the
+# walk below does not reach (it looks two levels into source/ and licenses/).
+EXTRA_PROVIDER_TEXTS = (
+    ("commoncommo", "dependencies/libmicrohttpd-1.0.1/COPYING", "libmicrohttpd 1.0.1, linked into libcommoncommojni.so"),
+    ("commoncommo", "dependencies/nghttp2-1.62.1/COPYING", "nghttp2 1.62.1, linked into libcommoncommojni.so"),
+    ("commoncommo", "dependencies/ngtcp2-1.6.0/COPYING", "ngtcp2 1.6.0, linked into libcommoncommojni.so"),
+    ("commoncommo", "dependencies/protobuf/LICENSE", "protobuf, linked into libcommoncommojni.so"),
+    ("commoncommo", "dependencies/curl/COPYING", "curl, linked into libcommoncommojni.so"),
+    ("gles", "source/libglvnd-1.7.0/README.md", "libglvnd 1.7.0 (libGLESv2.so, libGLdispatch.so); its licence is a section of this file"),
+    ("gles", "source/libglvnd-1.7.0/src/util/cJSON/LICENSE", "cJSON inside libglvnd 1.7.0"),
+    ("gles", "source/libglvnd-1.7.0/src/util/uthash/LICENSE", "uthash inside libglvnd 1.7.0"),
+)
+
+
+def collect_texts(out, tree, policy, cache, fetch, index, problems):
+    """One text per licence identifier of the policy, in LICENSES/texts; return {identifier: file}."""
+    texts = policy.get("texts", {})
+    base = os.path.join(out, "LICENSES", "texts")
+    os.makedirs(base, exist_ok=True)
+    written = {}
+
+    def spdx(identifier):
+        digest = texts.get("spdx", {}).get(identifier)
+        if digest is None:
+            return None
+        path = os.path.join(cache, identifier + ".txt")
+        if not os.path.isfile(path) and fetch:
+            os.makedirs(cache, exist_ok=True)
+            with urllib.request.urlopen(texts["spdx_base"] + identifier + ".txt", timeout=60) as reply:
+                data = reply.read()
+            if sha256_bytes(data) == digest:
+                with open(path, "wb") as stream:
+                    stream.write(data)
+        if not os.path.isfile(path) or sha256_file(path) != digest:
+            problems.append(f"licence text {identifier}: not in {cache} with the SHA-256 of the policy (use --fetch-texts)")
+            return None
+        with open(path, "rb") as stream:
+            return stream.read()
+
+    for identifier in sorted(set(policy["allow"]) | set(policy["review"])):
+        data, origin = spdx(identifier), None
+        if data is not None:
+            origin = "SPDX license-list-data " + texts["spdx_base"] + identifier + ".txt"
+        elif identifier in texts.get("compose", {}):
+            parts = [spdx(part) for part in texts["compose"][identifier]]
+            if None not in parts:
+                data = b"\n\n".join(parts)
+                origin = "composed from the SPDX texts " + " + ".join(texts["compose"][identifier])
+        elif identifier in texts.get("embedded", {}):
+            jar, _, member = texts["embedded"][identifier].partition("!/")
+            try:
+                with zipfile.ZipFile(os.path.join(tree, jar)) as archive:
+                    data = archive.read(member)
+                origin = "inside " + texts["embedded"][identifier]
+            except (OSError, KeyError, zipfile.BadZipFile):
+                data = None
+        elif identifier in texts.get("statement", {}):
+            data = (texts["statement"][identifier] + "\n").encode("utf-8")
+            origin = "statement recorded in licence-policy.json; no licence text exists"
+        if data is None:
+            problems.append(f"no licence text for {identifier}")
+            continue
+        target = os.path.join(base, identifier.replace(" ", "_") + ".txt")
+        with open(target, "wb") as stream:
+            stream.write(data)
+        index.append((target, f"text of {identifier}: {origin}"))
+        written[identifier] = os.path.relpath(target, out)
+    return written
+
+
+def collect_licences(out, tree, root, repo, problems, index):
     base = os.path.join(out, "LICENSES")
     wanted = (
         (os.path.join(repo, "LICENSE"), "GPL-3.0-only.txt", "uds-takserver repository LICENSE"),
@@ -183,6 +272,13 @@ def collect_licences(out, tree, root, repo, problems):
     if not found:
         problems.append("no WorldWind licence file found")
     providers = os.path.join(root, "P")
+    for provider, relative, origin in EXTRA_PROVIDER_TEXTS:
+        source = os.path.join(providers, provider, relative)
+        if os.path.isfile(source):
+            copy_licence(source, os.path.join(base, "providers", provider, "linked__" + relative.replace(os.sep, "__")),
+                         index, origin)
+        else:
+            problems.append(f"licence text missing: P/{provider}/{relative}")
     for provider in sorted(os.listdir(providers)) if os.path.isdir(providers) else ():
         for start in ("source", "licenses"):
             top = os.path.join(providers, provider, start)
@@ -216,18 +312,24 @@ def collect_licences(out, tree, root, repo, problems):
                     with open(target, "wb") as stream:
                         stream.write(archive.read(info))
                     index.append((target, f"inside {os.path.relpath(os.path.join(folder, name), tree)}: {info.filename}"))
-    with open(os.path.join(base, "INDEX.tsv"), "w", encoding="utf-8") as stream:
-        stream.write("path\tsha256\torigin\n")
-        for target, origin in sorted(index):
-            stream.write(f"{os.path.relpath(target, out)}\t{sha256_file(target)}\t{origin}\n")
     return len(index)
 
 
-def collect_patches(out, root, repo, problems):
+def write_index(out, index):
+    with open(os.path.join(out, "LICENSES", "INDEX.tsv"), "w", encoding="utf-8") as stream:
+        stream.write("path\tsha256\torigin\n")
+        for target, origin in sorted(index):
+            stream.write(f"{os.path.relpath(target, out)}\t{sha256_file(target)}\t{origin}\n")
+
+
+def collect_patches(out, root, repo, problems, manifest):
     """Copy patches; return the list for SOURCES.json."""
     named = {}
-    for receipt, key in (("P/kernel-composed/receipt.json", "kernel-composed"),
-                         ("P/kernel-overlay/receipt.json", "kernel-overlay")):
+    # The overlay of this tree is recorded in its own manifest (a tree
+    # assembled under another name has its own overlay directory).
+    for patch in manifest.get("kernel_java_overlay", {}).get("patches", []):
+        named.setdefault((patch["patch"], patch["sha256"]), []).append({"receipt": "manifest.json kernel_java_overlay"})
+    for receipt, key in (("P/kernel-composed/receipt.json", "kernel-composed"),):
         path = os.path.join(root, receipt)
         if not os.path.isfile(path):
             problems.append(f"receipt missing: {receipt}")
@@ -292,6 +394,9 @@ def main(argv=None):
     parser.add_argument("--out", required=True)
     parser.add_argument("--root", default=os.environ.get("TAKX_PROTO_ROOT", "/var/lib/takx-proto"))
     parser.add_argument("--repo", default=os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
+    parser.add_argument("--policy", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "licence-policy.json"))
+    parser.add_argument("--texts-cache", help="directory with the SPDX texts (default ROOT/pkg/licence-texts)")
+    parser.add_argument("--fetch-texts", action="store_true", help="fetch SPDX texts that are not in the cache")
     options = parser.parse_args(argv)
     out, tree, root, repo = (os.path.abspath(path) for path in (options.out, options.tree, options.root, options.repo))
     problems, blockers = [], []
@@ -310,8 +415,37 @@ def main(argv=None):
                       "component": component, "origin": entry["origin"]})
 
     shutil.copyfile(os.path.join(repo, "takx/desktop-prototype/image/NOTICE.md"), os.path.join(out, "NOTICE.md"))
-    licence_count = collect_licences(out, tree, root, repo, problems)
-    patches = collect_patches(out, root, repo, problems)
+    policy = licence_gate.load_policy(options.policy)
+    index = []
+    collect_licences(out, tree, root, repo, problems, index)
+    texts = collect_texts(out, tree, policy, options.texts_cache or os.path.join(root, "pkg", "licence-texts"),
+                          options.fetch_texts, index, problems)
+    write_index(out, index)
+    licence_count = len(index)
+    patches = collect_patches(out, root, repo, problems, manifest)
+
+    # The licence gate over the tree and the notices written so far.
+    gate = licence_gate.Gate(policy)
+    gate.tree(tree)
+    gate.notices(out)
+    gate_report = gate.report()
+    with open(os.path.join(out, "licence-gate.json"), "w", encoding="utf-8") as stream:
+        json.dump(gate_report, stream, indent=1)
+        stream.write("\n")
+    verdicts = {}
+    for item in gate.items:
+        if "!/" not in item["path"] and item["kind"] in ("jar", "asset", "native"):
+            verdicts[item["path"]] = item
+    aggregated = [(item["path"], item) for item in gate.items if "files" in item]
+    for entry in files:
+        item = verdicts.get(entry["path"])
+        if item is None:
+            item = next((found for glob, found in aggregated if licence_gate.fnmatch.fnmatchcase(entry["path"], glob)), None)
+        entry["licence"] = item["licence"] if item else None
+        entry["licence_gate"] = item["verdict"] if item else "unknown"
+    embedded_text = {os.path.basename(os.path.dirname(target)) for target, _ in index
+                     if os.sep + os.path.join("LICENSES", "jars") + os.sep in target}
+    jars = [entry for entry in files if entry["path"].endswith(".jar")]
 
     locks = {}
     os.makedirs(os.path.join(out, "locks"))
@@ -319,7 +453,7 @@ def main(argv=None):
         shutil.copyfile(os.path.join(repo, path), os.path.join(out, "locks", os.path.basename(path)))
         locks[path] = {"sha256": sha256_file(os.path.join(repo, path)), "copy": "locks/" + os.path.basename(path)}
 
-    fetched, unverified = [], []
+    fetched, unverified, input_categories = [], [], {}
     fetch_path = os.path.join(root, "status/fetch.json")
     if os.path.isfile(fetch_path):
         with open(fetch_path, encoding="utf-8") as stream:
@@ -330,6 +464,20 @@ def main(argv=None):
                              "verified", "required", "built_by_prototype", "note")})
             if not item.get("verified") and not item.get("built_by_prototype"):
                 unverified.append(item["name"])
+            source = str(item.get("source") or "")
+            if item.get("built_by_prototype"):
+                category = "built_by_the_prototype_no_digest"
+            elif item.get("kind") == "git-source":
+                category = "git_checkout_local_clone_no_digest" if source.startswith("file:") else "git_checkout_no_digest"
+            elif not item.get("verified"):
+                category = "unverified"
+            elif source.startswith("http") and item.get("actual_sha256"):
+                category = "url_and_sha256"
+            elif item.get("actual_sha256"):
+                category = "sha256_without_url"
+            else:
+                category = "other"
+            input_categories[category] = input_categories.get(category, 0) + 1
     else:
         problems.append("status/fetch.json is missing")
 
@@ -360,20 +508,33 @@ def main(argv=None):
     if unverified:
         blockers.append("fetched inputs without a verified digest: " + ", ".join(unverified))
     blockers += [f"problem: {problem}" for problem in problems]
-    blockers += ["licence review is open (issue #375): bundled bytedeco FFmpeg binaries, WorldWind third-party "
-                 "notices, GPL-3.0 combination",
+    flagged = gate_report["flagged"]
+    if flagged:
+        blockers.append("the licence gate flags %d item(s): %s (licence-gate.json; issue #934)" % (
+            len(flagged), ", ".join("%d %s" % (count, verdict) for verdict, count in gate_report["counts"].items()
+                                    if count and verdict != "allow")))
+    blockers += ["export classification of this build is open (issue #934, compliance section D)",
                  "the image carries this manifest and the patches, not the complete corresponding source; "
                  "a distribution needs the source next to it or a written offer"]
 
     document = {
         "schema": 1,
         "label": LABEL,
-        "publishable": False,
+        "publishable": not blockers,
         "publishable_blockers": blockers,
+        "licence_gate": {"report": "licence-gate.json", "policy_sha256": sha256_file(options.policy),
+                         "clean": gate_report["clean"], "build_may_proceed": gate_report["build_may_proceed"],
+                         "counts": gate_report["counts"], "licences_in_use": gate_report["licences_in_use"],
+                         "licence_texts": texts,
+                         "flagged": [{key: item[key] for key in ("path", "kind", "verdict", "licence", "reason")}
+                                     for item in flagged]},
         "tree": {"manifest_sha256": sha256_file(manifest_path), "files": len(files),
                  "bytes": sum(item["bytes"] for item in files),
                  "takx_source_revision": manifest["takx"]["source_revision"],
-                 "substitutions": manifest["components"]},
+                 "substitutions": manifest["components"],
+                 "licence_exclusions": manifest.get("licence_exclusions", []),
+                 "kernel_jar_derivation": manifest.get("kernel_jar_derivation"),
+                 "kernel_java_overlay": manifest.get("kernel_java_overlay")},
         "repository": repository,
         "repository_sources": sources,
         "base_image": BASE_IMAGE,
@@ -390,14 +551,26 @@ def main(argv=None):
         "counts": {"files": len(files), "components": per_component, "licence_files": licence_count,
                    "patches_shipped": sum(1 for patch in patches if patch["shipped"]),
                    "patches_verified_against_receipt": sum(1 for patch in patches if patch.get("verified_against_receipt")),
-                   "fetched_inputs": len(fetched), "fetched_inputs_unverified": len(unverified)},
+                   "fetched_inputs": len(fetched), "fetched_inputs_unverified": len(unverified),
+                   "fetched_inputs_by_category": input_categories,
+                   "jars": len(jars),
+                   "jars_with_a_licence_or_notice_file_inside": sum(
+                       1 for entry in jars if os.path.basename(entry["path"]) in embedded_text),
+                   "jars_covered_only_by_LICENSES_texts": sum(
+                       1 for entry in jars if os.path.basename(entry["path"]) not in embedded_text and entry["licence"]),
+                   "jars_without_any_licence_record": sum(1 for entry in jars if not entry["licence"]),
+                   "licence_gate": gate_report["counts"]},
     }
     with open(os.path.join(out, "SOURCES.json"), "w", encoding="utf-8") as stream:
         json.dump(document, stream, indent=1)
         stream.write("\n")
-    print(json.dumps({"out": out, "counts": document["counts"], "publishable": False,
-                      "blockers": len(blockers), "problems": problems}, indent=1))
-    return 1 if problems else 0
+    print(json.dumps({"out": out, "counts": document["counts"], "publishable": document["publishable"],
+                      "blockers": len(blockers), "problems": problems,
+                      "licence_gate_build_may_proceed": gate_report["build_may_proceed"]}, indent=1))
+    for item in flagged:
+        if item["verdict"] in licence_gate.FAILING:
+            print("licence gate: %s %s: %s" % (item["verdict"].upper(), item["path"], item["reason"]), file=sys.stderr)
+    return 1 if problems or not gate_report["build_may_proceed"] else 0
 
 
 if __name__ == "__main__":

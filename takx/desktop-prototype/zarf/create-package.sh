@@ -15,11 +15,15 @@
 # the local Docker image store; it is in no registry.
 #
 # What staging does:
-#   - replaces the placeholder `takx-build-tag` with TAG in zarf.yaml,
-#     components/image.yaml and the chart's default image;
+#   - replaces the placeholder `takx-build-tag` with TAG in zarf.yaml, and
+#     with TAG@sha256:DIGEST in components/image.yaml and the chart's default
+#     image: the package pins its image by digest. With `daemon` the digest
+#     is read from the local image store; with `registry` TAKX_IMAGE_DIGEST
+#     must name it;
 #   - sets the image source: `daemon` (default, the local Docker image store)
 #     or `registry` (TAKX_IMAGE_SOURCE);
-#   - writes the attachments NOTICE.md, SOURCES.json, LICENSES.tar,
+#   - writes the attachments NOTICE.md, SOURCES.json, LICENCE-GATE.json (the
+#     licence gate's report: what it still flags), LICENSES.tar,
 #     PATCHES.tar and DEBIAN-PACKAGES.tsv. They are copied out of the image
 #     itself (/usr/share/takx-desktop, no container is started), so the
 #     package cannot carry notices that differ from the ones in its image.
@@ -86,12 +90,27 @@ if [[ -z "${notices}" ]]; then
   docker rm "${container}" >/dev/null
   container=""
 fi
-for item in NOTICE.md SOURCES.json LICENSES patches locks; do
+for item in NOTICE.md SOURCES.json licence-gate.json LICENSES patches locks; do
   if [[ ! -e "${notices}/${item}" ]]; then
     echo "The notices in ${TAKX_NOTICES_DIR:-the image} lack ${item}" >&2
     exit 1
   fi
 done
+# The package pins the image by digest, not by tag alone: a rebuild under the
+# same tag (the tag only names the tree) cannot slip into a package unseen.
+# With `daemon` the digest is the one the local image store has for the tag;
+# with `registry` the caller names it.
+digest="${TAKX_IMAGE_DIGEST:-}"
+if [[ -z "${digest}" && "${source}" == daemon ]]; then
+  digest="$(docker image inspect "${image_repo}:${tag}" --format '{{ .Descriptor.Digest }}' 2>/dev/null || true)"
+  if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    digest="$(docker image inspect "${image_repo}:${tag}" --format '{{ .Id }}')"
+  fi
+fi
+if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "No image digest: set TAKX_IMAGE_DIGEST=sha256:... (required with TAKX_IMAGE_SOURCE=registry)" >&2
+  exit 1
+fi
 recorded="$(python3 -I -c 'import json, sys
 sources = json.load(open(sys.argv[1], encoding="utf-8"))
 print(sources["tree"]["manifest_sha256"])' "${notices}/SOURCES.json")"
@@ -114,9 +133,9 @@ cp -R "${here}/components" "${here}/manifests" "${stage}/zarf/"
 cp "${here}/values.yaml" "${here}/values.schema.json" "${here}/image-values.yaml" "${here}/README.md" "${stage}/zarf/"
 cp -R "${proto}/chart" "${stage}/chart"
 sed -e "s/takx-build-tag/${tag}/g" "${here}/zarf.yaml" >"${stage}/zarf/zarf.yaml"
-sed -e "s/takx-build-tag/${tag}/g" -e "s/source: registry/source: ${source}/g" \
+sed -e "s/takx-build-tag/${tag}@${digest}/g" -e "s/source: registry/source: ${source}/g" \
   "${here}/components/image.yaml" >"${stage}/zarf/components/image.yaml"
-sed -e "s/takx-build-tag/${tag}/g" "${proto}/chart/values.yaml" >"${stage}/chart/values.yaml"
+sed -e "s/takx-build-tag/${tag}@${digest}/g" "${proto}/chart/values.yaml" >"${stage}/chart/values.yaml"
 if grep -rl takx-build-tag "${stage}" >/dev/null; then
   echo "The placeholder takx-build-tag is left in the staged copy:" >&2
   grep -rl takx-build-tag "${stage}" >&2
@@ -124,6 +143,7 @@ if grep -rl takx-build-tag "${stage}" >/dev/null; then
 fi
 
 cp "${notices}/NOTICE.md" "${notices}/SOURCES.json" "${stage}/zarf/"
+cp "${notices}/licence-gate.json" "${stage}/zarf/LICENCE-GATE.json"
 if [[ -s "${notices}/debian-packages.tsv" ]]; then
   cp "${notices}/debian-packages.tsv" "${stage}/zarf/DEBIAN-PACKAGES.tsv"
 else
@@ -143,7 +163,7 @@ archive "${stage}/zarf/PATCHES.tar" patches locks
 if [[ -n "${stage_only}" ]]; then
   mkdir -p "$(dirname "${stage_only}")"
   cp -R "${stage}" "${stage_only}"
-  echo "Staged ${stage_only}/zarf (image ${image_repo}:${tag}, source ${source}, tree ${recorded})"
+  echo "Staged ${stage_only}/zarf (image ${image_repo}:${tag}@${digest}, source ${source}, tree ${recorded})"
   exit 0
 fi
 "${uds}" zarf package create "${stage}/zarf" "$@"

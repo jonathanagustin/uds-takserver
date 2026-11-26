@@ -21,6 +21,8 @@
 #   /run/takx/vnc         rfb.sock (desktop writes, web connects; shared)
 #   /run/takx/identity    staged identity files (identity writes, desktop reads)
 # Read-only input of the identity mode: /run/takx/secret (package.zip, password).
+# Optional read-only input of the desktop mode: /opt/takx-addons/video, a
+# directory of FFmpeg natives the user supplies (see below).
 #
 # Environment (all optional):
 #   TAKX_GEOMETRY        desktop size, default 1920x1080
@@ -32,6 +34,18 @@
 #                        them. Heap dumps are always switched off afterwards:
 #                        a dump would hold key material in a file.
 #   TAKX_WEB_LISTEN      web mode listen address, default 0.0.0.0:6080
+#   TAKX_ADDON_VIDEO     directory with FFmpeg natives for JavaCPP
+#                        (libavutil.so.56, libjniavutil.so, ...), default
+#                        /opt/takx-addons/video. The image ships none: the
+#                        build TAKX declares states that it is nonfree and
+#                        unredistributable. When the directory holds a
+#                        library it is appended to java.library.path;
+#                        otherwise video stays off and one error is logged
+#                        when a project opens.
+#
+# GDAL_DATA and PROJ_LIB are set to the data directories in the tree: the
+# libraries were built with the paths of their build directories, and without
+# the files GDAL logs "Unable to open EPSG support file gcs.csv".
 #   TAKX_IDENTITY_*      see stage_identity.py
 #
 # The Kernel is public 8.30.5 plus project patches and CommonCommo is 1.17.2
@@ -40,6 +54,8 @@ set -euo pipefail
 
 app=/opt/takx-desktop
 tree=/opt/takx
+gdal_data="${tree}/share/gdal"
+proj_data="${tree}/share/proj"
 run_dir="${TAKX_RUN_DIR:-/run/takx}"
 session="${run_dir}/session"
 vnc="${run_dir}/vnc"
@@ -86,7 +102,7 @@ build_run_tree() {
 
 desktop() {
   local number="${TAKX_DISPLAY_NUMBER:-1}" geometry="${TAKX_GEOMETRY:-1920x1080}" depth="${TAKX_DEPTH:-24}"
-  local dir xpid wmpid jpid ended="" rc=0 stop=0 args=() cookie
+  local dir xpid wmpid jpid ended="" rc=0 stop=0 args=() cookie addon="${TAKX_ADDON_VIDEO:-/opt/takx-addons/video}"
   [[ "${number}" =~ ^[0-9]{1,3}$ ]] || die "TAKX_DISPLAY_NUMBER must be a number, got '${number}'"
   [[ "${geometry}" =~ ^[0-9]{3,5}x[0-9]{3,5}$ ]] || die "TAKX_GEOMETRY must be WIDTHxHEIGHT, got '${geometry}'"
   [[ "${depth}" =~ ^(16|24|32)$ ]] || die "TAKX_DEPTH must be 16, 24 or 32, got '${depth}'"
@@ -94,6 +110,16 @@ desktop() {
     [[ -d "${dir}" && -w "${dir}" ]] || die "${dir} is not a writable directory; mount a tmpfs or a volume there"
   done
   test ! -e /var/lib/takx-proto || log "warning: /var/lib/takx-proto exists; this image is meant to run without it"
+  [[ -s "${gdal_data}/gcs.csv" ]] || die "${gdal_data}/gcs.csv is missing; the tree has no GDAL data directory"
+  [[ -s "${proj_data}/epsg" ]] || die "${proj_data}/epsg is missing; the tree has no PROJ data directory"
+  export GDAL_DATA="${gdal_data}" PROJ_LIB="${proj_data}"
+  unset TAKX_ADDON_LIBRARY_PATH
+  if [[ -d "${addon}" && -n "$(find "${addon}" -maxdepth 1 -name 'lib*.so*' -print -quit)" ]]; then
+    export TAKX_ADDON_LIBRARY_PATH="${addon}"
+    log "video add-on: FFmpeg natives supplied by the user in ${addon} (not part of this image)"
+  else
+    log "video add-on: none in ${addon}; video playback and recording are off"
+  fi
 
   umask 027
   ulimit -c 0

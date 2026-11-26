@@ -3,7 +3,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 # noVNC and its WebSocket, served by the web container. The only port of the
-# pod: the RFB protocol itself stays on a Unix socket inside the pod.
+# pod that a Service names and that policy lets in. The RFB protocol itself
+# stays on a Unix socket inside the pod. The TAKX JVM in the desktop
+# container listens on TCP 4242, 8087 and an ephemeral port as well; those
+# are closed by ingress-isolation.yaml and the operator's default deny.
 apiVersion: v1
 kind: Service
 metadata:

@@ -15,6 +15,8 @@ It is a prototype, not a supported product build. The client runs on substitutes
 | DockingFrames 1.1.3p1, colorchooser 1.1, swing-toast 1.0.3, NetBeans wizard, svgSalamander | source rebuilds by `takx/ui-java` |
 | `tak-assets` 1.2 | only the files that exist in public atak-civ; the `png/` toolbar icons are absent |
 | `border-shapefiles` 1.0.0, PostgreSQL bundle | absent (hsqldb is the default database) |
+| bytedeco FFmpeg 4.1.3 natives (public, but "nonfree and unredistributable") | absent; video is a user-supplied add-on |
+| `org.netbeans:wizard` | absent; no class refers to it |
 
 Nothing here is relabelled as the private version, and none of it has renderer, SDK or client acceptance. [STATUS.md](STATUS.md) records what was run, every fix made to get the client to boot, and what does not work.
 
@@ -36,11 +38,12 @@ Every stage runs in the `takx-desktop-proto` images through `run-in-toolchain.sh
 
 ## Assembly
 
-`stages/assemble.sh` runs three steps:
+`stages/assemble.sh` runs four steps. `TAKX_ASSEMBLE_NAME=NAME` assembles into `dist/NAME` and leaves `dist/takx57`, its overlay and its status files alone.
 
 1. `assemble/kernel_overlay.py` applies `assemble/kernel-overlay/*.patch` with fuzz 0 to a copy of the Kernel Java sources the Kernel stage compiled, compiles only those files against the composed Kernel classes, and writes `P/kernel-overlay/kernel-8.30.5-prototype-java-overlay.jar` with a receipt. It also refreshes the Java sources of `takx/kernel-render-context` when that recipe's locked image is newer than the source the Kernel stage compiled (see below). The Kernel JAR is not changed, so the Kernel controls were run without the overlay.
 2. The unmodified `takx/compat/build-system-clock.py` builds `libuds_desktop_clock.so`, which the Kernel build's `android.os.SystemClock` loads.
-3. `assemble/assemble.py` copies everything into `dist/takx57` and writes `manifest.json` with the source and SHA-256 of every file.
+3. `assemble/derive_jar.py` writes the Kernel JAR of the tree as a derived copy of the JAR the Kernel stage built (below).
+4. `assemble/assemble.py` copies everything into the tree and writes `manifest.json` with the source and SHA-256 of every file.
 
 The tree mirrors the official `deployment/bin` that `gradle/binCreator.gradle` fills:
 
@@ -51,6 +54,21 @@ The tree mirrors the official `deployment/bin` that `gradle/binCreator.gradle` f
 - `conf/`, `gazetteer/`, `resources/`, the log4j files and `template-64bit.vmoptions`: copied from the official tree.
 - `resources/tak-assets/`: `txt/callsigns.txt`, `dbs/iconcache.sqlite`, `icons/` and the five `iconsets/*.zip` (Git LFS objects, verified against their pointers) from atak-civ.
 - `native/linux64/`: `libcommoncommojni.so` and `libuds_desktop_clock.so`. The Kernel natives stay inside the Kernel JAR; its stock loader extracts them below `java.io.tmpdir`.
+- `share/gdal/` and `share/proj/`: the data directories of GDAL 2.4.4 and PROJ 4.9.1. The libraries were built with the paths of their build directories, so `launch.sh` sets `GDAL_DATA` and `PROJ_LIB`; without them GDAL logs `Unable to open EPSG support file gcs.csv` wherever the build directories are absent.
+
+### Left out or changed for its licence
+
+`manifest.json` records each of these (`licence_exclusions`, `kernel_jar_derivation`), and `image/licence_gate.py` checks the result by content.
+
+| Item | What the assembly does | Why | Effect seen |
+| --- | --- | --- | --- |
+| `ffmpeg-4.1.3-1.5.1-linux-x86_64.jar` | not copied | its binaries state "nonfree and unredistributable" | `MediaPlayerManager.startService` logs one `UnsatisfiedLinkError` when a project opens; no video. `TAKX_ADDON_LIBRARY_PATH` names a directory of natives the user supplies |
+| `uds-takserver-ui-wizard-reference.jar` | not copied | CDDL-only | none: `gradle/clientDependencies.gradle` declares it, no class refers to it |
+| `joost-0.9.1.jar` | not copied | MPL-1.1 only | none: a `runtimeOnly` declaration, no class refers to it |
+| 24 font atlases in the Kernel JAR (`assets/fonts/arial*`, `cour*`, `segoeui*`) | removed from the derived copy; `font_resources.json` lists no atlas | no licence, named after Microsoft fonts | none: Kernel 8.30.5 never opens them (`GlyphAtlas_open` has no caller; glyphs are generated at run time since 8.13.0). Labels render |
+| `RUNPATH` of `libtakengine.so` and `libtakenginejni.so` | dynamic entry removed in the derived copy | it ends in an empty element, which glibc reads as the working directory | none |
+
+The derived copy is named `kernel-8.30.5-linux-amd64-public-cpu-tree.jar`. The JAR the Kernel stage built, its receipt and its nine controls are unchanged and describe the built JAR; no control was rerun with the copy. The stock loader names its extraction directory after the MD5 of the JAR, so `prototype-launch.env` carries the MD5 of the copy. The atlases were not regenerated from an open font: their format is that of `msdf-atlas-gen`, but nothing would read the result.
 
 ### Module graph
 
@@ -84,7 +102,7 @@ takx/desktop-prototype/stages/boot.sh check                    # evidence into s
 takx/desktop-prototype/stages/boot.sh stop
 ```
 
-`assemble/launch.sh` is the command line of the official `runTakx` task: working directory = the tree, class path `boot/*` and `conf`, every line of `template-64bit.vmoptions`, `java.library.path`, then `org.jboss.modules.Main -mp modules takx-bootstrap -create`. It adds only `-Dprojectdata.dir`, `-Djava.io.tmpdir` and `-Duser.home`, all inside the attempt's run directory. `assemble/session.sh` starts Xvfb 1920x1080x24, openbox and `LIBGL_ALWAYS_SOFTWARE=1` around it.
+`assemble/launch.sh` is the command line of the official `runTakx` task: working directory = the tree, class path `boot/*` and `conf`, every line of `template-64bit.vmoptions`, `java.library.path`, then `org.jboss.modules.Main -mp modules takx-bootstrap -create`. It adds only `-Dprojectdata.dir`, `-Djava.io.tmpdir` and `-Duser.home`, all inside the attempt's run directory, and the environment variables `GDAL_DATA` and `PROJ_LIB`. `assemble/session.sh` starts Xvfb 1920x1080x24, openbox and `LIBGL_ALWAYS_SOFTWARE=1` around it.
 
 Each attempt gets `runs/boot-<n>/` and `logs/boot-<n>.log`. The run directory links to the tree and copies only `resources/`, because TAKX writes `resources/tak-assets/wmm_cof` at start.
 
@@ -100,7 +118,7 @@ Network behaviour to know about:
 
 ## Deploy as a package
 
-`stages/image.sh` puts the assembled tree into one self-contained image ([image/README.md](image/README.md)), and `stages/package.sh` turns that image into a Zarf v1beta1 package, `takx-desktop`, and a UDS bundle, `takx-desktop-proto`. The package runs the client in one pod and serves it to a browser at `https://takx.<domain>/` behind the UDS tenant gateway and Keycloak; a `TakClient` supplies its TAK identity. Both are opt-in and separate from the TAK Server package.
+`stages/image.sh` puts the assembled tree into one self-contained image ([image/README.md](image/README.md)), and `stages/package.sh` turns that image into a Zarf v1beta1 package, `takx-desktop`, and a UDS bundle, `takx-desktop-proto`. The image build fails when the licence gate finds a denied or unknown JAR, native library or asset; the package pins the image by digest. The package runs the client in one pod and serves it to a browser at `https://takx.<domain>/` behind the UDS tenant gateway and Keycloak; a `TakClient` supplies its TAK identity. Both are opt-in and separate from the TAK Server package.
 
 ```bash
 takx/desktop-prototype/stages/package.sh all      # lint, render, validate, test, build, inspect; deploys nothing
@@ -116,5 +134,7 @@ The package and a bundle with only this package were built and checked without a
 | --- | --- |
 | `stages/assemble.sh`, `stages/boot.sh`, `stages/capture.sh` | stage drivers |
 | `assemble/assemble.py` | tree assembler and manifest |
+| `assemble/derive_jar.py`, `assemble/test_derive_jar.py` | derived Kernel JAR of the tree and its tests |
+| `image/licence_gate.py`, `image/licence-policy.json`, `image/test_licence_gate.py` | licence gate, its policy and its tests |
 | `assemble/kernel_overlay.py`, `assemble/kernel-overlay/*.patch` | Kernel Java overlay |
 | `assemble/launch.sh`, `assemble/session.sh` | launcher and X session |

@@ -5,7 +5,11 @@
 # What the UDS operator builds from this: a Keycloak client and an Authservice
 # chain in front of the pod, a VirtualService on the tenant gateway, and
 # default-deny NetworkPolicies with the rules under `allow`. DNS and the
-# ingress from the tenant gateway to port 6080 come from the operator.
+# ingress from the tenant gateway to port 6080 come from the operator, as do
+# the ALLOW AuthorizationPolicy for that port and the gateway's identity.
+# There is deliberately no ingress rule under `allow`: the ports the TAKX JVM
+# listens on (4242, 8087, one ephemeral) stay closed; ingress-isolation.yaml
+# states that on its own.
 #
 # The pod may open exactly these connections: the passthrough gateway on the
 # TAK ports that are switched on in values, and the hosts under egress.hosts

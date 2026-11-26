@@ -573,7 +573,7 @@ class Composition(unittest.TestCase):
         self.assertEqual(package["values"], {"files": ["values.yaml"], "schema": "values.schema.json"})
         self.assertNotIn("variables", package)
         self.assertEqual(sorted(package["attachments"]),
-                         ["DEBIAN-PACKAGES", "LICENSES", "NOTICE", "PATCHES", "README", "SOURCES"])
+                         ["DEBIAN-PACKAGES", "LICENCE-GATE", "LICENSES", "NOTICE", "PATCHES", "README", "SOURCES"])
 
     def test_component_order_and_selection(self):
         names = [component["name"] for component in self.package["components"]]
@@ -865,13 +865,47 @@ class Chart(unittest.TestCase):
         cls.full = helm_template(ALL_VALUES)
 
     def test_kinds(self):
-        self.assertEqual(sorted(doc["kind"] for doc in self.default), ["Deployment", "Package", "Service", "ServiceAccount"])
+        self.assertEqual(sorted(doc["kind"] for doc in self.default),
+                         ["AuthorizationPolicy", "Deployment", "NetworkPolicy", "Package", "Service", "ServiceAccount"])
         self.assertEqual(sorted(doc["kind"] for doc in self.full),
-                         ["Deployment", "Package", "PersistentVolumeClaim", "Service", "ServiceAccount"])
+                         ["AuthorizationPolicy", "Deployment", "NetworkPolicy", "Package", "PersistentVolumeClaim",
+                          "Service", "ServiceAccount"])
         for doc in self.default + self.full:
             self.assertEqual(doc["metadata"]["namespace"], "takx-desktop")
             self.assertNotIn(doc["kind"], ("Secret", "Role", "RoleBinding", "ClusterRole", "ClusterRoleBinding",
-                                           "NetworkPolicy", "Exemption"))
+                                           "Exemption"))
+
+    def test_ingress_isolation(self):
+        """The JVM listens on 4242, 8087 and an ephemeral port: nothing but 6080 may be reached."""
+        for documents in (self.default, self.full):
+            policy = one(documents, "NetworkPolicy")
+            self.assertEqual(policy["apiVersion"], "networking.k8s.io/v1")
+            # Selects the pod, isolates it for ingress, allows nothing: the
+            # only allowance is the operator's, from `expose`.
+            self.assertEqual(policy["spec"], {"podSelector": {"matchLabels": SELECTOR}, "policyTypes": ["Ingress"]})
+            deny = one(documents, "AuthorizationPolicy")
+            self.assertEqual(deny["apiVersion"], "security.istio.io/v1")
+            self.assertEqual(deny["spec"], {"selector": {"matchLabels": SELECTOR}, "action": "DENY",
+                                            "rules": [{"to": [{"operation": {"notPorts": ["6080"]}}]}]})
+            package = one(documents, "Package")
+            (expose,) = package["spec"]["network"]["expose"]
+            self.assertEqual(expose["port"], 6080)
+            self.assertEqual([rule for rule in package["spec"]["network"].get("allow", []) if rule["direction"] != "Egress"], [])
+            pod = one(documents, "Deployment")["spec"]["template"]["spec"]
+            declared = [port for container in all_containers(pod) for port in container.get("ports", [])]
+            self.assertEqual([port["containerPort"] for port in declared], [6080])
+        without = helm_template({"network": {"denyOtherPorts": False}})
+        self.assertEqual([doc["kind"] for doc in without if doc["kind"] == "AuthorizationPolicy"], [])
+        self.assertEqual(one(without, "NetworkPolicy")["spec"]["policyTypes"], ["Ingress"])
+
+    def test_texts_do_not_claim_that_the_desktop_has_no_tcp_port(self):
+        for path in (os.path.join(CHART, "templates", "deployment.yaml"), os.path.join(CHART, "templates", "service.yaml"),
+                     os.path.join(os.path.dirname(os.path.abspath(__file__)), "README.md")):
+            with open(path, encoding="utf-8") as stream:
+                text = stream.read()
+            self.assertNotRegex(text, r"No (listening )?TCP port")
+            self.assertIn("4242", text)
+            self.assertIn("8087", text)
 
     def test_default_values_fit_the_schema(self):
         (values,) = load_yaml(os.path.join(CHART, "values.yaml"))
@@ -1335,7 +1369,8 @@ def main_built(inspect_dir, tag):
     for folder, _dirs, names in os.walk(attachments):
         for name in names:
             found[name] = os.path.join(folder, name)
-    wanted = ("README.md", "NOTICE.md", "SOURCES.json", "LICENSES.tar", "PATCHES.tar", "DEBIAN-PACKAGES.tsv")
+    wanted = ("README.md", "NOTICE.md", "SOURCES.json", "LICENCE-GATE.json", "LICENSES.tar", "PATCHES.tar",
+              "DEBIAN-PACKAGES.tsv")
     missing = [name for name in wanted if name not in found]
     if missing:
         print(f"attachments missing: {missing}; found {sorted(found)}")
@@ -1347,6 +1382,8 @@ def main_built(inspect_dir, tag):
         licences = [member.name for member in archive.getmembers() if member.isfile()]
     with tarfile.open(found["PATCHES.tar"]) as archive:
         patches = [member.name for member in archive.getmembers() if member.isfile()]
+    with open(found["LICENCE-GATE.json"], encoding="utf-8") as stream:
+        gate = json.load(stream)
     with open(found["NOTICE.md"], encoding="utf-8") as stream:
         notice = stream.read()
     with open(found["DEBIAN-PACKAGES.tsv"], encoding="utf-8") as stream:
@@ -1364,6 +1401,15 @@ def main_built(inspect_dir, tag):
         "SBOM lists Debian packages and Java archives": kinds.get("deb", 0) > 100 and kinds.get("java-archive", 0) > 100,
         "tag ends in the tree digest of SOURCES.json": tag.endswith("-" + digest[:12]),
         "SOURCES.json says publishable false": sources.get("publishable") is False,
+        "LICENCE-GATE.json: nothing denied or unknown": gate["build_may_proceed"] is True
+        and gate["counts"]["deny"] == 0 and gate["counts"]["unknown"] == 0,
+        "LICENCE-GATE.json and SOURCES.json agree, and publishable is false while anything is flagged":
+            gate["counts"] == sources["licence_gate"]["counts"] and (gate["clean"] or sources.get("publishable") is False),
+        "LICENSES.tar holds the text of every licence in use": all(
+            "LICENSES/texts/%s.txt" % name.replace(" ", "_") in licences for name in gate["licences_in_use"]),
+        "no FFmpeg native JAR, wizard reference JAR or joost in the tree": not [
+            item["path"] for item in sources["files"]
+            if re.search(r"ffmpeg-[^/]*linux[^/]*\.jar$|wizard-reference|joost", item["path"])],
         "SOURCES.json maps every tree file": sources["counts"]["files"] == sources["tree"]["files"] == len(sources["files"]),
         "LICENSES.tar holds GPL-3.0-only.txt": "LICENSES/GPL-3.0-only.txt" in licences,
         "LICENSES.tar holds more than 100 files": len(licences) > 100,

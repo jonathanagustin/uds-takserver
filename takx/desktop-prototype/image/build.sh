@@ -42,6 +42,19 @@ if [[ -z "${ca}" && -s /root/.ccr/ca-bundle.crt ]]; then ca=/root/.ccr/ca-bundle
 
 [[ -s "${tree}/manifest.json" ]] || { echo "build.sh: no tree at ${tree}" >&2; exit 1; }
 [[ -s "${notices}/SOURCES.json" ]] || { echo "build.sh: no notices at ${notices}; run gen_notices.py" >&2; exit 1; }
+[[ -s "${notices}/licence-gate.json" ]] || { echo "build.sh: no licence gate report in ${notices}; run gen_notices.py" >&2; exit 1; }
+# The licence gate decides whether an image may be built at all; the build
+# runs it again on the tree inside the image (verify/build_gates.sh, gate 6).
+# The label lists the identifiers in use in the tree and the JDK's.
+licenses="$(python3 -I - "${notices}/licence-gate.json" <<'PY'
+import json, sys
+report = json.load(open(sys.argv[1]))
+if not report["build_may_proceed"]:
+    sys.exit("build.sh: the licence gate found denied or unknown items; see " + sys.argv[1])
+print(" AND ".join(sorted(set(report["licences_in_use"]) | {"GPL-2.0-only WITH Classpath-exception-2.0"})))
+PY
+)"
+gate_clean="$(python3 -I -c 'import json, sys; print(str(json.load(open(sys.argv[1]))["clean"]).lower())' "${notices}/licence-gate.json")"
 
 digest="$(sha256sum "${tree}/manifest.json" | cut -d' ' -f1)"
 short="${digest:0:12}"
@@ -64,6 +77,7 @@ docker buildx build --provenance=false --sbom=false --progress=plain \
   --build-context "notices=${notices}" \
   "${secret[@]}" \
   --build-arg "TREE_MANIFEST_SHA256=${digest}" \
+  --build-arg "IMAGE_LICENSES=${licenses}" \
   -t "${local_tag}" -t "${package_tag}" \
   "${proto}" >"${log}" 2>&1 || status=failed
 seconds=$(($(date +%s) - started))
@@ -74,14 +88,16 @@ if [[ "${status}" == ok ]]; then
   size="$(docker image inspect -f '{{.Size}}' "${local_tag}")"
 fi
 python3 -I - "${root}/pkg/status/image.json" "${status}" "${seconds}" "${digest}" "${local_tag}" "${package_tag}" \
-  "${image_id}" "${size}" "${log}" <<'PY'
+  "${image_id}" "${size}" "${log}" "${gate_clean}" "${licenses}" "${tree}" <<'PY'
 import json, os, sys
-path, status, seconds, digest, local_tag, package_tag, image_id, size, log = sys.argv[1:]
+path, status, seconds, digest, local_tag, package_tag, image_id, size, log, gate_clean, licenses, tree = sys.argv[1:]
 tmp = path + ".tmp.%d" % os.getpid()
 with open(tmp, "w") as stream:
     json.dump({"stage": "image", "status": status, "seconds": int(seconds), "tree_manifest_sha256": digest,
                "tags": [local_tag, package_tag], "image_id": image_id, "size_bytes": int(size or 0),
-               "pushed": False, "log": log,
+               "pushed": False, "log": log, "tree": tree,
+               "licence_gate_clean": gate_clean == "true", "publishable": False,
+               "image_licenses_label": licenses,
                "notes": "TAKX 5.7 (0b59a9bb) public-source build on Kernel 8.30.5 + project patches, CommonCommo "
                         "1.17.2 patched, NASA WorldWind interop; local image, single manifest, never pushed"},
               stream, indent=1)

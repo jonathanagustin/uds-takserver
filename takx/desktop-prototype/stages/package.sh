@@ -18,10 +18,10 @@
 #   helm          `helm lint --strict` and `helm template` of ../chart, with
 #                 the default values and with every optional branch on
 #   render        `zarf dev inspect manifests`: what the package would apply
-#   crds          read the Package and TakClient CRDs from the cluster
+#   crds          read the Package, TakClient and AuthorizationPolicy CRDs from the cluster
 #                 (kubectl get, nothing else) and turn them into JSON Schemas
 #   validate      kubeconform: every rendered object against the Kubernetes
-#                 schemas and those two CRD schemas, unknown fields rejected
+#                 schemas and those three CRD schemas, unknown fields rejected
 #   lookup        `helm template --dry-run=server`: the chart's lookup of the
 #                 passthrough gateway Service against the cluster. It reads
 #                 that one Service; nothing is sent to be applied
@@ -293,11 +293,12 @@ do_render() {
 do_crds() {
   local name
   mkdir -p "${work}/crds/schemas"
-  for name in packages.uds.dev takclients.tak.uds.dev; do
+  for name in packages.uds.dev takclients.tak.uds.dev authorizationpolicies.security.istio.io; do
     kubectl get crd "${name}" -o json >"${work}/crds/${name}.json"
   done
   python3 -I "${proto}/zarf/test_package.py" --crd-schemas "${work}/crds/schemas" \
-    "${work}/crds/packages.uds.dev.json" "${work}/crds/takclients.tak.uds.dev.json" | tee "${evidence}/crds.txt"
+    "${work}/crds/packages.uds.dev.json" "${work}/crds/takclients.tak.uds.dev.json" \
+    "${work}/crds/authorizationpolicies.security.istio.io.json" | tee "${evidence}/crds.txt"
   kubectl version -o json | python3 -I -c 'import json, sys
 print("cluster", json.load(sys.stdin)["serverVersion"]["gitVersion"])' | tee -a "${evidence}/crds.txt"
 }

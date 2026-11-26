@@ -9,7 +9,11 @@
 #                               stages it under /run/takx/identity. The only
 #                               container that sees the Secret volume.
 #   desktop          uid 10001  Xtigervnc on a Unix socket, openbox, the TAKX
-#                               JVM. No listening TCP port.
+#                               JVM. The X server has no TCP port, but the JVM
+#                               listens: CommonCommo binds TCP 4242 and 8087
+#                               on every address and one ephemeral port for
+#                               its HTTPS proxy. Nothing may reach them:
+#                               ingress-isolation.yaml.
 #   web              uid 10002  websockify: noVNC on TCP 6080, bridged to the
 #                               RFB socket. It reads the socket directory and
 #                               nothing else, so the HTTP parser that faces

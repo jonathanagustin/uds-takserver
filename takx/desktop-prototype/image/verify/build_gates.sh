@@ -20,6 +20,11 @@
 #                 unresolved and nothing may resolve below /var/lib/takx-proto
 #   4. display    Xtigervnc as uid 10001 gives GLX direct rendering on llvmpipe
 #   5. keytool    the JDK tool the identity stage needs runs
+#   6. licences   licence_gate.py over the tree and the notices as they are
+#                 in the image: nothing denied, nothing unknown, the text of
+#                 every licence in use present. Items under review do not
+#                 fail the build; they keep the image unpublishable and are
+#                 listed in the report
 set -euo pipefail
 
 manifest_sha256="$1"; out="$2"
@@ -65,6 +70,13 @@ echo "== gate 5: keytool"
 keytool -help >/dev/null 2>&1
 java -version 2>&1 | tee "${out}/java-version.txt"
 grep -q 'Temurin-17.0.21+9' "${out}/java-version.txt"
+
+echo "== gate 6: licences"
+python3 -I "${app}/licence_gate.py" --tree "${tree}" --policy "${app}/licence-policy.json" \
+  --notices /usr/share/takx-desktop --report "${out}/licence-gate.json" 2>"${out}/licence-gate-flagged.txt" ||
+  { grep -E '^(DENY|UNKNOWN)' "${out}/licence-gate-flagged.txt"; echo "the licence gate failed"; exit 1; }
+grep -c '' "${out}/licence-gate-flagged.txt" | sed 's/^/items the licence gate flags for review: /'
+test ! -e "${tree}/modules/prototype/libs/main/ffmpeg-4.1.3-1.5.1-linux-x86_64.jar"
 
 date -u +%FT%TZ >"${out}/verify.ok"
 echo "all gates passed"

@@ -11,7 +11,14 @@
 #   selftest.sh check             evidence: mounts, probes, JVM age, mapped
 #                                 libraries, one frame from inside the desktop
 #                                 container, one frame through the WebSocket
-#                                 bridge; writes status/selftest.json
+#                                 bridge; writes status/selftest.json. Fails
+#                                 on GDAL's "Unable to open EPSG support
+#                                 file", on GDAL_DATA or PROJ_LIB not naming
+#                                 the data directories of the tree, on an
+#                                 FFmpeg library in the JVM (the image ships
+#                                 none), and on any UnsatisfiedLinkError
+#                                 other than the one the absent FFmpeg
+#                                 natives cause when a project opens
 #   selftest.sh browser           Playwright Chromium on the host loads noVNC
 #                                 through exec_relay.py and saves a screenshot
 #                                 (needs node with the playwright module)
@@ -21,7 +28,12 @@
 #                                 codes (ends the session)
 #   selftest.sh audit             readelf-free ELF audit ('ldd -r') in the image
 #   selftest.sh linker            a boot under LD_DEBUG=libs: what the dynamic
-#                                 linker searched; then 'docker stop'
+#                                 linker searched; fails when a search path
+#                                 has an empty or relative element or a file
+#                                 is tried by a relative name (both mean the
+#                                 working directory, which the application
+#                                 user can write), or when a Kernel library
+#                                 still brings a RUNPATH; then 'docker stop'
 #   selftest.sh identity          identity stage against a synthetic identity
 #   selftest.sh logs              container logs into the evidence directory
 #   selftest.sh stop              remove the containers and the socket volume
@@ -133,6 +145,24 @@ age = float(open("/proc/uptime").read().split()[0]) - start / ticks
 paths = sorted({line.split(None, 5)[5].strip() for line in open(f"/proc/{pid}/maps") if line.count("/") and len(line.split(None, 5)) == 6})
 status = dict(line.split(":", 1) for line in open(f"/proc/{pid}/status") if ":" in line)
 kernel = [path for path in paths if "/takkernel/" in path]
+environ = dict(item.split("=", 1) for item in open(f"/proc/{pid}/environ").read().split("\0") if "=" in item)
+def listeners():
+    # TCP sockets in LISTEN state in the network namespace both containers
+    # share: the web bridge (6080) and whatever the JVM binds.
+    found = []
+    for family in ("tcp", "tcp6"):
+        try:
+            rows = open(f"/proc/net/{family}").read().splitlines()[1:]
+        except OSError:
+            continue
+        for row in rows:
+            cells = row.split()
+            if cells[3] == "0A":
+                address, port = cells[1].rsplit(":", 1)
+                loopback = address in ("0100007F", "00000000000000000000000001000000")
+                found.append({"family": family, "port": int(port, 16), "loopback_only": loopback,
+                              "every_address": set(address) == {"0"}})
+    return sorted(found, key=lambda item: (item["port"], item["family"]))
 print(json.dumps({
     "jvm_pid": pid, "jvm_age_seconds": round(age), "uid": status["Uid"].split()[0], "gid": status["Gid"].split()[0],
     "cap_eff": status["CapEff"].strip(), "no_new_privs": status["NoNewPrivs"].strip(),
@@ -143,6 +173,15 @@ print(json.dumps({
     "mapped_gles_and_dispatch": [path for path in paths if re.search(r"libGLESv2|libGLdispatch|libEGL|libGLX|libGL\.so", path)],
     "mapped_native_dir": [path for path in paths if path.startswith("/opt/takx/native/")],
     "mapped_shared_objects": len([path for path in paths if ".so" in path]),
+    "mapped_ffmpeg_libraries": [path for path in paths if re.search(r"/lib(jni)?(av|sw|postproc)[a-z]*\.so", path)],
+    "working_directory": os.readlink(f"/proc/{pid}/cwd"),
+    "tcp_listeners": listeners(),
+    "gdal_data": environ.get("GDAL_DATA"), "proj_lib": environ.get("PROJ_LIB"),
+    "gdal_data_has_gcs_csv": os.path.isfile(os.path.join(environ.get("GDAL_DATA", "/nonexistent"), "gcs.csv")),
+    "proj_lib_has_epsg": os.path.isfile(os.path.join(environ.get("PROJ_LIB", "/nonexistent"), "epsg")),
+    "addon_library_path": environ.get("TAKX_ADDON_LIBRARY_PATH"),
+    "ffmpeg_native_jars_in_tree": sorted(name for name in os.listdir("/opt/takx/modules/prototype/libs/main")
+                                         if name.startswith("ffmpeg-") and "linux" in name),
     "root_writable": os.access("/", os.W_OK), "opt_takx_writable": os.access("/opt/takx", os.W_OK),
 }, indent=1))
 PY
@@ -163,7 +202,13 @@ inspect, jvm = load("inspect.json"), load("jvm.json")
 probes = dict(line.strip().split("=") for line in open(os.path.join(evidence, "probes.txt")))
 log = open(os.path.join(evidence, "desktop.log"), errors="replace").read()
 fatal = len(re.findall(r"A fatal error has been detected|SIGSEGV|OutOfMemoryError", log))
-unsatisfied = len(re.findall(r"UnsatisfiedLinkError|cannot open shared object", log))
+# The image ships no FFmpeg natives: MediaPlayerManager.startService fails
+# once when a project opens ("no jniavutil in java.library.path", caused by
+# "no avutil ..."). Any other unresolved library is a failure.
+link_lines = [line for line in log.splitlines() if re.search(r"UnsatisfiedLinkError|cannot open shared object", line)]
+ffmpeg_absent = [line for line in link_lines if re.search(r"UnsatisfiedLinkError: no (jni)?avutil in java\.library\.path", line)]
+unsatisfied = len(link_lines) - len(ffmpeg_absent)
+epsg = len(re.findall(r"Unable to open EPSG support file", log))
 containers = {}
 for item in inspect:
     host = item["HostConfig"]
@@ -184,7 +229,12 @@ checks = {
     "probes_pass": all(value == "0" for value in probes.values()),
     "jvm_up_over_120_s": jvm["jvm_age_seconds"] > 120,
     "no_fatal_jvm_marker": fatal == 0,
-    "no_unsatisfied_link": unsatisfied == 0,
+    "no_unsatisfied_link_other_than_absent_ffmpeg": unsatisfied == 0,
+    "no_gdal_epsg_support_file_error": epsg == 0,
+    "gdal_data_and_proj_lib_point_into_the_tree": jvm["gdal_data"] == "/opt/takx/share/gdal" and jvm["gdal_data_has_gcs_csv"]
+        and jvm["proj_lib"] == "/opt/takx/share/proj" and jvm["proj_lib_has_epsg"],
+    "no_ffmpeg_natives_shipped_or_mapped": not jvm["mapped_ffmpeg_libraries"] and not jvm["ffmpeg_native_jars_in_tree"]
+        and jvm["addon_library_path"] is None,
     "nothing_mapped_below_var_lib_takx_proto": not jvm["mapped_paths_below_var_lib_takx_proto"] and not jvm["var_lib_takx_proto_exists"],
     "nine_kernel_libraries_from_session_tmp": len(jvm["mapped_kernel_libraries"]) == 9 and all(
         path.startswith("/run/takx/session/tmp/takkernel/") for path in jvm["mapped_kernel_libraries"]),
@@ -193,7 +243,9 @@ checks = {
 }
 status = "ok" if all(checks.values()) else "failed"
 document = {"stage": "image-selftest", "status": status, "image": image, "checks": checks, "probes_exit_codes": probes,
-            "jvm": jvm, "fatal_markers": fatal, "unsatisfied_link_markers": unsatisfied, "containers": containers,
+            "jvm": jvm, "fatal_markers": fatal, "unsatisfied_link_markers": unsatisfied,
+            "unsatisfied_link_lines_from_absent_ffmpeg_natives": len(ffmpeg_absent),
+            "gdal_epsg_support_file_errors": epsg, "containers": containers,
             "frames": frames, "evidence": evidence,
             "notes": "automatic evidence only: whether the frames show the TAKX main window with the globe is for a "
                      "person who looks at frame-desktop.png and frame-web.png. Kernel 8.30.5 + project patches, "
@@ -420,8 +472,11 @@ do_linker() {
     trace="/tmp/ld.${jvm}"
     echo "linker trace of the JVM (pid ${jvm}): $(wc -l <"${trace}") lines"
     echo "lines naming /var/lib/takx-proto in any process trace: $(cat /tmp/ld.* | grep -c "/var/lib/takx-proto" || true)"
+    echo "working directory of the JVM: $(readlink "/proc/${jvm}/cwd") (writable by this user: $(if [[ -w "/proc/${jvm}/cwd/." ]]; then echo yes; else echo no; fi))"
     echo "search path lines of the JVM naming a RUNPATH: $(grep -c "RUNPATH from file" "${trace}" || true)"
     echo "search path lines of the JVM naming a Kernel library RUNPATH: $(grep "RUNPATH from file" "${trace}" | grep -c takkernel || true)"
+    echo "search paths with an empty or relative element, all processes: $(cat /tmp/ld.* | grep "search path=" | sed -E "s/^.*search path=([^\t]*).*$/\1/" | grep -c -E "^$|^:|:$|::|^[^/]|:[^/]" || true)"
+    echo "files tried by a relative name, all processes: $(cat /tmp/ld.* | grep -c -E "trying file=[^/]" || true)"
     echo "files the linker tried for the Kernel SONAMEs (none means they were already loaded):"
     tried="$(grep -E "trying file=.*(libGLESv2|libGLdispatch|libassimp|libgdal|liblas|libtakengine)" "${trace}" || true)"
     echo "  ${tried:-none}"
@@ -437,6 +492,9 @@ do_linker() {
   cat "${out}"
   do_stop
   grep -q '^lines naming /var/lib/takx-proto in any process trace: 0$' "${out}" &&
+    grep -q '^search path lines of the JVM naming a Kernel library RUNPATH: 0$' "${out}" &&
+    grep -q '^search paths with an empty or relative element, all processes: 0$' "${out}" &&
+    grep -q '^files tried by a relative name, all processes: 0$' "${out}" &&
     grep -q '^docker stop (SIGTERM): exit code 0 ' "${out}"
 }
 
@@ -478,6 +536,6 @@ case "${1:-}" in
   linker) do_linker;;
   logs) do_logs;;
   stop) do_stop;;
-  -h|--help|"") sed -n '5,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
+  -h|--help|"") sed -n '5,57p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
   *) echo "selftest.sh: unknown step '$1'" >&2; exit 2;;
 esac

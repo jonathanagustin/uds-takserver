@@ -6,14 +6,24 @@
 # provider_cache.py: each provider whose status file says "ok" becomes one
 # single-layer image <registry>/<provider>:<key>, where the key is derived from
 # the provider's inputs (providers.json), so a changed recipe gets a new tag and
-# an unchanged one is recognised as already saved. Requires a prior
-# `docker login`; without it, or with TAKX_PROTO_CACHE=off, nothing is pushed.
+# an unchanged one is recognised as already saved. An entry is only ever
+# overwritten when restore refused exactly that entry in this work root (see
+# provider_cache.py, "Replacing an entry"). Requires a prior `docker login`;
+# without it, or with TAKX_PROTO_CACHE=off, nothing is pushed.
 #
 # Usage: push-cache.sh [provider ...]     (default: every provider of the lanes)
 # Restore: restore-cache.sh; listing: provider_cache.py status --write-index
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Architecture hand-over (arch.sh): on a host whose architecture has override
+# patches (arm64) the keys are those of the patched tree copy, so this script
+# continues from there; on amd64 it does nothing.
+if [[ -f "${here}/arch.sh" ]]; then
+  # shellcheck source=takx/desktop-prototype/arch.sh disable=SC1091 # followed only when arch.sh is linted with it
+  . "${here}/arch.sh"
+  takx_arch_enter "${BASH_SOURCE[0]}" "$@"
+fi
 rc=0
 python3 -I "${here}/provider_cache.py" push "$@" || rc=$?
 # 3 means "skipped cleanly" (not ok yet, cache off, not logged in).

@@ -13,6 +13,15 @@
 # TREE is the assembled tree or a run directory that links to it. RUNDIR
 # receives ProjectData, tmp and home, so nothing is written outside it.
 # EXTRA_JVM_OPTS is honoured as the official task does.
+#
+# GDAL_DATA and PROJ_LIB default to share/gdal and share/proj of the tree:
+# the libraries were built with the paths of their build directories, which
+# exist nowhere else.
+#
+# TAKX_ADDON_LIBRARY_PATH (optional, colon separated) is appended to
+# java.library.path. The tree ships no FFmpeg natives; JavaCPP looks for
+# them (libavutil.so.56, libjniavutil.so, ...) in java.library.path when its
+# own JAR has none, so a directory of natives the user supplies goes here.
 set -euo pipefail
 
 tree="$1"; rundir="$2"; shift 2
@@ -29,6 +38,9 @@ mapfile -t vmoptions < <(grep -v '^[[:space:]]*$' template-64bit.vmoptions)
 source ./prototype-launch.env
 # shellcheck disable=SC2154 # KERNEL_STOCK_LOADER_SUBDIR is set by ./prototype-launch.env (written by assemble.py), sourced above
 library_path="${PWD}/native/linux64:${rundir}/tmp/${KERNEL_STOCK_LOADER_SUBDIR}"
+if [[ -n "${TAKX_ADDON_LIBRARY_PATH:-}" ]]; then library_path="${library_path}:${TAKX_ADDON_LIBRARY_PATH}"; fi
+if [[ -z "${GDAL_DATA:-}" && -d "${PWD}/share/gdal" ]]; then export GDAL_DATA="${PWD}/share/gdal"; fi
+if [[ -z "${PROJ_LIB:-}" && -d "${PWD}/share/proj" ]]; then export PROJ_LIB="${PWD}/share/proj"; fi
 
 # shellcheck disable=SC2086
 exec java "${vmoptions[@]}" \

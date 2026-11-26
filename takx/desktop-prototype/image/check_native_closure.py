@@ -102,8 +102,10 @@ def parse_elf(data):
             facts["soname"] = text(value)
         elif tag == DT_RPATH:
             facts["rpath"] = [part for part in text(value).split(":") if part]
+            facts["rpath_raw"] = text(value)
         elif tag == DT_RUNPATH:
             facts["runpath"] = [part for part in text(value).split(":") if part]
+            facts["runpath_raw"] = text(value)
     return facts
 
 

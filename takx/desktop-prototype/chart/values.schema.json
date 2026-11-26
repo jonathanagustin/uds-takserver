@@ -4,7 +4,7 @@
   "title": "takx-desktop chart values",
   "type": "object",
   "additionalProperties": false,
-  "required": ["domain", "host", "image", "imagePullPolicy", "sso", "display", "jvm", "takx", "identity", "tak", "egress", "persistence", "resources"],
+  "required": ["domain", "host", "image", "imagePullPolicy", "sso", "display", "jvm", "takx", "identity", "tak", "egress", "network", "persistence", "resources"],
   "definitions": {
     "dnsLabel": {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"},
     "dnsName": {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$", "maxLength": 253},
@@ -126,6 +126,14 @@
           "items": {"$ref": "#/definitions/dnsName"},
           "description": "External hosts on TCP 443. No wildcard: the UDS operator rejects one."
         }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["denyOtherPorts"],
+      "properties": {
+        "denyOtherPorts": {"type": "boolean"}
       }
     },
     "persistence": {

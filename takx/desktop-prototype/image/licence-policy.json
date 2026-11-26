@@ -1,0 +1,1296 @@
+{
+ "$comment": "Copyright 2026 uds-takserver authors. SPDX-License-Identifier: GPL-3.0-only. Policy of image/licence_gate.py for the TAKX desktop prototype image. Seeded from the verified compliance synthesis of 2026-11-25 (issue #934). Not a legal review: the identifiers record what each source declares; \"review\" marks what a qualified person still has to confirm.",
+ "schema": 1,
+ "allow": {
+  "Apache-2.0": "permissive",
+  "MIT": "permissive",
+  "BSD-1-Clause": "permissive",
+  "BSD-2-Clause": "permissive",
+  "BSD-3-Clause": "permissive; also the Eclipse Distribution License 1.0",
+  "curl": "permissive",
+  "SGI-B-2.0": "permissive",
+  "Ubuntu-font-1.0": "font licence of the JogAmp graph fonts",
+  "LGPL-2.1-only": "weak copyleft; source duty",
+  "LGPL-2.1-or-later": "weak copyleft; source duty",
+  "LGPL-3.0-or-later": "weak copyleft; source duty",
+  "GPL-3.0-only": "licence of this project, of TAKX and of atak-civ",
+  "CC-BY-4.0": "OpenMapTiles style design; needs the visible credit that \"acknowledgements\" checks",
+  "LicenseRef-Public-Domain": "declared public domain by its POM"
+ },
+ "review": {
+  "EPL-2.0": "no secondary licence found; combination with GPL-3.0-only code needs a combined-work versus aggregate opinion (compliance C.4, C.5)",
+  "GPL-2.0-only WITH Classpath-exception-2.0": "API JARs offered under EPL-2.0 or this; review against GPL-3.0-only (compliance C.5)",
+  "GPL-2.0-or-later WITH Classpath-exception-2.0": "alternative offered by the bytedeco wrappers next to Apache-2.0; not the alternative that counts",
+  "Apache-1.1": "advertising and naming clauses; combination with GPL-3.0 needs an opinion (compliance C.4)",
+  "BSD-4-Clause": "advertising clause; combination with GPL-3.0 needs an opinion (compliance C.4)",
+  "LicenseRef-IndianaExtreme-1.1.1": "XPP3 inside jboss-modules: acknowledgement clause in the Apache-1.1 style (compliance C.4)",
+  "BSD-3-Clause-No-Nuclear-Warranty": "nuclear-facility acknowledgement wording; likely fine, confirm (inventory item 8)"
+ },
+ "deny": {
+  "LicenseRef-FFmpeg-nonfree": "the binary states that it is nonfree and unredistributable",
+  "CDDL-1.0": "CDDL-only code in a GPL-3.0 distribution (compliance C.3)",
+  "CDDL-1.1": "CDDL-only code in a GPL-3.0 distribution (compliance C.3)",
+  "MPL-1.1": "MPL-1.1-only code in a GPL-3.0 distribution (compliance C.4, E.2)",
+  "LicenseRef-unlicensed-font": "a font or font atlas named after a proprietary font, with no licence (compliance C.2)",
+  "LicenseRef-Proprietary": "no redistribution right"
+ },
+ "deny_content": [
+  {
+   "id": "ffmpeg-nonfree-licence-string",
+   "bytes": "nonfree and unredistributable",
+   "licence": "LicenseRef-FFmpeg-nonfree",
+   "reason": "FFmpeg licence string of a build configured with --enable-nonfree"
+  },
+  {
+   "id": "ffmpeg-nonfree-configure-flag",
+   "bytes": "--enable-nonfree",
+   "licence": "LicenseRef-FFmpeg-nonfree",
+   "reason": "FFmpeg configure line of a nonfree build"
+  }
+ ],
+ "deny_names": [
+  {
+   "id": "proprietary-font-file",
+   "licence": "LicenseRef-unlicensed-font",
+   "pattern": "(?i)(^|/)(arial|ariblk|calibri|cambria|candara|consola|constan|corbel|cour|comic|georgia|impact|lucon|segoe|tahoma|times|trebuc|verdana|webdings|wingding)[a-z0-9 _-]*\\.(ttf|otf|ttc|fnt)$",
+   "reason": "font file named after a Microsoft font"
+  },
+  {
+   "id": "proprietary-font-atlas",
+   "licence": "LicenseRef-unlicensed-font",
+   "pattern": "(?i)(^|/)(arial|ariblk|calibri|cambria|candara|consola|constan|corbel|cour|comic|georgia|impact|lucon|segoe|tahoma|times|trebuc|verdana)[a-z0-9]*_m?sdf\\.(png|json)$",
+   "reason": "pre-generated glyph atlas named after a Microsoft font; Microsoft does not permit converting its fonts to other formats"
+  }
+ ],
+ "acknowledgements": [
+  {
+   "licence": "LicenseRef-IndianaExtreme-1.1.1",
+   "text": "This product includes software developed by the Indiana University Extreme! Lab (http://www.extreme.indiana.edu/)."
+  },
+  {
+   "licence": "Apache-1.1",
+   "text": "This product includes software developed by the Apache Software Foundation (http://www.apache.org/)."
+  },
+  {
+   "licence": "CC-BY-4.0",
+   "text": "© OpenMapTiles"
+  }
+ ],
+ "texts": {
+  "spdx_base": "https://raw.githubusercontent.com/spdx/license-list-data/v3.27.0/text/",
+  "spdx": {
+   "Apache-1.1": "1521ffd9660fbf0e4648f72e2aa164fa91eb3eacee27fe36b732b95b3d64e28c",
+   "Apache-2.0": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+   "BSD-1-Clause": "244e17b6f02493de568a8ddfd7f4349996a6c332c0585d304ceaf5394becea52",
+   "BSD-2-Clause": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df",
+   "BSD-3-Clause-No-Nuclear-Warranty": "d3ce9bbc979d0eddb9006621ed5bd8f127af1054de064d438dd21a2c23d8bfdd",
+   "BSD-3-Clause": "5a93d5831e1297ab10fe643e1a631e83be392896da14ee2951285a79012df69d",
+   "BSD-4-Clause": "c80d927f03db7212ba43a869a383e249c19b40859ff0d9e2e2f968e4fdcf005f",
+   "CC-BY-4.0": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744",
+   "Classpath-exception-2.0": "f36ecd7d28dc3c49854d3908a3824696972aed34f5ffe426174f35fb03c5f194",
+   "EPL-2.0": "61616a4066701bc7888ad910de1633dbc55eb4d4d30d930feef55afb9492e33c",
+   "GPL-2.0-only": "aaf135472f81c5b4a0dca9367e5bb5e9750032b5bebe5442b36e4c0a47430df3",
+   "GPL-3.0-only": "fb981668c18a279e285fc4d83fba1e836cc84dd4daa73c9697d3cfd2d8aca6e0",
+   "LGPL-2.1-only": "5749785c8bdefafcb5d798270ed0a967036fe2ca63dcedade1627565dfef81d2",
+   "LGPL-2.1-or-later": "5749785c8bdefafcb5d798270ed0a967036fe2ca63dcedade1627565dfef81d2",
+   "LGPL-3.0-or-later": "996af0513df21f7496288951c41428a03c174e9e4a9d63665c57d670f845ccb1",
+   "MIT": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+   "SGI-B-2.0": "cbe043cc819b6afbac13c11d83c8bdcd566d1539881f17cab28615edd7af3acf",
+   "Ubuntu-font-1.0": "2f0015108d68627bd788d313f529c21ff4da2c2c42a5e1f3883acc83480f9002",
+   "curl": "272d1239bdcef73bb98bac206168ca1040bd4a31296755fadfb7515bcea18df3"
+  },
+  "compose": {
+   "GPL-2.0-only WITH Classpath-exception-2.0": [
+    "GPL-2.0-only",
+    "Classpath-exception-2.0"
+   ],
+   "GPL-2.0-or-later WITH Classpath-exception-2.0": [
+    "GPL-2.0-only",
+    "Classpath-exception-2.0"
+   ]
+  },
+  "embedded": {
+   "LicenseRef-IndianaExtreme-1.1.1": "boot/jboss-modules-1.12.0.Final.jar!/XPP3-LICENSE.txt"
+  },
+  "statement": {
+   "LicenseRef-Public-Domain": "The POM of the artifact declares \"Public Domain\" as its licence (org.json:json 20240303, org.jboss.jdeparser:jdeparser). There is no licence text to reproduce; this file records the declaration."
+  }
+ },
+ "maven": {
+  "antlr:antlr:2.7.7": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "BSD License"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/antlr/antlr/2.7.7/antlr-2.7.7.pom",
+   "note": "POM says \"BSD License\"; identifier is a normalisation, the text was not compared"
+  },
+  "com.adobe.xmp:xmpcore:6.1.11": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "The BSD 3-Clause License (BSD3)"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/adobe/xmp/xmpcore/6.1.11/xmpcore-6.1.11.pom"
+  },
+  "com.drewnoakes:metadata-extractor:2.19.0": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/drewnoakes/metadata-extractor/2.19.0/metadata-extractor-2.19.0.pom"
+  },
+  "com.fasterxml.jackson.core:jackson-annotations:2.17.1": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/fasterxml/jackson/core/jackson-annotations/2.17.1/jackson-annotations-2.17.1.pom"
+  },
+  "com.fasterxml.jackson.core:jackson-core:2.17.1": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/fasterxml/jackson/core/jackson-core/2.17.1/jackson-core-2.17.1.pom"
+  },
+  "com.fasterxml.jackson.core:jackson-databind:2.17.1": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/fasterxml/jackson/core/jackson-databind/2.17.1/jackson-databind-2.17.1.pom"
+  },
+  "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.17.1": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/fasterxml/jackson/jackson-base/2.17.1/jackson-base-2.17.1.pom"
+  },
+  "com.fasterxml.uuid:java-uuid-generator:4.0.1": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/fasterxml/uuid/java-uuid-generator/4.0.1/java-uuid-generator-4.0.1.pom"
+  },
+  "com.fasterxml:classmate:1.5.1": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/fasterxml/classmate/1.5.1/classmate-1.5.1.pom"
+  },
+  "com.fazecast:jSerialComm:2.6.2": {
+   "licence": "LGPL-3.0-or-later OR Apache-2.0",
+   "declared": [
+    "GNU Lesser GPL, Version 3",
+    "Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/fazecast/jSerialComm/2.6.2/jSerialComm-2.6.2.pom"
+  },
+  "com.formdev:flatlaf-extras:3.4.1": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/formdev/flatlaf-extras/3.4.1/flatlaf-extras-3.4.1.pom"
+  },
+  "com.formdev:flatlaf-swingx:3.4.1": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/formdev/flatlaf-swingx/3.4.1/flatlaf-swingx-3.4.1.pom"
+  },
+  "com.formdev:flatlaf:3.4.1": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/formdev/flatlaf/3.4.1/flatlaf-3.4.1.pom"
+  },
+  "com.github.jai-imageio:jai-imageio-core:1.4.0": {
+   "licence": "BSD-3-Clause-No-Nuclear-Warranty",
+   "declared": [
+    "BSD 3-clause License w/nuclear disclaimer"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/github/jai-imageio/jai-imageio-core/1.4.0/jai-imageio-core-1.4.0.pom",
+   "note": "META-INF/LICENSE of the JAR has the \"You acknowledge\" nuclear wording"
+  },
+  "com.github.lgooddatepicker:LGoodDatePicker:11.2.0": {
+   "licence": "MIT",
+   "declared": [
+    "The MIT License (MIT)"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/github/lgooddatepicker/LGoodDatePicker/11.2.0/LGoodDatePicker-11.2.0.pom"
+  },
+  "com.github.weisj:jsvg:1.6.1": {
+   "licence": "MIT",
+   "declared": [
+    "MIT"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/github/weisj/jsvg/1.6.1/jsvg-1.6.1.pom"
+  },
+  "com.google.code.findbugs:jsr305:3.0.2": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/google/code/findbugs/jsr305/3.0.2/jsr305-3.0.2.pom"
+  },
+  "com.google.errorprone:error_prone_annotations:2.41.0": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/google/errorprone/error_prone_annotations/2.41.0/error_prone_annotations-2.41.0.pom"
+  },
+  "com.google.guava:failureaccess:1.0.3": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/google/guava/guava-parent/33.4.0-android/guava-parent-33.4.0-android.pom"
+  },
+  "com.google.guava:guava:33.5.0-jre": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/google/guava/guava-parent/33.5.0-jre/guava-parent-33.5.0-jre.pom"
+  },
+  "com.jgoodies:forms:1.2.0": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "The BSD License"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/jgoodies/forms/1.2.0/forms-1.2.0.pom",
+   "note": "POM says \"The BSD License\"; identifier is a normalisation, the text was not compared"
+  },
+  "com.koloboke:koloboke-api-jdk8:1.0.0": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/koloboke/koloboke-api-jdk8/1.0.0/koloboke-api-jdk8-1.0.0.pom"
+  },
+  "com.koloboke:koloboke-impl-common-jdk8:1.0.0": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/koloboke/koloboke-impl-common-jdk8/1.0.0/koloboke-impl-common-jdk8-1.0.0.pom"
+  },
+  "com.koloboke:koloboke-impl-jdk8:1.0.0": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/koloboke/koloboke-impl-jdk8/1.0.0/koloboke-impl-jdk8-1.0.0.pom"
+  },
+  "com.miglayout:miglayout-core:5.0": {
+   "licence": "BSD-3-Clause",
+   "declared": [],
+   "evidence": "POM https://repo1.maven.org/maven2/com/miglayout/miglayout-parent/5.0/miglayout-parent-5.0.pom",
+   "note": "parent POM miglayout-parent 5.0 says BSD; identifier is a normalisation, the text was not compared"
+  },
+  "com.miglayout:miglayout-swing:5.0": {
+   "licence": "BSD-3-Clause",
+   "declared": [],
+   "evidence": "POM https://repo1.maven.org/maven2/com/miglayout/miglayout-swing/5.0/miglayout-swing-5.0.pom",
+   "note": "parent POM miglayout-parent 5.0 says BSD; identifier is a normalisation, the text was not compared"
+  },
+  "com.squareup.okhttp3:okhttp:4.12.0": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/squareup/okhttp3/okhttp/4.12.0/okhttp-4.12.0.pom"
+  },
+  "com.squareup.okio:okio-jvm:3.6.0": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/squareup/okio/okio-jvm/3.6.0/okio-jvm-3.6.0.pom"
+  },
+  "com.squareup.okio:okio:3.6.0": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/squareup/okio/okio/3.6.0/okio-3.6.0.pom"
+  },
+  "com.sun.activation:jakarta.activation:2.0.1": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "EDL 1.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/sun/activation/all/2.0.1/all-2.0.1.pom"
+  },
+  "com.sun.istack:istack-commons-runtime:4.0.1": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "Eclipse Distribution License - v 1.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/sun/istack/istack-commons/4.0.1/istack-commons-4.0.1.pom"
+  },
+  "com.sun.xml.bind:jaxb-core:3.0.1": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "Eclipse Distribution License - v 1.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/sun/xml/bind/mvn/jaxb-parent/3.0.1/jaxb-parent-3.0.1.pom"
+  },
+  "com.sun.xml.bind:jaxb-impl:3.0.1": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "Eclipse Distribution License - v 1.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/sun/xml/bind/mvn/jaxb-parent/3.0.1/jaxb-parent-3.0.1.pom"
+  },
+  "com.sun.xml.bind:jaxb-jxc:3.0.1": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "Eclipse Distribution License - v 1.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/sun/xml/bind/mvn/jaxb-parent/3.0.1/jaxb-parent-3.0.1.pom"
+  },
+  "com.sun.xml.bind:jaxb-xjc:3.0.1": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "Eclipse Distribution License - v 1.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/sun/xml/bind/mvn/jaxb-parent/3.0.1/jaxb-parent-3.0.1.pom"
+  },
+  "com.vividsolutions:jts-core:1.14.0": {
+   "licence": "LGPL-2.1-only",
+   "declared": [
+    "GNU Lesser General Public License, Version 2.1"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/vividsolutions/jts-core/1.14.0/jts-core-1.14.0.pom"
+  },
+  "com.zaxxer:HikariCP:3.4.5": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/zaxxer/HikariCP/3.4.5/HikariCP-3.4.5.pom"
+  },
+  "commons-codec:commons-codec:1.21.0": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache-2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/apache/apache/37/apache-37.pom"
+  },
+  "commons-io:commons-io:2.21.0": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache-2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/apache/apache/35/apache-35.pom"
+  },
+  "commons-logging:commons-logging:1.2": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/apache/apache/13/apache-13.pom"
+  },
+  "commons-net:commons-net:3.13.0": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache-2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/apache/apache/37/apache-37.pom"
+  },
+  "io.github.openfeign:feign-core:13.11": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/io/github/openfeign/feign-parent/13.11/feign-parent-13.11.pom"
+  },
+  "io.github.openfeign:feign-jackson:13.11": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/io/github/openfeign/feign-parent/13.11/feign-parent-13.11.pom"
+  },
+  "io.github.openfeign:feign-java11:13.11": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/io/github/openfeign/feign-parent/13.11/feign-parent-13.11.pom"
+  },
+  "jakarta.annotation:jakarta.annotation-api:2.1.1": {
+   "licence": "EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0",
+   "declared": [
+    "EPL 2.0",
+    "GPL2 w/ CPE"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/jakarta/annotation/jakarta.annotation-api/2.1.1/jakarta.annotation-api-2.1.1.pom"
+  },
+  "jakarta.el:jakarta.el-api:5.0.0": {
+   "licence": "EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0",
+   "declared": [
+    "Eclipse Public License v. 2.0",
+    "GNU General Public License, version 2 with the GNU Classpath Exception"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/eclipse/ee4j/project/1.0.6/project-1.0.6.pom"
+  },
+  "jakarta.enterprise:jakarta.enterprise.cdi-api:4.0.1": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache License 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/jakarta/enterprise/jakarta.enterprise.cdi-api/4.0.1/jakarta.enterprise.cdi-api-4.0.1.pom"
+  },
+  "jakarta.enterprise:jakarta.enterprise.lang-model:4.0.1": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache License 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/jakarta/enterprise/jakarta.enterprise.lang-model/4.0.1/jakarta.enterprise.lang-model-4.0.1.pom"
+  },
+  "jakarta.inject:jakarta.inject-api:2.0.1": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/jakarta/inject/jakarta.inject-api/2.0.1/jakarta.inject-api-2.0.1.pom"
+  },
+  "jakarta.interceptor:jakarta.interceptor-api:2.1.0": {
+   "licence": "EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0",
+   "declared": [
+    "EPL 2.0",
+    "GPL2 w/ CPE"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/jakarta/interceptor/jakarta.interceptor-api/2.1.0/jakarta.interceptor-api-2.1.0.pom"
+  },
+  "jakarta.persistence:jakarta.persistence-api:3.1.0": {
+   "licence": "EPL-2.0 OR BSD-3-Clause",
+   "declared": [
+    "Eclipse Public License v. 2.0",
+    "Eclipse Distribution License v. 1.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/jakarta/persistence/jakarta.persistence-api/3.1.0/jakarta.persistence-api-3.1.0.pom"
+  },
+  "jakarta.transaction:jakarta.transaction-api:2.0.1": {
+   "licence": "EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0",
+   "declared": [
+    "EPL 2.0",
+    "GPL2 w/ CPE"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/jakarta/transaction/jakarta.transaction-api/2.0.1/jakarta.transaction-api-2.0.1.pom"
+  },
+  "jakarta.xml.bind:jakarta.xml.bind-api:3.0.1": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "Eclipse Distribution License - v 1.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/jakarta/xml/bind/jakarta.xml.bind-api-parent/3.0.1/jakarta.xml.bind-api-parent-3.0.1.pom"
+  },
+  "net.bytebuddy:byte-buddy:1.12.9": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/net/bytebuddy/byte-buddy-parent/1.12.9/byte-buddy-parent-1.12.9.pom"
+  },
+  "net.sf.joost:joost:0.9.1": {
+   "licence": "MPL-1.1",
+   "declared": [
+    "Mozilla Public License 1.1"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/net/sf/joost/joost/0.9.1/joost-0.9.1.pom",
+   "note": "left out by assemble.py; listed so that the gate denies it if it comes back"
+  },
+  "net.sf.kxml:kxml2:2.3.0": {
+   "licence": "BSD-3-Clause OR LicenseRef-Public-Domain",
+   "declared": [
+    "BSD style",
+    "Public Domain"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/net/sf/kxml/kxml2/2.3.0/kxml2-2.3.0.pom",
+   "note": "POM says \"BSD style\" and \"Public Domain\"; identifier is a normalisation, the text was not compared"
+  },
+  "net.sf.opencsv:opencsv:2.3": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache 2"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/net/sf/opencsv/opencsv/2.3/opencsv-2.3.pom"
+  },
+  "org.antlr:antlr4-runtime:4.10": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "The BSD License"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/antlr/antlr4-master/4.10/antlr4-master-4.10.pom",
+   "note": "POM says \"The BSD License\""
+  },
+  "org.apache.commons:commons-collections4:4.5.0": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache-2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/apache/apache/33/apache-33.pom"
+  },
+  "org.apache.commons:commons-lang3:3.20.0": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache-2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/apache/apache/35/apache-35.pom"
+  },
+  "org.apache.commons:commons-math3:3.6.1": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/apache/apache/16/apache-16.pom"
+  },
+  "org.apache.commons:commons-text:1.15.0": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache-2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/apache/apache/35/apache-35.pom"
+  },
+  "org.apache.logging.log4j:log4j-api:2.25.4": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache-2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-api/2.25.4/log4j-api-2.25.4.pom"
+  },
+  "org.apache.logging.log4j:log4j-core:2.25.4": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache-2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-core/2.25.4/log4j-core-2.25.4.pom"
+  },
+  "org.apache.logging.log4j:log4j-slf4j2-impl:2.25.4": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache-2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-slf4j2-impl/2.25.4/log4j-slf4j2-impl-2.25.4.pom"
+  },
+  "org.aspectj:aspectjrt:1.9.21.1": {
+   "licence": "EPL-2.0",
+   "declared": [
+    "Eclipse Public License - v 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/aspectj/aspectjrt/1.9.21.1/aspectjrt-1.9.21.1.pom"
+  },
+  "org.aspectj:aspectjweaver:1.9.21.1": {
+   "licence": "EPL-2.0",
+   "declared": [
+    "Eclipse Public License - v 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/aspectj/aspectjweaver/1.9.21.1/aspectjweaver-1.9.21.1.pom"
+  },
+  "org.bouncycastle:bcpkix-jdk18on:1.84": {
+   "licence": "MIT",
+   "declared": [
+    "Bouncy Castle Licence"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/bouncycastle/bcpkix-jdk18on/1.84/bcpkix-jdk18on-1.84.pom"
+  },
+  "org.bouncycastle:bcprov-jdk18on:1.84": {
+   "licence": "MIT",
+   "declared": [],
+   "evidence": "POM https://repo1.maven.org/maven2/org/bouncycastle/bcprov-jdk18on/1.84/bcprov-jdk18on-1.84.pom",
+   "note": "POM says \"Bouncy Castle Licence\", an MIT text"
+  },
+  "org.bouncycastle:bcutil-jdk18on:1.84": {
+   "licence": "MIT",
+   "declared": [
+    "Bouncy Castle Licence"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/bouncycastle/bcutil-jdk18on/1.84/bcutil-jdk18on-1.84.pom"
+  },
+  "org.bytedeco:ffmpeg:4.1.3-1.5.1": {
+   "licence": "Apache-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0",
+   "declared": [
+    "Apache License, Version 2.0",
+    "GNU General Public License (GPL) version 2, or any later version",
+    "GPLv2 with Classpath exception"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/bytedeco/javacpp-presets/1.5.1/javacpp-presets-1.5.1.pom",
+   "note": "POM; Java wrapper classes only"
+  },
+  "org.bytedeco:ffmpeg:4.1.3-1.5.1:linux-x86_64": {
+   "licence": "LicenseRef-FFmpeg-nonfree",
+   "declared": [
+    "Apache License, Version 2.0",
+    "GNU General Public License (GPL) version 2, or any later version",
+    "GPLv2 with Classpath exception"
+   ],
+   "evidence": "libavutil.so.56 inside the JAR: \"libavutil license: nonfree and unredistributable\"; the POM names other licences",
+   "note": "left out by assemble.py; listed so that the gate denies it if it comes back"
+  },
+  "org.bytedeco:javacpp:1.5.1": {
+   "licence": "Apache-2.0 OR GPL-2.0-or-later WITH Classpath-exception-2.0",
+   "declared": [
+    "Apache License, Version 2.0",
+    "GNU General Public License (GPL) version 2, or any later version",
+    "GPLv2 with Classpath exception"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/bytedeco/javacpp/1.5.1/javacpp-1.5.1.pom",
+   "note": "POM"
+  },
+  "org.glassfish.jaxb:jaxb-core:3.0.1": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "Eclipse Distribution License - v 1.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/sun/xml/bind/mvn/jaxb-parent/3.0.1/jaxb-parent-3.0.1.pom"
+  },
+  "org.glassfish.jaxb:txw2:3.0.1": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "Eclipse Distribution License - v 1.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/com/sun/xml/bind/mvn/jaxb-parent/3.0.1/jaxb-parent-3.0.1.pom"
+  },
+  "org.greenrobot:eventbus-java:3.3.1": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/greenrobot/eventbus-java/3.3.1/eventbus-java-3.3.1.pom"
+  },
+  "org.hibernate.common:hibernate-commons-annotations:6.0.2.Final": {
+   "licence": "LGPL-2.1-or-later",
+   "declared": [],
+   "evidence": "POM https://repo1.maven.org/maven2/org/hibernate/common/hibernate-commons-annotations/6.0.2.Final/hibernate-commons-annotations-6.0.2.Final.pom",
+   "note": "POM says \"GNU Library General Public License v2.1 or later\""
+  },
+  "org.hibernate.orm:hibernate-ant:6.1.3.Final": {
+   "licence": "LGPL-2.1-or-later",
+   "declared": [
+    "GNU Library General Public License v2.1 or later"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/hibernate/orm/hibernate-ant/6.1.3.Final/hibernate-ant-6.1.3.Final.pom"
+  },
+  "org.hibernate.orm:hibernate-core:6.1.3.Final": {
+   "licence": "LGPL-2.1-or-later",
+   "declared": [],
+   "evidence": "POM https://repo1.maven.org/maven2/org/hibernate/orm/hibernate-core/6.1.3.Final/hibernate-core-6.1.3.Final.pom",
+   "note": "POM of the same release (hibernate-ant, hibernate-hikaricp) says \"GNU Library General Public License v2.1 or later\""
+  },
+  "org.hibernate.orm:hibernate-hikaricp:6.1.3.Final": {
+   "licence": "LGPL-2.1-or-later",
+   "declared": [
+    "GNU Library General Public License v2.1 or later"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/hibernate/orm/hibernate-hikaricp/6.1.3.Final/hibernate-hikaricp-6.1.3.Final.pom"
+  },
+  "org.hsqldb:hsqldb:2.7.4": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "HSQLDB License, a BSD open source license"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/hsqldb/hsqldb/2.7.4/hsqldb-2.7.4.pom",
+   "note": "POM says \"HSQLDB License, a BSD open source license\""
+  },
+  "org.javassist:javassist:3.29.2-GA": {
+   "licence": "MPL-1.1 OR LGPL-2.1-only OR Apache-2.0",
+   "declared": [
+    "MPL 1.1",
+    "LGPL 2.1",
+    "Apache License 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/javassist/javassist/3.29.2-GA/javassist-3.29.2-GA.pom"
+  },
+  "org.jboss.classfilewriter:jboss-classfilewriter:1.2.5.Final": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache License, version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jboss/classfilewriter/jboss-classfilewriter/1.2.5.Final/jboss-classfilewriter-1.2.5.Final.pom"
+  },
+  "org.jboss.jdeparser:jdeparser:2.0.3.Final": {
+   "licence": "LicenseRef-Public-Domain",
+   "declared": [
+    "Public Domain"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jboss/jboss-parent/34/jboss-parent-34.pom"
+  },
+  "org.jboss.logging:jboss-logging-processor:2.2.1.Final": {
+   "licence": "LGPL-2.1-or-later",
+   "declared": [
+    "lgpl"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jboss/logging/jboss-logging-tools-parent/2.2.1.Final/jboss-logging-tools-parent-2.2.1.Final.pom"
+  },
+  "org.jboss.logging:jboss-logging:3.5.0.Final": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache License, version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jboss/logging/jboss-logging/3.5.0.Final/jboss-logging-3.5.0.Final.pom"
+  },
+  "org.jboss.modules:jboss-modules:1.12.0.Final": {
+   "licence": "Apache-2.0 AND LicenseRef-IndianaExtreme-1.1.1",
+   "declared": [
+    "Apache License 2.0",
+    "Indiana University Extreme! Lab Software License 1.1.1"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jboss/modules/jboss-modules/1.12.0.Final/jboss-modules-1.12.0.Final.pom",
+   "note": "the POM lists both; the JAR bundles XPP3 (XPP3-LICENSE.txt)"
+  },
+  "org.jboss.weld.environment:weld-environment-common:5.1.0.Final": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jboss/weld/environment/weld-environment-common/5.1.0.Final/weld-environment-common-5.1.0.Final.pom"
+  },
+  "org.jboss.weld.se:weld-se-core:5.1.0.Final": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jboss/weld/se/weld-se-core/5.1.0.Final/weld-se-core-5.1.0.Final.pom"
+  },
+  "org.jboss.weld:weld-api:5.0.SP3": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jboss/weld/weld-api/5.0.SP3/weld-api-5.0.SP3.pom"
+  },
+  "org.jboss.weld:weld-core-impl:5.1.0.Final": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jboss/weld/weld-core-impl/5.1.0.Final/weld-core-impl-5.1.0.Final.pom"
+  },
+  "org.jboss.weld:weld-lite-extension-translator:5.1.0.Final": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jboss/weld/weld-parent/46/weld-parent-46.pom"
+  },
+  "org.jboss.weld:weld-spi:5.0.SP3": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jboss/weld/weld-spi/5.0.SP3/weld-spi-5.0.SP3.pom"
+  },
+  "org.jboss:jandex:2.4.3.Final": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jboss/jandex/2.4.3.Final/jandex-2.4.3.Final.pom"
+  },
+  "org.jboss:jboss-vfs:3.2.16.Final": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "asl"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jboss/jboss-vfs/3.2.16.Final/jboss-vfs-3.2.16.Final.pom"
+  },
+  "org.jetbrains.kotlin:kotlin-stdlib-common:1.8.21": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib-common/1.8.21/kotlin-stdlib-common-1.8.21.pom"
+  },
+  "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.21": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib-jdk7/1.8.21/kotlin-stdlib-jdk7-1.8.21.pom"
+  },
+  "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.21": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib-jdk8/1.8.21/kotlin-stdlib-jdk8-1.8.21.pom"
+  },
+  "org.jetbrains.kotlin:kotlin-stdlib:1.8.21": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.8.21/kotlin-stdlib-1.8.21.pom"
+  },
+  "org.jetbrains:annotations:26.1.0": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jetbrains/annotations/26.1.0/annotations-26.1.0.pom"
+  },
+  "org.jfree:jfreechart:1.5.5": {
+   "licence": "LGPL-2.1-or-later",
+   "declared": [
+    "GNU Lesser General Public Licence"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jfree/jfreechart/1.5.5/jfreechart-1.5.5.pom",
+   "note": "POM says \"GNU Lesser General Public Licence\""
+  },
+  "org.jogamp.gluegen:gluegen-rt:2.5.0": {
+   "licence": "BSD-2-Clause AND BSD-3-Clause AND BSD-4-Clause",
+   "declared": [],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jogamp/gluegen/gluegen-rt/2.5.0/gluegen-rt-2.5.0.pom",
+   "note": "POM published on jogamp.org (the Maven Central POM has no licence element)"
+  },
+  "org.jogamp.gluegen:gluegen-rt:2.5.0:natives-linux-amd64": {
+   "licence": "BSD-2-Clause AND BSD-3-Clause AND BSD-4-Clause",
+   "declared": [],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jogamp/gluegen/gluegen-rt/2.5.0/gluegen-rt-2.5.0.pom",
+   "note": "POM published on jogamp.org (the Maven Central POM has no licence element)"
+  },
+  "org.jogamp.jocl:jocl-main:2.5.0": {
+   "licence": "BSD-2-Clause AND BSD-3-Clause AND SGI-B-2.0 AND Apache-2.0 AND Apache-1.1 AND Ubuntu-font-1.0",
+   "declared": [],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jogamp/jocl/jocl-main/2.5.0/jocl-main-2.5.0.pom",
+   "note": "POM published on jogamp.org (the Maven Central POM has no licence element)"
+  },
+  "org.jogamp.jocl:jocl:2.5.0": {
+   "licence": "BSD-2-Clause AND BSD-3-Clause AND SGI-B-2.0 AND Apache-2.0 AND Apache-1.1 AND Ubuntu-font-1.0",
+   "declared": [],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jogamp/jocl/jocl/2.5.0/jocl-2.5.0.pom",
+   "note": "POM published on jogamp.org (the Maven Central POM has no licence element)"
+  },
+  "org.jogamp.jocl:jocl:2.5.0:natives-linux-amd64": {
+   "licence": "BSD-2-Clause AND BSD-3-Clause AND SGI-B-2.0 AND Apache-2.0 AND Apache-1.1 AND Ubuntu-font-1.0",
+   "declared": [],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jogamp/jocl/jocl/2.5.0/jocl-2.5.0.pom",
+   "note": "POM published on jogamp.org (the Maven Central POM has no licence element)"
+  },
+  "org.jogamp.jogl:jogl-all:2.5.0": {
+   "licence": "BSD-2-Clause AND BSD-3-Clause AND SGI-B-2.0 AND Apache-2.0 AND Apache-1.1 AND Ubuntu-font-1.0",
+   "declared": [],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jogamp/jogl/jogl-all/2.5.0/jogl-all-2.5.0.pom",
+   "note": "POM published on jogamp.org (the Maven Central POM has no licence element)"
+  },
+  "org.jogamp.jogl:jogl-all:2.5.0:natives-linux-amd64": {
+   "licence": "BSD-2-Clause AND BSD-3-Clause AND SGI-B-2.0 AND Apache-2.0 AND Apache-1.1 AND Ubuntu-font-1.0",
+   "declared": [],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jogamp/jogl/jogl-all/2.5.0/jogl-all-2.5.0.pom",
+   "note": "POM published on jogamp.org (the Maven Central POM has no licence element)"
+  },
+  "org.json:json:20240303": {
+   "licence": "LicenseRef-Public-Domain",
+   "declared": [
+    "Public Domain"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/json/json/20240303/json-20240303.pom"
+  },
+  "org.jspecify:jspecify:1.0.0": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/jspecify/jspecify/1.0.0/jspecify-1.0.0.pom"
+  },
+  "org.mapsforge:mapsforge-core:0.14.0": {
+   "licence": "LGPL-3.0-or-later",
+   "declared": [
+    "GNU Lesser GPL"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/mapsforge/mapsforge-core/0.14.0/mapsforge-core-0.14.0.pom",
+   "note": "POM says \"GNU Lesser GPL\""
+  },
+  "org.mapsforge:mapsforge-map-awt:0.14.0": {
+   "licence": "LGPL-3.0-or-later",
+   "declared": [
+    "GNU Lesser GPL"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/mapsforge/mapsforge-map-awt/0.14.0/mapsforge-map-awt-0.14.0.pom",
+   "note": "POM says \"GNU Lesser GPL\""
+  },
+  "org.mapsforge:mapsforge-map-reader:0.14.0": {
+   "licence": "LGPL-3.0-or-later",
+   "declared": [
+    "GNU Lesser GPL"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/mapsforge/mapsforge-map-reader/0.14.0/mapsforge-map-reader-0.14.0.pom",
+   "note": "POM says \"GNU Lesser GPL\""
+  },
+  "org.mapsforge:mapsforge-map:0.14.0": {
+   "licence": "LGPL-3.0-or-later",
+   "declared": [
+    "GNU Lesser GPL"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/mapsforge/mapsforge-map/0.14.0/mapsforge-map-0.14.0.pom",
+   "note": "POM says \"GNU Lesser GPL\""
+  },
+  "org.mapsforge:mapsforge-themes:0.14.0": {
+   "licence": "LGPL-3.0-or-later",
+   "declared": [
+    "GNU Lesser GPL"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/mapsforge/mapsforge-themes/0.14.0/mapsforge-themes-0.14.0.pom",
+   "note": "POM says \"GNU Lesser GPL\""
+  },
+  "org.ow2.asm:asm-commons:9.9.1": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "BSD-3-Clause"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/ow2/asm/asm-commons/9.9.1/asm-commons-9.9.1.pom"
+  },
+  "org.ow2.asm:asm-tree:9.9.1": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "BSD-3-Clause"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/ow2/asm/asm-tree/9.9.1/asm-tree-9.9.1.pom"
+  },
+  "org.ow2.asm:asm:9.9.1": {
+   "licence": "BSD-3-Clause",
+   "declared": [
+    "BSD-3-Clause"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/ow2/asm/asm/9.9.1/asm-9.9.1.pom"
+  },
+  "org.postgresql:postgresql:42.7.11": {
+   "licence": "BSD-2-Clause",
+   "declared": [
+    "BSD-2-Clause"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.11/postgresql-42.7.11.pom"
+  },
+  "org.slf4j:slf4j-api:2.0.17": {
+   "licence": "MIT",
+   "declared": [
+    "MIT"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/slf4j/slf4j-bom/2.0.17/slf4j-bom-2.0.17.pom"
+  },
+  "org.swinglabs.swingx:swingx-all:1.6.5-1": {
+   "licence": "LGPL-2.1-or-later",
+   "declared": [
+    "Lesser General Public License (LGPL)"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/swinglabs/swingx/swingx-project/1.6.5-1/swingx-project-1.6.5-1.pom",
+   "note": "POM says \"Lesser General Public License (LGPL)\""
+  },
+  "org.zeroturnaround:zt-zip:1.14": {
+   "licence": "Apache-2.0",
+   "declared": [
+    "The Apache Software License, Version 2.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/org/zeroturnaround/zt-zip/1.14/zt-zip-1.14.pom"
+  },
+  "uk.m0nom:javaapiforkml:3.0.11": {
+   "licence": "GPL-3.0-only",
+   "declared": [
+    "GPL-3.0"
+   ],
+   "evidence": "POM https://repo1.maven.org/maven2/uk/m0nom/javaapiforkml/3.0.11/javaapiforkml-3.0.11.pom"
+  }
+ },
+ "files": [
+  {
+   "glob": "*uds-takserver-ui-wizard-reference*.jar",
+   "licence": "CDDL-1.0",
+   "evidence": "META-INF/licenses/source-notices.txt of the JAR names only the CDDL; left out by assemble.py, listed so that the gate denies it if it comes back"
+  },
+  {
+   "glob": "load/*.jar",
+   "origin_prefix": "takx/desktop-prototype client stage",
+   "licence": "GPL-3.0-only",
+   "evidence": "TAKX 0b59a9bb LICENSE.md (GPL version 3 with a US-government public-domain note)",
+   "review": "ten TAKX source files carry Proprietary/NDA/EULA headers; upstream has not confirmed that the GPL covers them (compliance C.7)"
+  },
+  {
+   "glob": "boot/preferences-factory-*.jar",
+   "origin_prefix": "takx/desktop-prototype client stage",
+   "licence": "GPL-3.0-only",
+   "evidence": "TAKX 0b59a9bb LICENSE.md"
+  },
+  {
+   "glob": "lib/worldwind-*-nasa-public-interop.jar",
+   "origin_prefix": "NASA WorldWind Java",
+   "licence": "Apache-2.0",
+   "evidence": "WorldWindJava README.md states Apache-2.0; third-party notices in LICENSES/worldwind"
+  },
+  {
+   "glob": "modules/gov/tak/kernel/main/kernel-8.30.5-linux-*-public-cpu-tree.jar",
+   "origin_prefix": "Kernel 8.30.5 + project patches",
+   "licence": "GPL-3.0-only AND BSD-3-Clause AND CC-BY-4.0",
+   "evidence": "atak-civ 9f6893dd LICENSE.md; assets/style/omt carries the OpenMapTiles LICENSE.md (BSD-3-Clause code, CC-BY-4.0 design)",
+   "review": "eleven CA certificates and data files without their own statement ship inside (inventory item 11)"
+  },
+  {
+   "glob": "modules/gov/tak/kernel/main/kernel-8.30.5-prototype-java-overlay.jar",
+   "origin_prefix": "desktop-prototype Kernel Java overlay",
+   "licence": "GPL-3.0-only",
+   "evidence": "Kernel classes rebuilt from atak-civ sources with this repository's patches"
+  },
+  {
+   "glob": "modules/gov/tak/kernel/main/Java*-0.1.41.jar",
+   "origin_prefix": "Kernel 8.30.5 dependency JAR",
+   "licence": "Apache-2.0",
+   "evidence": "mil-sym-android/mil-sym-java renderer 0.1.41, Apache-2.0 (takx/kernel-java/inputs.lock.json, compliance inventory)"
+  },
+  {
+   "glob": "modules/gov/tak/kernel/main/RendererPluginInterface-0.1.41.jar",
+   "origin_prefix": "Kernel 8.30.5 dependency JAR",
+   "licence": "Apache-2.0",
+   "evidence": "mil-sym renderer 0.1.41, Apache-2.0"
+  },
+  {
+   "glob": "modules/gov/tak/kernel/main/mil-sym-*.jar",
+   "origin_prefix": "Kernel 8.30.5 dependency JAR",
+   "licence": "Apache-2.0",
+   "evidence": "io.github.missioncommand mil-sym-renderer 0.1.41 and mil-sym-java 2.1.5, Apache-2.0 (POMs)"
+  },
+  {
+   "glob": "modules/gov/tak/kernel/main/assimp-4.0.1-mod-jassimp-java.jar",
+   "origin_prefix": "Kernel 8.30.5 dependency JAR",
+   "licence": "BSD-3-Clause",
+   "evidence": "Assimp 4.0.1 LICENSE (LICENSES/providers/assimp)"
+  },
+  {
+   "glob": "modules/gov/tak/kernel/main/gdal-2.4.4-mod-java.jar",
+   "origin_prefix": "Kernel 8.30.5 dependency JAR",
+   "licence": "MIT",
+   "evidence": "GDAL 2.4.4 LICENSE.TXT (share/gdal/LICENSE.TXT)"
+  },
+  {
+   "glob": "modules/gov/tak/kernel/main/geodesy-1.1.3.jar",
+   "origin_prefix": "Kernel 8.30.5 dependency JAR",
+   "licence": "Apache-2.0",
+   "evidence": "org.gavaghan:geodesy 1.1.3, Apache-2.0 (POM inside the JAR)"
+  },
+  {
+   "glob": "modules/gov/tak/kernel/main/http*-4.*.jar",
+   "origin_prefix": "Kernel 8.30.5 dependency JAR",
+   "licence": "Apache-2.0",
+   "evidence": "Apache HttpComponents, META-INF/LICENSE inside the JAR"
+  },
+  {
+   "glob": "modules/jcommoncommo/main/jcommoncommo-1.17.2-public-patched.jar",
+   "origin_prefix": "CommonCommo 1.17.2 patched",
+   "licence": "GPL-3.0-only",
+   "evidence": "atak-civ 9f6893dd LICENSE.md"
+  },
+  {
+   "glob": "modules/prototype/libs/main/uds-takserver-ui-docking-*.jar",
+   "origin_prefix": "public source rebuild by takx/ui-java",
+   "licence": "LGPL-2.1-or-later",
+   "evidence": "P/ui-original/receipt.json; META-INF/licenses/LGPL-2.1.txt inside the JAR"
+  },
+  {
+   "glob": "modules/prototype/libs/main/uds-takserver-ui-colorchooser-author-1.5.jar",
+   "origin_prefix": "public source rebuild by takx/ui-java",
+   "licence": "Apache-2.0",
+   "evidence": "P/ui-original/receipt.json; META-INF/licenses/Apache-2.0.txt inside the JAR"
+  },
+  {
+   "glob": "modules/prototype/libs/main/uds-takserver-ui-toast-1.0.3.jar",
+   "origin_prefix": "public source rebuild by takx/ui-java",
+   "licence": "Apache-2.0",
+   "evidence": "LICENSE at the root of the source archive DJ-Raven/swing-toast-notifications@191114d2 (sha256 a47f8208...) is the Apache License 2.0; the sources carry no headers and the POM no licence element"
+  },
+  {
+   "glob": "modules/prototype/libs/main/uds-takserver-ui-salamander-tag-v1.1.1.jar",
+   "origin_prefix": "public source rebuild by takx/ui-java",
+   "licence": "BSD-3-Clause OR LGPL-2.1-or-later",
+   "evidence": "P/ui-original/receipt.json; BSD and LGPL texts inside the JAR"
+  },
+  {
+   "glob": "gazetteer/*",
+   "origin_prefix": "official TAKX 5.7",
+   "licence": "GPL-3.0-only",
+   "evidence": "TAKX 0b59a9bb LICENSE.md",
+   "review": "no asset-specific statement: covered only by the repository-level GPL-3.0 LICENSE.md; where the file came from is not stated (compliance inventory item 11)"
+  },
+  {
+   "glob": "resources/audio/*",
+   "origin_prefix": "official TAKX 5.7",
+   "licence": "GPL-3.0-only",
+   "evidence": "TAKX 0b59a9bb LICENSE.md",
+   "review": "no asset-specific statement: covered only by the repository-level GPL-3.0 LICENSE.md; where the file came from is not stated (compliance inventory item 11)"
+  },
+  {
+   "glob": "resources/TAKX_legacy.zip",
+   "origin_prefix": "official TAKX 5.7",
+   "licence": "GPL-3.0-only",
+   "evidence": "TAKX 0b59a9bb LICENSE.md",
+   "review": "no asset-specific statement: covered only by the repository-level GPL-3.0 LICENSE.md; where the file came from is not stated (compliance inventory item 11)"
+  },
+  {
+   "glob": "resources/tak-assets/iconsets/*.zip",
+   "origin_prefix": "public atak-civ",
+   "licence": "GPL-3.0-only",
+   "evidence": "atak-civ 9f6893dd LICENSE.md",
+   "review": "no asset-specific statement: covered only by the repository-level GPL-3.0 LICENSE.md; where the file came from is not stated (compliance inventory item 11)"
+  },
+  {
+   "glob": "resources/tak-assets/*",
+   "origin_prefix": "public atak-civ",
+   "licence": "GPL-3.0-only",
+   "evidence": "atak-civ 9f6893dd LICENSE.md"
+  },
+  {
+   "glob": "resources/*",
+   "origin_prefix": "official TAKX 5.7",
+   "licence": "GPL-3.0-only",
+   "evidence": "TAKX 0b59a9bb LICENSE.md"
+  },
+  {
+   "glob": "conf/*",
+   "origin_prefix": "official TAKX 5.7",
+   "licence": "GPL-3.0-only",
+   "evidence": "TAKX 0b59a9bb LICENSE.md"
+  },
+  {
+   "glob": "plugins/.gitkeep",
+   "origin_prefix": "official TAKX 5.7",
+   "licence": "GPL-3.0-only",
+   "evidence": "TAKX 0b59a9bb LICENSE.md"
+  },
+  {
+   "glob": "*log4j*.xml",
+   "origin_prefix": "official TAKX 5.7",
+   "licence": "GPL-3.0-only",
+   "evidence": "TAKX 0b59a9bb LICENSE.md"
+  },
+  {
+   "glob": "template-64bit.vmoptions",
+   "origin_prefix": "official TAKX 5.7",
+   "licence": "GPL-3.0-only",
+   "evidence": "TAKX 0b59a9bb LICENSE.md"
+  },
+  {
+   "glob": "modules/*/module.xml",
+   "origin_prefix": "official TAKX 5.7",
+   "licence": "GPL-3.0-only",
+   "evidence": "TAKX 0b59a9bb LICENSE.md"
+  },
+  {
+   "glob": "modules/*/module.xml",
+   "origin_prefix": "hand-written JBoss Modules descriptor",
+   "licence": "GPL-3.0-only",
+   "evidence": "written by this repository"
+  },
+  {
+   "glob": "prototype-launch.env",
+   "origin_prefix": "launcher fact",
+   "licence": "GPL-3.0-only",
+   "evidence": "written by this repository"
+  },
+  {
+   "glob": "share/gdal/*",
+   "origin_prefix": "GDAL 2.4.4 data directory",
+   "licence": "MIT",
+   "evidence": "share/gdal/LICENSE.TXT (GDAL 2.4.4)",
+   "aggregate": true,
+   "review": "the directory holds tables derived from the EPSG dataset, ESRI and others; their terms are listed in share/gdal/LICENSE.TXT and were not checked one by one"
+  },
+  {
+   "glob": "share/proj/*",
+   "origin_prefix": "PROJ 4.9.1 data directory",
+   "licence": "MIT",
+   "evidence": "PROJ 4.9.1 COPYING (LICENSES/providers/proj)",
+   "aggregate": true,
+   "review": "init files derived from the EPSG dataset, ESRI and IGNF; their terms were not checked one by one"
+  }
+ ],
+ "natives": [
+  {
+   "glob": "native/linux64/libcommoncommojni.so",
+   "licence": "GPL-3.0-only AND Apache-2.0 AND curl AND BSD-3-Clause AND MIT AND LGPL-2.1-or-later",
+   "evidence": "CommonCommo (atak-civ LICENSE.md) with OpenSSL 3, curl, protobuf, libxml2, nghttp2, ngtcp2 and libmicrohttpd (LGPL-2.1-or-later) linked in; texts in LICENSES/providers/commoncommo"
+  },
+  {
+   "glob": "native/linux64/libuds_desktop_clock.so",
+   "licence": "GPL-3.0-only",
+   "evidence": "takx/compat source of this repository"
+  },
+  {
+   "glob": "modules/gov/tak/kernel/main/kernel-*-tree.jar!/libs/linux64/libtakengine.so",
+   "licence": "GPL-3.0-only AND Apache-2.0 AND MIT AND BSD-3-Clause",
+   "evidence": "atak-civ LICENSE.md; Cesium Native and its dependencies, SQLCipher, OpenSSL, PROJ, GEOS (LGPL texts in LICENSES/providers), libkml, SpatiaLite linked in",
+   "review": "the notices of the Cesium Native dependency KTX carry LicenseRef-ETCSLA and LicenseRef-Kodak terms; whether such code is compiled in is unconfirmed (inventory item 10). GEOS and SpatiaLite are LGPL/MPL-tri-licensed providers: the exact set linked in was not re-derived by the gate"
+  },
+  {
+   "glob": "modules/gov/tak/kernel/main/kernel-*-tree.jar!/libs/linux64/libtakenginejni.so",
+   "licence": "GPL-3.0-only",
+   "evidence": "atak-civ LICENSE.md"
+  },
+  {
+   "glob": "modules/gov/tak/kernel/main/kernel-*-tree.jar!/libs/linux64/libgdal*.so",
+   "licence": "MIT",
+   "evidence": "GDAL 2.4.4 LICENSE.TXT",
+   "review": "libgdal.so contains the strings MRSID and ECW; that no proprietary codec is linked is stated by the recipe, not proven by the gate (inventory item 12)"
+  },
+  {
+   "glob": "modules/gov/tak/kernel/main/kernel-*-tree.jar!/libs/linux64/libassimp.so",
+   "licence": "BSD-3-Clause",
+   "evidence": "Assimp 4.0.1 LICENSE"
+  },
+  {
+   "glob": "modules/gov/tak/kernel/main/kernel-*-tree.jar!/libs/linux64/liblas*.so",
+   "licence": "BSD-3-Clause",
+   "evidence": "libLAS LICENSE.txt"
+  },
+  {
+   "glob": "modules/gov/tak/kernel/main/kernel-*-tree.jar!/libs/linux64/libGL*.so",
+   "licence": "MIT AND BSD-1-Clause",
+   "evidence": "libglvnd 1.7.0: licence section of its README.md, cJSON (MIT) and uthash (BSD-1-Clause) LICENSE files"
+  },
+  {
+   "glob": "modules/prototype/libs/main/jSerialComm-2.6.2.jar!/*",
+   "licence": "LGPL-3.0-or-later OR Apache-2.0",
+   "evidence": "POM of com.fazecast:jSerialComm 2.6.2"
+  },
+  {
+   "glob": "modules/prototype/libs/main/flatlaf-3.4.1.jar!/com/formdev/flatlaf/natives/*",
+   "licence": "Apache-2.0",
+   "evidence": "POM of com.formdev:flatlaf 3.4.1"
+  },
+  {
+   "glob": "modules/prototype/libs/main/gluegen-rt-2.5.0-natives-linux-*.jar!/natives/*",
+   "licence": "BSD-2-Clause AND BSD-3-Clause AND BSD-4-Clause",
+   "evidence": "jogamp.org POM of gluegen-rt 2.5.0"
+  },
+  {
+   "glob": "modules/prototype/libs/main/jogl-all-2.5.0-natives-linux-*.jar!/natives/*",
+   "licence": "BSD-2-Clause AND BSD-3-Clause AND SGI-B-2.0 AND Apache-2.0 AND Apache-1.1 AND Ubuntu-font-1.0",
+   "evidence": "jogamp.org POM of jogl-all 2.5.0"
+  },
+  {
+   "glob": "modules/prototype/libs/main/jocl-2.5.0-natives-linux-*.jar!/natives/*",
+   "licence": "BSD-2-Clause AND BSD-3-Clause AND SGI-B-2.0 AND Apache-2.0 AND Apache-1.1 AND Ubuntu-font-1.0",
+   "evidence": "jogamp.org POM of jocl 2.5.0"
+  }
+ ],
+ "embedded": [
+  {
+   "glob": "modules/gov/tak/kernel/main/JavaRendererUtils-0.1.41.jar!/FONTS/*.ttf",
+   "licence": "Apache-2.0",
+   "evidence": "symbol fonts of the mil-sym renderer, an Apache-2.0 project",
+   "review": "font files without a font-specific notice inside an Apache-2.0 artifact"
+  },
+  {
+   "glob": "lib/worldwind-*-nasa-public-interop.jar!/gov/nasa/worldwindx/examples/data/spacemusic.au",
+   "licence": "Apache-2.0",
+   "evidence": "example data of NASA WorldWind Java",
+   "review": "audio file of the WorldWind examples; where it came from is not stated"
+  }
+ ]
+}
