@@ -44,13 +44,15 @@ for node in $(timeout 30 docker ps -a --filter name=k3d- --format '{{.Names}}' 2
 done
 timeout 30 docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}}' 2>/dev/null || true
 for node in $(timeout 30 docker ps -a --filter name=k3d- --filter name=server --format '{{.Names}}' 2>/dev/null); do
-  # Redact the whole docker log, then keep the start and error lines.
+  # Keep API server admission and request-latency lines alongside k3s errors
+  # so the Velero and Zarf timestamps can be compared after a failed backup.
+  # Redact the whole docker log, then select those lines.
   # Filtering first can leave a fragment of a multiline secret.
-  echo "--- ${node}: k3s starts, errors, and shutdown lines"
+  echo "--- ${node}: k3s lifecycle, API server request, and error lines"
   timeout 30 docker logs "${node}" 2>&1 |
     "${here}/redact-then-filter.sh" --ignore-case \
-      --grep 'Starting k3s|level=fatal|level=error|panic|signal|shutting down|killed' \
-      --grep-v 'Sending HTTP/1.1 50[23] response' --tail 40 ||
+      --grep 'Starting k3s|level=fatal|level=error|panic|signal|shutting down|killed|agent-pod\.zarf\.dev|failed calling webhook|Trace\[[0-9]+\]|etcdserver: request timed out' \
+      --grep-v 'Sending HTTP/1.1 50[23] response' --tail 60 ||
     echo "omitted unsanitizable k3s log"
 done
 echo "::endgroup::"

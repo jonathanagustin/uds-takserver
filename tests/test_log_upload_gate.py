@@ -80,7 +80,7 @@ class LogUploadGateTests(unittest.TestCase):
 
     def test_k3s_and_container_logs_are_redacted_before_they_are_filtered(self):
         dump = (ROOT / ".github" / "scripts" / "dump-memory.sh").read_text()
-        k3s = dump.split("k3s starts, errors, and shutdown lines", 1)[1].split("done", 1)[0]
+        k3s = dump.split("k3s lifecycle, API server request, and error lines", 1)[1].split("done", 1)[0]
         self.assertIn("redact-then-filter.sh", k3s)
         self.assertNotIn("| grep", k3s)
         self.assertNotIn("--tail=", k3s)

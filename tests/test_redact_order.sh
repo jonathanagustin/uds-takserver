@@ -79,7 +79,7 @@ else
   bad "print-logs output was unexpected: ${printed}"
 fi
 
-k3s_block="$(awk '/k3s starts, errors, and shutdown lines/{flag=1} flag{print} /omitted unsanitizable k3s log/{if(flag) exit}' "${dump}")"
+k3s_block="$(awk '/k3s lifecycle, API server request, and error lines/{flag=1} flag{print} /omitted unsanitizable k3s log/{if(flag) exit}' "${dump}")"
 if grep -q 'redact-then-filter.sh' <<< "${k3s_block}" && ! grep -q '| grep' <<< "${k3s_block}"; then
   ok "dump-memory redacts k3s logs before it filters them"
 else
