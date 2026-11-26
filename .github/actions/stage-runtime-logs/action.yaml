@@ -1,0 +1,36 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+name: Stage runtime logs
+description: Copy runtime logs into a sanitized directory for diagnostics
+inputs:
+  include-out:
+    description: Include the Full Core diagnostic output directory
+    default: 'false'
+outputs:
+  ok:
+    description: Set to true after successful sanitization
+    value: ${{ steps.stage.outputs.ok }}
+  dir:
+    description: Sanitized diagnostic directory
+    value: ${{ steps.stage.outputs.dir }}
+runs:
+  using: composite
+  steps:
+    - id: stage
+      shell: bash
+      env:
+        INCLUDE_OUT: ${{ inputs.include-out }}
+      run: |
+        set -euo pipefail
+        dest="${RUNNER_TEMP}/sanitized-logs"
+        set --
+        if [[ "${INCLUDE_OUT}" == 'true' ]]; then
+          set -- out
+        fi
+        ./.github/scripts/stage-sanitized-logs.sh "${dest}" \
+          "$@" \
+          /tmp/zarf-*.log /tmp/uds-*.log /tmp/maru-*.log /tmp/debug-*.log \
+          /tmp/uds-containerd-logs /tmp/k3d-uds-*.log
+        echo "ok=true" >> "${GITHUB_OUTPUT}"
+        echo "dir=${dest}" >> "${GITHUB_OUTPUT}"

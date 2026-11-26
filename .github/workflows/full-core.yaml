@@ -255,16 +255,9 @@ jobs:
         # script exits 0. A timeout or cancel leaves ok unset, so the uploads
         # below do not run and the raw logs are not published.
         timeout-minutes: 3
-        shell: bash
-        run: |
-          set -euo pipefail
-          dest="${RUNNER_TEMP}/sanitized-logs"
-          ./.github/scripts/stage-sanitized-logs.sh "${dest}" \
-            out \
-            /tmp/zarf-*.log /tmp/uds-*.log /tmp/maru-*.log /tmp/debug-*.log \
-            /tmp/uds-containerd-logs /tmp/k3d-uds-*.log
-          echo "ok=true" >> "${GITHUB_OUTPUT}"
-          echo "dir=${dest}" >> "${GITHUB_OUTPUT}"
+        uses: ./.github/actions/stage-runtime-logs
+        with:
+          include-out: 'true'
 
       - name: Print sanitized logs
         if: ${{ !cancelled() && steps.sanitize.outputs.ok == 'true' }}

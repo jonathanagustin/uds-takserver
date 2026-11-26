@@ -236,15 +236,7 @@ jobs:
         id: sanitize
         if: failure() && !cancelled()
         timeout-minutes: 3
-        shell: bash
-        run: |
-          set -euo pipefail
-          dest="${RUNNER_TEMP}/sanitized-logs"
-          ./.github/scripts/stage-sanitized-logs.sh "${dest}" \
-            /tmp/zarf-*.log /tmp/uds-*.log /tmp/maru-*.log /tmp/debug-*.log \
-            /tmp/uds-containerd-logs /tmp/k3d-uds-*.log
-          echo "ok=true" >> "${GITHUB_OUTPUT}"
-          echo "dir=${dest}" >> "${GITHUB_OUTPUT}"
+        uses: ./.github/actions/stage-runtime-logs
 
       - name: Print sanitized logs
         if: failure() && !cancelled() && steps.sanitize.outputs.ok == 'true'

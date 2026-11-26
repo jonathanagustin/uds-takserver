@@ -57,6 +57,7 @@ fi
 # test:full-core.
 pattern='^('
 pattern+='bundle/'
+pattern+='|\.github/actions/stage-runtime-logs/'
 pattern+='|\.github/workflows/full-core\.yaml'
 pattern+='|\.github/scripts/(full-core-paths|check-full-core|full-core-top|check-monitoring|check-filesystem-backup|check-exemptions|deploy-slim-core|fit-runner|trim-runner|add-runner-swap|dump-memory|runner-wedge-probe|runner-wedge-kernel|redact-logs|redact-then-filter|checked-pipe|node-agent-ready|summarize-coreconfig|stage-sanitized-logs|dev-package|wait-for-tak-images)\.(sh|py)'
 pattern+='|tasks\.yaml'

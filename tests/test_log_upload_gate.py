@@ -7,9 +7,14 @@ A cancelled job and a sanitizer that did not finish must not upload the
 original /tmp logs. This reads the workflow files; it does not start a run.
 """
 
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 DIAGNOSTICS = (
@@ -66,6 +71,37 @@ class LogUploadGateTests(unittest.TestCase):
                 self.assertNotIn("/tmp/zarf-", body)
                 self.assertNotIn("/tmp/uds-", body)
             self.assertGreater(gated, 0, path.name)
+
+    def test_shared_staging_reports_ready_only_after_success(self):
+        action_path = ROOT / ".github/actions/stage-runtime-logs/action.yaml"
+        action = yaml.safe_load(action_path.read_text())
+        step, = action["runs"]["steps"]
+        for output in ("ok", "dir"):
+            self.assertEqual(action["outputs"][output]["value"],
+                             "${{ steps." + step["id"] + ".outputs." + output + " }}")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sanitizer = root / ".github/scripts/stage-sanitized-logs.sh"
+            sanitizer.parent.mkdir(parents=True)
+            sanitizer.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > inputs\nexit "$STATUS"\n')
+            sanitizer.chmod(0o755)
+            for include_out in ("true", "false"):
+                for status in (0, 13):
+                    with self.subTest(include_out=include_out, status=status):
+                        output = root / f"outputs-{include_out}-{status}"
+                        env = dict(os.environ, INCLUDE_OUT=include_out, STATUS=str(status),
+                                   RUNNER_TEMP=directory, GITHUB_OUTPUT=str(output))
+                        result = subprocess.run(["bash", "-c", step["run"]], cwd=root,
+                                                env=env, timeout=10)
+                        self.assertEqual(result.returncode, status)
+                        inputs = (root / "inputs").read_text().splitlines()
+                        self.assertEqual(inputs[0], str(root / "sanitized-logs"))
+                        self.assertEqual("out" in inputs, include_out == "true")
+                        if status == 0:
+                            self.assertEqual(output.read_text(),
+                                             f"ok=true\ndir={root / 'sanitized-logs'}\n")
+                        else:
+                            self.assertFalse(output.exists())
 
     def test_a_failed_test_job_does_not_start_the_artifact_upload(self):
         for name in ("test.yaml", "full-core.yaml"):
