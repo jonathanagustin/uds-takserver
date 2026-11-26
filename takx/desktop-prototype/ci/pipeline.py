@@ -387,6 +387,9 @@ def summary(root):
         marker = load(candidate)
         lines += ['Architecture tree: `%s`, %d override patches (%s).' % (
             marker['arch'], len(marker['patches']), ', '.join(row['name'] for row in marker['patches'])), '']
+        for row in marker.get('stage_patches') or []:
+            lines += ['Prototype patch `%s`: %s.' % (row['name'], 'applied to the copy' if 'files' in row else
+                                                    'NOT applied, %s' % ' '.join(str(row.get('skipped')).split())[:300]), '']
     if not rows:
         lines.append('No status file was written.')
     else:

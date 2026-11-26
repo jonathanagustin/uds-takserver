@@ -1,0 +1,52 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Desktop prototype architecture override for the assembler of the prototype
+# itself, takx/desktop-prototype/assemble/assemble.py (Linux arm64).
+# Never applied to the tracked file, which another part of the prototype owns
+# and which stays amd64-only: arch_tree.py applies this, with fuzz 0, to the
+# copy of the tree under <work root>/overrides/arm64/tree, and only on an arm64
+# host. Unlike a recipe patch it is not a condition of that copy: when the
+# tracked assembler changes so that a hunk no longer applies exactly, the copy
+# keeps the tracked file, the tree receipt says 'skipped', and only the
+# assembly stage of arm64 is affected. Delete this file once the tracked
+# assembler reads the two names from arch.sh (ci/ARCH-CACHE-NOTE.md).
+# Nothing here is validated or qualified on arm64; no arm64 boot is claimed.
+#
+# Why:
+# The assembler keeps only the JogAmp native jars of linux-amd64 and reads the
+# Kernel JAR under its amd64 name. On arm64 the client stage resolves the
+# natives-linux-aarch64 jars and the Kernel stage writes
+# kernel-8.30.5-linux-arm64-public-cpu.jar (arch.sh: jogamp, kernel_jar), so
+# the first run on a hosted arm64 runner stopped with "assemble: missing input
+# .../kernel-8.30.5-linux-amd64-public-cpu.jar". The native directory
+# native/linux64 is the same on both architectures and is not changed.
+--- a/takx/desktop-prototype/assemble/assemble.py
++++ b/takx/desktop-prototype/assemble/assemble.py
+@@ -67,7 +67,7 @@
+     'org.jboss.logging:jboss-logging-annotations': 'excluded by binCreator.gradle dependencyExcludes',
+     'org.jboss.modules:jboss-modules': 'placed in boot/, excluded from modules by binCreator.gradle',
+ }
+-FOREIGN_NATIVES = re.compile(r'natives-(?!linux-amd64$)')
++FOREIGN_NATIVES = re.compile(r'natives-(?!linux-aarch64$)')
+ 
+ # Kernel dependency JARs whose classes the TAKX runtime closure already
+ # provides under another artifact name.
+@@ -274,7 +274,7 @@
+         classifier = name[len(artifact) + len(coordinate_version) + 2:-4]
+         if FOREIGN_NATIVES.match(classifier):
+             left_out.append({'coordinates': entry['coordinates'],
+-                             'reason': 'natives of another platform; Linux amd64 prototype only'})
++                             'reason': 'natives of another platform; Linux arm64 override tree'})
+             continue
+         module = GROUP_MODULE.get(group, LIBS)
+         if name in members[module]:
+@@ -298,7 +298,7 @@
+                  '%s (takx/worldwind-java --interop; not the private 2.2.1-TAKX-4)' % WORLDWIND_LABEL)
+ 
+     # --- Kernel and its dependency JARs
+-    kernel_jar = need(os.path.join(kernel, 'kernel-8.30.5-linux-amd64-public-cpu.jar'))
++    kernel_jar = need(os.path.join(kernel, 'kernel-8.30.5-linux-arm64-public-cpu.jar'))
+     assembly.put(kernel_jar, os.path.join(module_dir(KERNEL), os.path.basename(kernel_jar)),
+                  '%s (takx/desktop-prototype kernel stage; not the private 8.57.11)' % KERNEL_LABEL)
+     members[KERNEL].append(os.path.basename(kernel_jar))

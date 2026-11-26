@@ -23,6 +23,15 @@ scripts, provider_cache.py and providers.json are part of the copy, the
 provider cache keys of that architecture are derived from the patched recipe
 files and from the path of the copy; they can never equal an amd64 key.
 
+A second kind, overrides/<arch>/prototype/<name>.patch, changes files of the
+prototype itself that the architecture port does not own and that are still
+amd64-only (STAGE_PREFIXES: the assembler). Such a patch is applied to the
+copy in the same way, after the recipe patches, but it is not a condition of
+the tree: when it no longer applies exactly, because the tracked file moved
+on, the copy keeps the tracked file, the receipt records the patch as
+'skipped' with the reason, and only the stage that needed it is affected.
+No provider cache key depends on these files.
+
 Usage:
   arch_tree.py ensure --arch ARCH [--root ROOT]   build or re-verify the copy
                                                   and print its path
@@ -33,8 +42,10 @@ Usage:
 On amd64 there are no patches; 'ensure' refuses and the tracked tree is used.
 """
 import argparse
+import contextlib
 import fcntl
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -55,6 +66,9 @@ IGNORED = ('__pycache__', '*.pyc')
 # Mount points for the base repository's submodule checkout and Git directory.
 MOUNT_POINTS = ('upstream', '.git')
 INEXACT = re.compile(r'succeeded at \d+ (?:with fuzz|\(offset)')
+# What a patch of overrides/<arch>/prototype/ may change.
+STAGE_DIRECTORY = 'prototype'
+STAGE_PREFIXES = ('takx/desktop-prototype/assemble/',)
 
 
 class Refusal(Exception):
@@ -95,12 +109,12 @@ def patch_files(repo, arch):
     return sorted((Path(repo) / 'takx/desktop-prototype/overrides' / arch).glob('*.patch'))
 
 
-def patch_targets(patch):
-    """Files a patch changes; refuses anything outside takx/<patch stem>/."""
-    recipe = patch.name[:-len('.patch')]
-    prefix = 'takx/%s/' % recipe
-    if not recipe or recipe == 'desktop-prototype' or '/' in recipe:
-        raise Refusal('%s: not named after a recipe under takx/' % patch.name)
+def stage_patch_files(repo, arch):
+    return sorted((Path(repo) / 'takx/desktop-prototype/overrides' / arch / STAGE_DIRECTORY).glob('*.patch'))
+
+
+def header_targets(patch, prefixes):
+    """Files the headers of a patch name; refuses anything outside the prefixes."""
     old, targets = None, []
     for line in patch.read_text().splitlines():
         if line.startswith('--- '):
@@ -108,8 +122,8 @@ def patch_targets(patch):
         elif line.startswith('+++ ') and old is not None:
             new = line[4:].split('\t')[0]
             for name, side in ((old, 'a/'), (new, 'b/')):
-                if not name.startswith(side + prefix) or '..' in Path(name).parts:
-                    raise Refusal('%s: may only change files below %s, not %s' % (patch.name, prefix, name))
+                if not name.startswith(tuple(side + prefix for prefix in prefixes)) or '..' in Path(name).parts:
+                    raise Refusal('%s: may only change files below %s, not %s' % (patch.name, ' or '.join(prefixes), name))
             if old[2:] != new[2:]:
                 raise Refusal('%s: renames are not supported' % patch.name)
             targets.append(new[2:])
@@ -117,6 +131,19 @@ def patch_targets(patch):
     if not targets:
         raise Refusal('%s: no file header found' % patch.name)
     return targets
+
+
+def patch_targets(patch):
+    """Files a patch changes; refuses anything outside takx/<patch stem>/."""
+    recipe = patch.name[:-len('.patch')]
+    if not recipe or recipe == 'desktop-prototype' or '/' in recipe:
+        raise Refusal('%s: not named after a recipe under takx/' % patch.name)
+    return header_targets(patch, ('takx/%s/' % recipe,))
+
+
+def stage_patch_targets(patch):
+    """Files a prototype patch changes; refuses anything outside STAGE_PREFIXES."""
+    return header_targets(patch, STAGE_PREFIXES)
 
 
 def copy_base(repo, tree):
@@ -154,9 +181,49 @@ def apply(tree, patches, base):
     return rows, current
 
 
-def fingerprint(arch, repo, base, patches):
-    return hashlib.sha256(canonical({'schema': SCHEMA, 'arch': arch, 'base_repo': str(repo), 'base': base,
-                                     'patches': {p.name: sha(p) for p in patches}})).hexdigest()
+def apply_stage(tree, patches, current):
+    """Apply each prototype patch that applies exactly; return (receipt rows, final listing).
+
+    A patch that does not apply is tried with --dry-run only, so it leaves the
+    copy as it was, and its row says 'skipped' instead of 'files'.
+    """
+    tool = shutil.which('patch')
+    rows, current = [], dict(current)
+    for patch in patches:
+        name = '%s/%s' % (STAGE_DIRECTORY, patch.name)
+        targets = stage_patch_targets(patch)
+        argv = [tool, '--batch', '--fuzz=0', '--no-backup-if-mismatch', '-p1', '-d', str(tree), '-i', str(patch)]
+        missing = [target for target in targets if target not in current]
+        reason = None
+        if missing:
+            reason = '%s does not exist in the tree' % missing[0]
+        else:
+            trial = subprocess.run(argv + ['--dry-run'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            if trial.returncode or INEXACT.search(trial.stdout):
+                reason = 'does not apply exactly to the tracked file: %s' % ' '.join(trial.stdout.split())[:300]
+        if reason:
+            rows.append({'name': name, 'sha256': sha(patch), 'skipped': reason})
+            print('arch_tree.py: %s is NOT applied (%s); the stage that needs it stays as tracked' % (name, reason),
+                  file=sys.stderr)
+            continue
+        result = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        after = listing(tree)
+        changed = sorted(item for item in set(current) | set(after) if current.get(item) != after.get(item))
+        if result.returncode or changed != sorted(set(targets)):
+            raise Refusal('%s changed %s, its headers name %s:\n%s' % (name, changed, sorted(set(targets)),
+                                                                    result.stdout.strip()))
+        rows.append({'name': name, 'sha256': sha(patch),
+                     'files': {item: {'before': current[item], 'after': after[item]} for item in changed}})
+        current = after
+    return rows, current
+
+
+def fingerprint(arch, repo, base, patches, stage_patches=()):
+    document = {'schema': SCHEMA, 'arch': arch, 'base_repo': str(repo), 'base': base,
+                'patches': {p.name: sha(p) for p in patches}}
+    if stage_patches:
+        document['stage_patches'] = {p.name: sha(p) for p in stage_patches}
+    return hashlib.sha256(canonical(document)).hexdigest()
 
 
 def read_marker(tree):
@@ -176,15 +243,16 @@ def current(tree, wanted):
         return False
 
 
-def build(tree, arch, repo, base, patches, wanted):
+def build(tree, arch, repo, base, patches, wanted, stage_patches=()):
     copy_base(repo, tree)
     copied = listing(tree)
     if copied != base:
         raise Refusal('the repository changed while it was copied')
     rows, files = apply(tree, patches, base)
+    stage_rows, files = apply_stage(tree, stage_patches, files)
     (tree / BASE_FILE).write_text(str(repo) + '\n')
     marker = {'schema': SCHEMA, 'arch': arch, 'base_repo': str(repo), 'fingerprint': wanted, 'patches': rows,
-              'file_count': len(files), 'files': files,
+              'stage_patches': stage_rows, 'file_count': len(files), 'files': files,
               'note': 'Patched copy for %s; the tracked recipes are unchanged. Nothing built from this tree is '
                       'validated or qualified on %s.' % (arch, arch)}
     (tree / MARKER).write_text(json.dumps(marker, indent=1, sort_keys=True) + '\n')
@@ -213,8 +281,9 @@ def ensure(arch, root, repo):
         raise Refusal('the work root must be outside the repository')
     home.mkdir(parents=True, exist_ok=True)
     tree = home / 'tree'
+    stage_patches = stage_patch_files(repo, arch)
     base = listing(repo)
-    wanted = fingerprint(arch, repo, base, patches)
+    wanted = fingerprint(arch, repo, base, patches, stage_patches)
     with open(home / '.lock', 'a+') as lock:
         fcntl.flock(lock, fcntl.LOCK_SH)
         if current(tree, wanted):
@@ -229,7 +298,7 @@ def ensure(arch, root, repo):
         staging = Path(tempfile.mkdtemp(prefix='tree.staging.', dir=home))
         try:
             staging.chmod(0o755)
-            marker = build(staging, arch, repo, base, patches, wanted)
+            marker = build(staging, arch, repo, base, patches, wanted, stage_patches)
             if tree.exists():
                 moved = set_aside(root, tree, arch)
                 print('arch_tree.py: replaced an outdated tree, kept as %s' % moved, file=sys.stderr)
@@ -239,17 +308,28 @@ def ensure(arch, root, repo):
         print('arch_tree.py: built %s (%d files, %d patches, %d files changed)' % (
             tree, marker['file_count'], len(marker['patches']), sum(len(r['files']) for r in marker['patches'])),
             file=sys.stderr)
+        if marker['stage_patches']:
+            print('arch_tree.py: prototype patches applied: %s; skipped: %s' % (
+                ', '.join(r['name'] for r in marker['stage_patches'] if 'files' in r) or 'none',
+                ', '.join(r['name'] for r in marker['stage_patches'] if 'skipped' in r) or 'none'), file=sys.stderr)
         return tree
 
 
-def check(arch, repo):
-    """Apply the patches of one architecture to a throw-away copy; return the rows."""
+def check(arch, repo, stage=False):
+    """Apply the patches of one architecture to a throw-away copy; return the rows.
+
+    With stage=True the rows of the prototype patches follow those of the
+    recipe patches; a skipped one has 'skipped' instead of 'files'.
+    """
     patches = patch_files(repo, arch)
     with tempfile.TemporaryDirectory(prefix='takx-arch-check-') as work:
         tree = Path(work) / 'tree'
         tree.mkdir()
         copy_base(repo, tree)
-        rows, _ = apply(tree, patches, listing(repo))
+        rows, files = apply(tree, patches, listing(repo))
+        if stage:
+            with contextlib.redirect_stderr(io.StringIO()):
+                rows = rows + apply_stage(tree, stage_patch_files(repo, arch), files)[0]
     return rows
 
 
@@ -264,10 +344,17 @@ def main(argv=None):
     try:
         if args.command == 'check':
             for arch in ([args.arch] if args.arch else ARCHES):
-                rows = check(arch, repo)
+                rows = check(arch, repo, stage=True)
+                recipe_rows = [row for row in rows if '/' not in row['name']]
                 for row in rows:
-                    print('%s %s: fuzz 0, %s' % (arch, row['name'], ', '.join(sorted(row['files']))))
-                print('%s: %d override patches apply exactly' % (arch, len(rows)))
+                    if 'skipped' in row:
+                        print('%s %s: NOT APPLIED, %s' % (arch, row['name'], row['skipped']))
+                    else:
+                        print('%s %s: fuzz 0, %s' % (arch, row['name'], ', '.join(sorted(row['files']))))
+                if len(rows) > len(recipe_rows):
+                    print('%s: %d of %d prototype patches apply exactly (a skipped one affects only its stage)' % (
+                        arch, sum('files' in row for row in rows) - len(recipe_rows), len(rows) - len(recipe_rows)))
+                print('%s: %d override patches apply exactly' % (arch, len(recipe_rows)))
             return 0
         if not args.arch:
             parser.error('--arch is required')

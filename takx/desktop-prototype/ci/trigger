@@ -21,5 +21,10 @@
 #        (ci/inputs.sh seed) and asks the Maven Central mirror after a 429.
 #        Both architectures from the provider cache; ci/diagnose-controls.sh
 #        records why a Kernel control fails.
-arches=amd64,arm64
+# run 6: arm64 only, from the provider cache. The assembler is amd64-only and
+#        belongs to another part of the prototype, so the arm64 tree copy now
+#        carries overrides/arm64/prototype/assemble.patch (JogAmp aarch64
+#        natives, arm64 Kernel JAR name); the tracked assembler is unchanged.
+#        First arm64 run that can get past "assemble: missing input".
+arches=arm64
 providers=cached

@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import warnings
 from unittest import mock
 
 sys.dont_write_bytecode = True
@@ -178,6 +179,31 @@ class Overrides(unittest.TestCase):
                     self.assertTrue(target.startswith('takx/%s/' % recipe))
                     self.assertTrue((REPO / target).is_file())
                     self.assertFalse(Path(target).name.startswith('test'), 'recipe tests are not patched')
+
+    def test_prototype_patch_of_the_assembler_is_recorded_and_commented(self):
+        patch, = TREE.stage_patch_files(REPO, 'arm64')
+        self.assertEqual(patch.name, 'assemble.patch')
+        lines = patch.read_text().splitlines()
+        self.assertEqual(lines[:2], ['# Copyright 2026 uds-takserver authors', '# SPDX-License-Identifier: GPL-3.0-only'])
+        self.assertIn('# Why:', lines)
+        self.assertEqual(TREE.stage_patch_targets(patch), ['takx/desktop-prototype/assemble/assemble.py'])
+        self.assertEqual(TREE.stage_patch_files(REPO, 'amd64'), [])
+        added = [line[1:] for line in lines if line.startswith('+') and not line.startswith('+++')]
+        self.assertEqual(len(added), 3)
+        names = json.loads(subprocess.check_output(['bash', str(HERE / 'arch.sh'), 'json', 'arm64'], timeout=30))
+        self.assertTrue(any("natives-(?!%s$)" % names['jogamp'][len('natives-'):] in line for line in added))
+        self.assertTrue(any(names['kernel_jar'] in line for line in added))
+        # The tracked assembler belongs to another part of the prototype and may
+        # move on; then the patch is skipped, which is reported, not a failure.
+        row = TREE.check('arm64', REPO, stage=True)[-1]
+        self.assertEqual(row['name'], 'prototype/assemble.patch')
+        if 'skipped' in row:
+            warnings.warn('overrides/arm64/prototype/assemble.patch no longer applies: %s' % row['skipped'])
+        else:
+            self.assertEqual(sorted(row['files']), ['takx/desktop-prototype/assemble/assemble.py'])
+        self.assertEqual(subprocess.run(['git', '-C', str(REPO), 'status', '--porcelain', '--',
+                                         'takx/desktop-prototype/assemble'], stdout=subprocess.PIPE, text=True,
+                                        timeout=60).stdout, '')
 
     def test_every_patch_applies_with_fuzz_zero_to_the_tracked_recipes(self):
         rows = TREE.check('arm64', REPO)
@@ -416,6 +442,94 @@ class ArchTree(Fixture):
         with self.assertRaisesRegex(TREE.Refusal, 'not named after a recipe'):
             self.ensure()
 
+    STAGE_BEFORE = 'NATIVES = "natives-linux-amd64"\nJAR = "kernel-amd64.jar"\nprint(NATIVES, JAR)\n'
+    STAGE_PATCH = ('# Copyright 2026 uds-takserver authors\n# SPDX-License-Identifier: GPL-3.0-only\n# Why: test\n'
+                   '--- a/takx/desktop-prototype/assemble/assemble.py\n+++ b/takx/desktop-prototype/assemble/assemble.py\n'
+                   '@@ -1,3 +1,3 @@\n-NATIVES = "natives-linux-amd64"\n+NATIVES = "natives-linux-aarch64"\n'
+                   ' JAR = "kernel-amd64.jar"\n print(NATIVES, JAR)\n')
+
+    def stage_fixture(self, before=None, patch=None):
+        target = self.repo / 'takx/desktop-prototype/assemble/assemble.py'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(self.STAGE_BEFORE if before is None else before)
+        (self.overrides / 'prototype').mkdir(exist_ok=True)
+        (self.overrides / 'prototype/assemble.patch').write_text(self.STAGE_PATCH if patch is None else patch)
+        return target
+
+    def test_prototype_patch_changes_the_copy_of_a_stage_file_only(self):
+        target = self.stage_fixture()
+        self.assertEqual(self.ensure(), self.tree)
+        self.assertEqual(target.read_text(), self.STAGE_BEFORE)
+        copied = self.tree / 'takx/desktop-prototype/assemble/assemble.py'
+        self.assertIn('natives-linux-aarch64', copied.read_text())
+        marker = json.loads((self.tree / '.takx-arch-tree.json').read_text())
+        self.assertEqual([row['name'] for row in marker['patches']], ['recipe.patch'])
+        self.assertEqual(marker['stage_patches'], [{
+            'name': 'prototype/assemble.patch', 'sha256': hashlib.sha256(self.STAGE_PATCH.encode()).hexdigest(),
+            'files': {'takx/desktop-prototype/assemble/assemble.py': {
+                'before': hashlib.sha256(self.STAGE_BEFORE.encode()).hexdigest(),
+                'after': hashlib.sha256(copied.read_bytes()).hexdigest()}}}])
+        self.assertEqual(marker['files']['takx/desktop-prototype/assemble/assemble.py'],
+                         hashlib.sha256(copied.read_bytes()).hexdigest())
+        # The tree is current; a changed prototype patch replaces it.
+        self.assertEqual(self.ensure(), self.tree)
+        self.assertFalse((self.root / 'failed').exists())
+        (self.overrides / 'prototype/assemble.patch').write_text(self.STAGE_PATCH.replace('# Why: test', '# Why: again'))
+        self.assertEqual(self.ensure(), self.tree)
+        self.assertEqual(len(list((self.root / 'failed').iterdir())), 1)
+
+    def test_prototype_patch_that_went_stale_is_skipped_and_the_tree_is_still_built(self):
+        for label, before in (('shifted', '# a new first line\n' + self.STAGE_BEFORE),
+                              ('changed', self.STAGE_BEFORE.replace('natives-linux-amd64', 'natives-' + 'x'))):
+            with self.subTest(label):
+                shutil.rmtree(self.root, ignore_errors=True)
+                self.stage_fixture(before=before)
+                self.assertEqual(self.ensure(), self.tree)
+                self.assertEqual((self.tree / 'takx/desktop-prototype/assemble/assemble.py').read_text(), before)
+                self.assertIn('not in ("x86_64", "aarch64")', (self.tree / 'takx/recipe/build.py').read_text())
+                marker = json.loads((self.tree / '.takx-arch-tree.json').read_text())
+                row, = marker['stage_patches']
+                self.assertEqual((row['name'], sorted(row)), ('prototype/assemble.patch', ['name', 'sha256', 'skipped']))
+                self.assertIn('does not apply exactly', row['skipped'])
+                # Nothing of the failed attempt is left in the copy (no reject or backup file).
+                self.assertEqual(TREE.listing(self.tree), marker['files'])
+                self.assertEqual(sorted(p.name for p in (self.tree / 'takx/desktop-prototype/assemble').iterdir()),
+                                 ['assemble.py'])
+        shutil.rmtree(self.root)
+        (self.repo / 'takx/desktop-prototype/assemble/assemble.py').unlink()
+        self.ensure()
+        row, = json.loads((self.tree / '.takx-arch-tree.json').read_text())['stage_patches']
+        self.assertIn('does not exist in the tree', row['skipped'])
+
+    def test_prototype_patch_may_only_name_the_listed_stage_files(self):
+        self.assertEqual(TREE.STAGE_PREFIXES, ('takx/desktop-prototype/assemble/',))
+        for patch, message in (
+                (self.STAGE_PATCH.replace('desktop-prototype/assemble/assemble.py', 'desktop-prototype/arch.sh'),
+                 'may only change files below takx/desktop-prototype/assemble/'),
+                (self.STAGE_PATCH.replace('desktop-prototype/assemble/assemble.py', 'recipe/build.py'), 'may only change files below'),
+                (self.STAGE_PATCH.replace('assemble/assemble.py', 'assemble/../provider_cache.py'), 'may only change files below'),
+                ('# only a comment\n', 'no file header found')):
+            with self.subTest(message=message):
+                self.stage_fixture(patch=patch)
+                with self.assertRaisesRegex(TREE.Refusal, message):
+                    self.ensure()
+                self.assertFalse(self.tree.exists())
+
+    def test_command_line_reports_prototype_patches(self):
+        script = [sys.executable, '-I', '-B', str(HERE / 'arch_tree.py'), 'check', '--arch', 'arm64', '--repo', str(self.repo)]
+        self.stage_fixture()
+        checked = subprocess.run(script, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
+        self.assertEqual(checked.stdout, 'arm64 recipe.patch: fuzz 0, takx/recipe/build.py\n'
+                         'arm64 prototype/assemble.patch: fuzz 0, takx/desktop-prototype/assemble/assemble.py\n'
+                         'arm64: 1 of 1 prototype patches apply exactly (a skipped one affects only its stage)\n'
+                         'arm64: 1 override patches apply exactly\n')
+        self.stage_fixture(before='# moved\n' + self.STAGE_BEFORE)
+        checked = subprocess.run(script, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
+        self.assertEqual(checked.returncode, 0)
+        self.assertIn('arm64 prototype/assemble.patch: NOT APPLIED, does not apply exactly', checked.stdout)
+        self.assertIn('arm64: 0 of 1 prototype patches apply exactly', checked.stdout)
+        self.assertTrue(checked.stdout.endswith('arm64: 1 override patches apply exactly\n'))
+
     def test_shifted_hunk_is_refused(self):
         (self.repo / 'takx/recipe/build.py').write_text('# a new first line\n' + self.BEFORE)
         with self.assertRaisesRegex(TREE.Refusal, 'applied inexactly|does not apply'):
@@ -538,7 +652,14 @@ class Pipeline(unittest.TestCase):
             tree = root / 'overrides/arm64/tree'
             tree.mkdir(parents=True)
             (tree / '.takx-arch-tree.json').write_text(json.dumps({'arch': 'arm64', 'patches': [{'name': 'x.patch'}]}))
+            self.assertNotIn('Prototype patch', PIPELINE.summary(root))
+            (tree / '.takx-arch-tree.json').write_text(json.dumps({
+                'arch': 'arm64', 'patches': [{'name': 'x.patch'}], 'stage_patches': [
+                    {'name': 'prototype/a.patch', 'files': {'f': {}}},
+                    {'name': 'prototype/b.patch', 'skipped': 'does not apply exactly:\n hunk 1'}]}))
             text = PIPELINE.summary(root)
+        self.assertIn('Prototype patch `prototype/a.patch`: applied to the copy.', text)
+        self.assertIn('Prototype patch `prototype/b.patch`: NOT applied, does not apply exactly: hunk 1.', text)
         self.assertIn('| proj | ok | 17 | restored from the provider cache: reg/proj:key. a \\| b c |', text)
         self.assertIn('| broken | unreadable |  |  |', text)
         self.assertIn('Architecture tree: `arm64`, 1 override patches (x.patch).', text)

@@ -45,6 +45,8 @@ The arm64 leg of the workflow is expected to fail in its "Assemble and boot" ste
 | `assemble.py:70` | `FOREIGN_NATIVES = re.compile(r'natives-(?!linux-amd64$)')` drops the aarch64 JogAmp jars | keep `natives-linux-aarch64`, drop the others (line 277 is the matching reason text) |
 | `assemble.py:301` | reads `kernel-8.30.5-linux-amd64-public-cpu.jar` | the Kernel stage writes `kernel-8.30.5-linux-arm64-public-cpu.jar` on arm64; `status/kernel-composed.json` (`jar.path`) and `P/kernel-composed/receipt.json` (`outputs.jar.path`) name the file on both |
 
+Until then the arm64 tree copy is given both changes by `overrides/arm64/prototype/assemble.patch`, which `arch_tree.py` applies to the copy of `assemble.py` only (the tracked file is not touched, and amd64 never sees the patch). It is deliberately not a condition of the tree: if `assemble.py` changes so that a hunk no longer applies with fuzz 0, the copy keeps the tracked file, the tree receipt and the job summary say `NOT applied`, and only the arm64 assembly step fails, as it did before. Delete the patch when the two lines read `arch.sh`.
+
 `native/linux64` (`assemble.py:368,373`, `launch.sh:30`) can stay: the stock Kernel loader selects `libs/linux64` for any 64-bit `os.arch`.
 
 On arm64 the workflow starts `assemble.sh` and `boot.sh` from the tree copy, so their `$repo` is the copy and `run-in-toolchain.sh` mounts the base repository's `upstream/` and `.git/` into it.
