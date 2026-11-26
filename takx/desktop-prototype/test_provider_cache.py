@@ -4058,5 +4058,143 @@ class RepositoryManifest(unittest.TestCase):
             self.assertEqual(subprocess.run(['/bin/bash', '-n', str(HERE / script)]).returncode, 0)
 
 
+RUN_ARGV_STUB = r"""#!/bin/bash
+# Stands in for run-in-toolchain.sh: records every argument on its own line and
+# "builds" by creating the completion marker.
+{ printf 'CALL\n'; printf 'ARG %s\n' "$@"; } >> "$STUB_LOG.argv"
+case "$*" in
+  *unittest*) exit 0;;
+  *" -c "*) echo "check passed"; exit 0;;
+esac
+mkdir -p "$STUB_OUTPUT_DIR" && echo built > "$STUB_OUTPUT_DIR/$STUB_MARKER"
+echo 0 > "$STUB_LOG.rc"
+exit 0
+"""
+
+
+class LaneInvocations(unittest.TestCase):
+    """The command each lane really runs for a provider, against providers.json.
+
+    The key is derived from the invocation template in providers.json, not
+    from the lane script. A lane edit that changes an argument, a flag or an
+    environment variable without the same edit in the manifest would keep the
+    old key and restore an output built by another command. Here every real
+    lane step is run with stubbed tools on a cache miss and the recorded
+    command must be the rendered template, argument for argument.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.manifest = PC.validate_manifest(json.loads((HERE / 'providers.json').read_text()))
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.tmp.cleanup)
+        cls.base = Path(cls.tmp.name).resolve()
+        cls.repo = cls.base / 'repo'
+        proto = cls.repo / 'takx/desktop-prototype'
+        (proto / 'stages').mkdir(parents=True)
+        cls.bin = cls.base / 'bin'
+        cls.bin.mkdir()
+        for lane in sorted({entry['lane'] for entry in cls.manifest['providers'].values()}):
+            (proto / 'stages' / lane).write_text((HERE / 'stages' / lane).read_text())
+            os.chmod(proto / 'stages' / lane, 0o755)
+        for path, text in ((proto / 'run-in-toolchain.sh', RUN_ARGV_STUB), (cls.bin / 'docker', DOCKER_STUB)):
+            path.write_text(text)
+            os.chmod(path, 0o755)
+        (proto / 'provider_cache.py').write_text(CACHE_STUB)
+        for entry in cls.manifest['providers'].values():
+            # The lanes read the entrypoint and the locks to seed their source caches.
+            script = cls.repo / entry['invocation']['argv'][2].replace('{repo}/', '')
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text('')
+            for lock in entry['locks']:
+                (cls.repo / lock).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(REPO / lock, cls.repo / lock)
+
+    def recorded(self, name):
+        """Run the lane step of `name` on a cache miss in a new work root.
+
+        Returns (output, calls of the toolchain wrapper, cache commands, root).
+        The stub build writes the completion marker only, so a lane that also
+        lists other outputs reports a failure afterwards; LaneHooks covers that
+        part, here only the recorded command matters.
+        """
+        providers = self.manifest['providers']
+        root = Path(tempfile.mkdtemp(prefix='root-%s.' % name, dir=self.base))
+        log = root.with_name(root.name + '.log')
+        for other, entry in providers.items():
+            if other != name:  # every other provider is finished here
+                (root / 'P' / other).mkdir(parents=True)
+                (root / 'P' / other / entry['marker']).write_text('done\n')
+                (root / 'status').mkdir(exist_ok=True)
+                (root / 'status' / (other + '.json')).write_text(
+                    json.dumps({'stage': other, 'status': 'ok', 'outputs': []}))
+        env = {'PATH': '%s:%s' % (self.bin, os.environ.get('PATH', '/usr/bin:/bin')), 'HOME': self.tmp.name,
+               'TAKX_PROTO_ROOT': str(root), 'STUB_LOG': str(log), 'STUB_MARKER': providers[name]['marker'],
+               'STUB_OUTPUT_DIR': str(root / 'P' / name), 'TAKX_PREREQ_TIMEOUT': '0',
+               'TAKX_LANE2_SQLCIPHER_WAIT_S': '0', 'TAKX_LANE3_WAIT_S': '0'}
+        lane = self.repo / 'takx/desktop-prototype/stages' / providers[name]['lane']
+        done = subprocess.run(['/bin/bash', str(lane), name], env=env, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+        calls = []
+        path = Path(str(log) + '.argv')
+        for line in (path.read_text().split('\n')[:-1] if path.exists() else []):
+            if line == 'CALL':
+                calls.append([])
+            elif line.startswith('ARG '):
+                calls[-1].append(line[4:])
+            else:  # an argument that holds a newline
+                calls[-1][-1] += '\n' + line
+        cache = Path(str(log) + '.cache')
+        return done.stdout.decode(), calls, (cache.read_text().split() if cache.exists() else []), root
+
+    def pattern(self, token, root):
+        values = dict(self.manifest['variables'], root=str(root), repo=str(self.repo))
+        parts = re.split(r'\{([a-z]+)\}', token)
+        text = ''
+        for index, part in enumerate(parts):
+            if index % 2 == 0:
+                text += re.escape(part)
+            elif part == 'timestamp':
+                text += '[0-9]+'
+            else:
+                text += re.escape(values[part])
+        return text
+
+    def test_every_lane_runs_exactly_the_command_the_key_describes(self):
+        for name, entry in sorted(self.manifest['providers'].items()):
+            with self.subTest(provider=name):
+                text, calls, cache, root = self.recorded(name)
+                self.assertEqual(cache[:2], ['restore', name], text)
+                builds = [call for call in calls if 'unittest' not in call and '-c' not in call]
+                self.assertEqual(len(builds), 1, text)
+                call = builds[0]
+                self.assertIn('--', call, call)
+                options, command = call[:call.index('--')], call[call.index('--') + 1:]
+                self.assertEqual(options[options.index('--name') + 1], 'takx-' + name)
+                environment = [options[index + 1] for index, option in enumerate(options) if option in ('-e', '--env')]
+                for label, actual, template in (('env', environment, entry['invocation']['env']),
+                                                ('argv', command, entry['invocation']['argv'])):
+                    self.assertEqual(len(actual), len(template), '%s of %s: %r' % (label, name, actual))
+                    for value, token in zip(actual, template):
+                        self.assertRegex(value, r'\A%s\Z' % self.pattern(token, root),
+                                         '%s of %s differs from providers.json' % (label, name))
+
+    def test_a_changed_lane_argument_is_noticed(self):
+        # The comparison above is exact: one changed value in a lane fails it.
+        lane = self.repo / 'takx/desktop-prototype/stages/lane1.sh'
+        original = lane.read_text()
+        self.addCleanup(lane.write_text, original)
+        self.assertIn('--jobs 1\n', original)
+        lane.write_text(original.replace('--jobs 1\n', '--jobs 2\n'))
+        text, calls, cache, root = self.recorded('sqlcipher')
+        command = [call for call in calls if 'unittest' not in call and '-c' not in call][0]
+        command = command[command.index('--') + 1:]
+        template = self.manifest['providers']['sqlcipher']['invocation']['argv']
+        self.assertEqual(len(command), len(template))
+        differing = [value for value, token in zip(command, template)
+                     if not re.match(r'\A%s\Z' % self.pattern(token, root), value)]
+        self.assertEqual(differing, ['2'])
+
+
 if __name__ == '__main__':
     unittest.main()
