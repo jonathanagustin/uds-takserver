@@ -46,6 +46,7 @@ def load(name, path):
 
 TREE = load('arch_tree', HERE / 'arch_tree.py')
 PIPELINE = load('ci_pipeline', HERE / 'ci/pipeline.py')
+NOT_STORED = load('ci_not_stored', HERE / 'ci/not_stored.py')
 
 
 def arch(*args, **env):
@@ -719,6 +720,32 @@ class Pipeline(unittest.TestCase):
         self.assertIn('Architecture tree: `arm64`, 1 override patches (x.patch).', text)
         self.assertIn('Kernel 8.30.5 + project patches and CommonCommo 1.17.2 patched', text)
 
+    def test_a_failed_arm64_assembly_is_excused_only_by_a_skipped_prototype_patch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(PIPELINE.main(['excused', str(root)]), 1)
+            self.assertIn('not excused: no architecture tree below', output.getvalue())
+            self.assertIsNone(PIPELINE.skipped_stage_patches(root))
+            tree = root / 'overrides/arm64/tree'
+            tree.mkdir(parents=True)
+            applied = {'name': 'prototype/assemble.patch', 'files': {'f': {}}, 'moved': ['Hunk #1 succeeded at 9']}
+            (tree / '.takx-arch-tree.json').write_text(json.dumps({'arch': 'arm64', 'patches': [], 'stage_patches': [applied]}))
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(PIPELINE.main(['excused', str(root)]), 1)
+            self.assertIn('not excused: every prototype patch was applied', output.getvalue())
+            (tree / '.takx-arch-tree.json').write_text(json.dumps({'arch': 'arm64', 'patches': [], 'stage_patches': [
+                applied, {'name': 'prototype/other.patch', 'skipped': 'does not apply exactly'}]}))
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(PIPELINE.main(['excused', str(root)]), 0)
+            self.assertIn('excused: prototype/other.patch was not applied', output.getvalue())
+            # A tree without prototype patches has nothing that could excuse a failure.
+            (tree / '.takx-arch-tree.json').write_text(json.dumps({'arch': 'arm64', 'patches': []}))
+            self.assertEqual(PIPELINE.skipped_stage_patches(root), [])
+
 
 @unittest.skipUnless(shutil.which('patch'), 'the patch tool is required')
 class PipelineRun(Fixture):
@@ -930,6 +957,181 @@ class InputsStore(unittest.TestCase):
         enter = (HERE / 'ci/enter.sh').read_text()
         self.assertLess(enter.index('inputs.sh" seed '), enter.index('"${proto}/fetch.sh"'))
         self.assertLess(enter.index('"${proto}/fetch.sh"'), enter.index('inputs.sh" save '))
+
+
+class NotStored(unittest.TestCase):
+    """ci/not_stored.py: fetched files that are never put into the workflow's registry."""
+
+    @staticmethod
+    def entry(path, content, url='https://repo.invalid/a.jar'):
+        return {'coordinates': 'g:a:1:linux', 'path': path, 'url': url, 'sha256': hashlib.sha256(content).hexdigest(),
+                'sha1': hashlib.sha1(content, usedforsecurity=False).hexdigest(), 'bytes': len(content), 'reason': 'test'}
+
+    def test_the_tracked_list_is_well_formed_and_repeats_the_architecture_pins(self):
+        listed = NOT_STORED.entries()
+        self.assertEqual(sorted(listed), ['amd64', 'arm64'])
+        self.assertEqual(NOT_STORED.check(), [])
+        pins = json.loads((HERE / 'inputs.arm64.lock.json').read_text())['runtime_natives']['jars']
+        for item in listed['arm64']:
+            self.assertEqual({key: item[key] for key in ('url', 'sha256', 'sha1', 'bytes')}, pins[item['coordinates']])
+        for name, classifier in (('amd64', 'linux-x86_64'), ('arm64', 'linux-arm64')):
+            self.assertEqual([item['coordinates'] for item in listed[name]], ['org.bytedeco:ffmpeg:4.1.3-1.5.1:' + classifier])
+            for item in listed[name]:
+                # The names of arch.sh and the place fetch_inputs.py puts the file.
+                self.assertEqual(item['path'], 'jars/runtime-extras/ffmpeg-4.1.3-1.5.1-%s.jar' % classifier)
+                self.assertEqual(arch('get', 'bytedeco', name).stdout.strip(), classifier)
+                self.assertTrue(item['url'].startswith('https://repo1.maven.org/maven2/org/bytedeco/ffmpeg/4.1.3-1.5.1/'))
+                self.assertTrue(item['url'].endswith('/' + item['path'].rsplit('/', 1)[1]))
+        # The Java wrapper JARs are not listed: only the natives carry the statement.
+        self.assertNotIn('ffmpeg-4.1.3-1.5.1.jar', [i['path'].rsplit('/', 1)[1] for items in listed.values() for i in items])
+
+    def test_a_list_that_differs_from_its_pin_or_names_an_unsafe_path_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            proto = Path(directory)
+            good = self.entry('jars/a.jar', b'natives')
+            (proto / 'inputs.arm64.lock.json').write_text(json.dumps({'runtime_natives': {'jars': {'g:a:1:linux': {
+                'url': good['url'], 'sha256': 'f' * 64, 'sha1': good['sha1'], 'bytes': good['bytes']}}}}))
+            path = proto / 'list.json'
+            path.write_text(json.dumps({'schema': 1, 'files': {'amd64': [good], 'arm64': [good]}}))
+            self.assertEqual(NOT_STORED.check(path, proto), ['arm64: g:a:1:linux differs from its pin in inputs.arm64.lock.json'])
+            path.write_text(json.dumps({'schema': 1, 'files': {'amd64': [], 'arm64': [dict(good, coordinates='g:b:1')]}}))
+            self.assertEqual(NOT_STORED.check(path, proto), ['arm64: g:b:1 is not pinned by inputs.arm64.lock.json'])
+            for bad in (dict(good, path='../a.jar'), dict(good, path='/etc/a.jar'), dict(good, path='jars/*.jar'),
+                        dict(good, url='http://repo.invalid/a.jar'), dict(good, sha256='0' * 63), dict(good, bytes=0),
+                        {key: value for key, value in good.items() if key != 'reason'}):
+                path.write_text(json.dumps({'schema': 1, 'files': {'amd64': [bad], 'arm64': []}}))
+                with self.assertRaises(NOT_STORED.Refusal):
+                    NOT_STORED.entries(path)
+            path.write_text(json.dumps({'schema': 1, 'files': {'amd64': []}}))
+            with self.assertRaises(NOT_STORED.Refusal):
+                NOT_STORED.entries(path)
+
+    def test_scan_finds_a_listed_file_by_content_wherever_it_lies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            listed = {'amd64': [self.entry('jars/runtime-extras/natives.jar', b'nonfree natives')], 'arm64': []}
+            for name, content in (('jars/runtime-extras/natives.jar', b'nonfree natives'),
+                                  ('cache/0123', b'nonfree natives'), ('cache/same-size', b'nonfree nativez'),
+                                  ('jars/runtime-extras/wrapper.jar', b'java'), ('P/out/natives.jar', b'nonfree natives')):
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_bytes(content)
+            os.symlink(root / 'cache/0123', root / 'cache/link')
+            self.assertEqual(NOT_STORED.scan(root, ['cache', 'jars', 'absent'], listed),
+                             ['cache/0123', 'jars/runtime-extras/natives.jar'])
+            self.assertEqual(NOT_STORED.scan(root, [], listed),
+                             ['P/out/natives.jar', 'cache/0123', 'jars/runtime-extras/natives.jar'])
+            self.assertEqual(NOT_STORED.scan(root, ['cache/0123'], listed), ['cache/0123'])
+            self.assertEqual(NOT_STORED.scan(root, ['cache'], {'amd64': [], 'arm64': []}), [])
+
+    def test_complete_accepts_only_the_listed_bytes(self):
+        content = b'nonfree natives'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            listed = {'amd64': [self.entry('jars/runtime-extras/natives.jar', content)], 'arm64': []}
+            asked = []
+
+            def download(reply):
+                def call(url, target, limit):
+                    asked.append((url, limit))
+                    if reply is None:
+                        return 'HTTPError: HTTP Error 404: Not Found'
+                    Path(target).write_bytes(reply)
+                    return None
+                return call
+            target = root / 'jars/runtime-extras/natives.jar'
+            with self.assertRaisesRegex(NOT_STORED.Refusal, 'the inputs were not restored'):
+                NOT_STORED.complete(root, 'amd64', listed, download(content))
+            target.parent.mkdir(parents=True)
+            with self.assertRaisesRegex(NOT_STORED.Refusal, 'could not be downloaded'):
+                NOT_STORED.complete(root, 'amd64', listed, download(None))
+            with self.assertRaisesRegex(NOT_STORED.Refusal, 'is not the listed file'):
+                NOT_STORED.complete(root, 'amd64', listed, download(b'nonfree nativez'))
+            self.assertEqual(os.listdir(target.parent), [])  # nothing is left behind by a refused download
+            lines = NOT_STORED.complete(root, 'amd64', listed, download(content))
+            self.assertEqual(target.read_bytes(), content)
+            self.assertEqual(os.listdir(target.parent), ['natives.jar'])
+            self.assertEqual(asked[-1], ('https://repo.invalid/a.jar', len(content)))
+            self.assertIn('downloaded from its public source', lines[0])
+            count = len(asked)
+            self.assertIn('present, SHA-256 as listed', NOT_STORED.complete(root, 'amd64', listed, download(None))[0])
+            self.assertEqual(len(asked), count)  # a present, matching file asks no source
+            self.assertEqual(NOT_STORED.complete(root, 'arm64', listed, download(None)), [])
+            target.write_bytes(b'something else!')
+            with self.assertRaisesRegex(NOT_STORED.Refusal, 'present but is not the listed file'):
+                NOT_STORED.complete(root, 'amd64', listed, download(content))
+            with self.assertRaises(NOT_STORED.Refusal):
+                NOT_STORED.complete(root, 'riscv64', listed, download(content))
+
+    def test_the_download_is_the_one_of_the_fetch_with_its_mirror_after_a_429(self):
+        self.assertIs(NOT_STORED.fetcher().__code__.co_filename.endswith('fetch_inputs.py'), True)
+        self.assertIn("mirror, asked, refused = maven_mirror(url), url, None", (HERE / 'fetch_inputs.py').read_text())
+
+    @unittest.skipUnless(shutil.which('tar'), 'tar is required')
+    def test_save_leaves_the_listed_files_out_of_the_stored_object(self):
+        content = b'nonfree natives'
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            proto = base / 'repo/takx/desktop-prototype'
+            (proto / 'ci').mkdir(parents=True)
+            for name in ('ci/inputs.sh', 'ci/not_stored.py', 'arch.sh'):
+                shutil.copy2(HERE / name, proto / name)
+            (proto / 'ci/inputs-not-stored.json').write_text(json.dumps({'schema': 1, 'files': {
+                'amd64': [self.entry('jars/runtime-extras/natives.jar', content)], 'arm64': []}}))
+            root = base / 'root'
+            for name, data in (('jars/runtime-extras/natives.jar', content), ('jars/runtime-extras/wrapper.jar', b'java'),
+                               ('cache/0123', content), ('cache/4567', b'source archive'), ('src/x/natives.jar', b'not it'),
+                               ('status/fetch.json', b'{"status": "ok"}'), ('logs/fetch.log', b'log')):
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_bytes(data)
+            shim = base / 'bin'
+            shim.mkdir()
+            (shim / 'docker').write_text(
+                '#!/usr/bin/env bash\n'
+                'case "$1" in\n'
+                '  import) cat > "${SHIM_OUT}/imported.tar";;\n'
+                '  image) if [[ "$2" == inspect ]]; then echo "registry.invalid/ci/inputs@sha256:%s"; fi;;\n'
+                '  *) echo "$*" >> "${SHIM_OUT}/calls";;\n'
+                'esac\n' % ('a' * 64))
+            (shim / 'docker').chmod(0o755)
+            done = subprocess.run(
+                ['bash', str(proto / 'ci/inputs.sh'), 'save', 'registry.invalid/ci/inputs:amd64-x', 'registry.invalid/ci/inputs:amd64-latest'],
+                capture_output=True, text=True, timeout=60,
+                env=dict(os.environ, PATH='%s:%s' % (shim, os.environ['PATH']), TAKX_PROTO_ROOT=str(root), SHIM_OUT=str(base)))
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(done.stdout, 'registry.invalid/ci/inputs@sha256:%s\n' % ('a' * 64))
+            self.assertIn('not stored (ci/inputs-not-stored.json): cache/0123', done.stderr)
+            self.assertIn('not stored (ci/inputs-not-stored.json): jars/runtime-extras/natives.jar', done.stderr)
+            members = subprocess.run(['tar', '-tf', str(base / 'imported.tar')], capture_output=True, text=True, check=True)
+            files = sorted(name for name in members.stdout.splitlines() if not name.endswith('/'))
+            self.assertEqual(files, ['takx-inputs/cache/4567', 'takx-inputs/jars/runtime-extras/wrapper.jar',
+                                     'takx-inputs/logs/fetch.log', 'takx-inputs/src/x/natives.jar',
+                                     'takx-inputs/status/fetch.json'])
+            self.assertIn('push -q registry.invalid/ci/inputs:amd64-x', (base / 'calls').read_text())
+            # The work root itself keeps its files: only the stored object lacks them.
+            self.assertEqual((root / 'jars/runtime-extras/natives.jar').read_bytes(), content)
+            # A list that cannot be read stores nothing.
+            (proto / 'ci/inputs-not-stored.json').write_text('{')
+            (base / 'imported.tar').unlink()
+            done = subprocess.run(
+                ['bash', str(proto / 'ci/inputs.sh'), 'save', 'registry.invalid/ci/inputs:amd64-x'],
+                capture_output=True, text=True, timeout=60,
+                env=dict(os.environ, PATH='%s:%s' % (shim, os.environ['PATH']), TAKX_PROTO_ROOT=str(root), SHIM_OUT=str(base)))
+            self.assertNotEqual(done.returncode, 0)
+            self.assertFalse((base / 'imported.tar').exists())
+
+    def test_only_the_client_job_completes_and_old_objects_are_not_reused_by_key(self):
+        enter = (HERE / 'ci/enter.sh').read_text()
+        block = enter[enter.index('if [[ "${mode}" == restore ]]; then'):enter.index('tag="$("${proto}/ci/inputs.sh" key')]
+        self.assertIn('if ((with_runtime)); then\n    "${proto}/ci/inputs.sh" complete "${arch}"\n', block)
+        self.assertLess(block.index('inputs.sh" restore '), block.index('inputs.sh" complete '))
+        self.assertEqual(enter.count('inputs.sh" complete '), 1)
+        text = (HERE / 'ci/inputs.sh').read_text()
+        self.assertIn("printf 'inputs 2\\n%s\\n%s\\n%s\\n'", text)
+        self.assertIn('--anchored --no-wildcards --exclude-from="${excluded}"', text)
+        workflow = WORKFLOW.read_text()
+        self.assertIn('ci/enter.sh "${ARCH}" "${IMAGES}" --inputs "${INPUTS}" --runtime', workflow)
+        self.assertEqual(workflow.count('--runtime'), 1)
+        self.assertIn('not_stored.py check', workflow)
 
 
 class StockLoaderDirectory(unittest.TestCase):

@@ -29,6 +29,11 @@
       objects, and lists any object of another machine.
   pipeline.py summary [ROOT]
       Print a Markdown summary of status/*.json for the job summary.
+  pipeline.py excused [ROOT]
+      Say whether a failed assembly or boot of an architecture tree is the
+      announced one: exit 0 when a prototype patch of the tree was skipped
+      (its stage then ran as tracked, for amd64 only), exit 1 when every
+      prototype patch applied, because the failure is then one of the port.
 
 Environment of 'run':
   TAKX_PROTO_ROOT          work root (default /var/lib/takx-proto)
@@ -415,6 +420,14 @@ def summary(root):
     return '\n'.join(lines) + '\n'
 
 
+def skipped_stage_patches(root):
+    """Names of the prototype patches no architecture tree below root could apply; None without a tree."""
+    markers = sorted((Path(root) / 'overrides').glob('*/tree/.takx-arch-tree.json'))
+    if not markers:
+        return None
+    return [row['name'] for marker in markers for row in load(marker).get('stage_patches') or [] if 'files' not in row]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='pipeline.py', description=__doc__.split('\n')[0])
     commands = parser.add_subparsers(dest='command', required=True)
@@ -424,8 +437,9 @@ def main(argv=None):
     commands.add_parser('check')
     runner = commands.add_parser('run')
     runner.add_argument('group')
-    commands.add_parser('summary').add_argument('root', nargs='?', default=os.environ.get('TAKX_PROTO_ROOT')
-                                                or '/var/lib/takx-proto')
+    for command in ('summary', 'excused'):
+        commands.add_parser(command).add_argument('root', nargs='?', default=os.environ.get('TAKX_PROTO_ROOT')
+                                                  or '/var/lib/takx-proto')
     args = parser.parse_args(argv)
     try:
         if args.command == 'plan':
@@ -445,6 +459,16 @@ def main(argv=None):
             proto = Path(os.environ['TAKX_CI_REPO']) / 'takx' / 'desktop-prototype' if os.environ.get('TAKX_CI_REPO') \
                 else PROTO
             return run_group(args.group, root, proto)
+        if args.command == 'excused':
+            skipped = skipped_stage_patches(args.root)
+            if skipped:
+                print('excused: %s was not applied to the architecture tree, so its stage ran as tracked '
+                      '(amd64 only)' % ', '.join(skipped))
+                return 0
+            print('not excused: %s; the failure belongs to the port' % (
+                'no architecture tree below %s' % args.root if skipped is None else
+                'every prototype patch was applied to the architecture tree'))
+            return 1
         sys.stdout.write(summary(args.root))
         return 0
     except Refusal as refusal:

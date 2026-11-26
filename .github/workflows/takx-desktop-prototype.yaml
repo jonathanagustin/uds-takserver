@@ -16,6 +16,9 @@
 # The public inputs are fetched once per architecture (job "inputs") and stored
 # on GHCR; every other job restores them and asks no public source, because
 # Maven Central answers runners that repeat the whole fetch with HTTP 429.
+# The packages this workflow writes can be read without a login, so the fetched
+# files that may not be published (ci/inputs-not-stored.json) are not stored;
+# the final job downloads them from their public source and checks their pins.
 # Each job restores its prerequisites from the provider cache on GHCR, builds
 # its own providers and pushes them, so later jobs and reruns do not rebuild.
 # amd64 is the control: it uses the hand-built reference images when they can
@@ -83,6 +86,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -I -B takx/desktop-prototype/ci/pipeline.py check
+          python3 -I -B takx/desktop-prototype/ci/not_stored.py check
           python3 -I -B takx/desktop-prototype/arch_tree.py check
           python3 -I -B takx/desktop-prototype/ci/pipeline.py plan \
             --trigger takx/desktop-prototype/ci/trigger \
@@ -377,11 +381,12 @@ jobs:
       # overrides/arm64/prototype/assemble.patch, which is applied to the tree
       # copy only while it still matches the tracked file
       # (takx/desktop-prototype/ci/ARCH-CACHE-NOTE.md); when it is skipped the
-      # step fails. Such a failure is kept visible (step outcome, warning,
-      # status table) but does not turn the arm64 leg red: the leg's result is
-      # the Kernel and client build above. The boot here is one unattended
-      # start under Xvfb and Mesa llvmpipe with boot.sh's automatic check; it
-      # is not an acceptance of the client on either architecture.
+      # step fails. Only that announced failure is tolerated (the next step
+      # but one decides): it stays visible (step outcome, warning, status
+      # table) and the leg's result is then the Kernel and client build above.
+      # The boot here is one unattended start under Xvfb and Mesa llvmpipe with
+      # boot.sh's automatic check; it is not an acceptance of the client on
+      # either architecture.
       - name: Assemble and boot
         id: boot
         continue-on-error: ${{ matrix.arch == 'arm64' }}
@@ -394,6 +399,14 @@ jobs:
         run: |
           set -euo pipefail
           echo "::warning title=TAKX desktop prototype (${ARCH})::assemble or boot did not pass; see status/assemble.json and status/boot.json in the artifact"
+
+      # With every prototype patch applied, the arm64 tree had an assembler
+      # that knows its names (runs 45730520989 and later assembled and passed
+      # the boot check that way), so a failure is a regression of the port and
+      # fails the leg. Exit 0 only when a patch was skipped.
+      - name: Fail the arm64 leg unless a skipped prototype patch explains it
+        if: ${{ always() && matrix.arch == 'arm64' && steps.boot.outcome == 'failure' }}
+        run: python3 -I -B takx/desktop-prototype/ci/pipeline.py excused "${TAKX_PROTO_ROOT}"
 
       - name: Summarize statuses
         if: always()

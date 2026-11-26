@@ -27,6 +27,20 @@
 #                                        self-verifying stores (below) into an
 #                                        empty work root; print repo@sha256:...
 #                                        Exit 3 as for 'restore'.
+#   ci/inputs.sh complete ARCH           after 'restore': download the files the
+#                                        stored object leaves out (below) from
+#                                        their public source and compare them
+#                                        with their pins
+#
+# Not everything that was fetched is stored. The packages this workflow writes
+# on GHCR can be read without a login, so a stored file is a published file.
+# ci/inputs-not-stored.json lists the fetched files whose own terms do not
+# allow that (the bytedeco FFmpeg native JARs: "nonfree and unredistributable").
+# 'save' leaves out every file below the stored directories that is one of
+# them by size and SHA-256, whatever its name, and says so. A restored work
+# root therefore lacks them although its status/fetch.json names them;
+# 'complete' provides them in the one job that needs them (the client job,
+# ci/enter.sh --runtime), from the listed URL and against the listed digest.
 #
 # A seed is not a restore. When the key has no stored object (a pin, a fetch
 # script or any tracked JSON below takx/ changed), fetch.sh has to run, and on a
@@ -52,7 +66,8 @@
 # Every recipe still verifies each input against its own lock when it builds.
 #
 # What is stored: cache, cache-cesium, cache-gis-java, cache-commoncommo-tools,
-# inputs, jars and src of the work root, status/fetch.json and logs/fetch.log.
+# inputs, jars and src of the work root, status/fetch.json and logs/fetch.log,
+# without the files of ci/inputs-not-stored.json.
 # 'save' refuses unless status/fetch.json says ok. 'restore' refuses to write
 # over an existing cache/ or src/, checks that status/fetch.json says ok and
 # that every digest-named file of cache/ has that digest.
@@ -185,7 +200,8 @@ PY
       "takx/desktop-prototype/overrides/${arch}" \
       | grep -Ev $'\ttakx/desktop-prototype/((server|image|zarf|chart|bundle|assemble|ci)/|client/inputs\\.lock\\.[a-z0-9]+(\\.[a-z0-9]+)?\\.json$)')"
     grep -q $'\tupstream/atak-civ$' <<<"${listing}" || { say "upstream/atak-civ is not in the index of ${repo}"; exit 1; }
-    key="$(printf 'inputs 1\n%s\n%s\n%s\n' "${arch}" "$3" "${listing}" | sha256sum | cut -c1-16)"
+    # 'inputs 2': objects stored as 'inputs 1' hold the files 'save' now leaves out.
+    key="$(printf 'inputs 2\n%s\n%s\n%s\n' "${arch}" "$3" "${listing}" | sha256sum | cut -c1-16)"
     echo "${CI_IMAGES}/inputs:${arch}-${key}"
     ;;
   save)
@@ -198,10 +214,18 @@ PY
       if [[ -e "${root}/${member}" ]]; then present+=("${member}"); fi
     done
     say "packing ${present[*]} ($(du -sch "${present[@]/#/${root}/}" 2>/dev/null | tail -n 1 | cut -f1))"
+    # Files that may not be published stay out (ci/inputs-not-stored.json).
+    # Each is found by content and named to tar as a plain, anchored member
+    # name: no pattern can widen or miss the exclusion.
+    excluded="$(mktemp)"
+    python3 -I -B "${here}/not_stored.py" scan "${root}" "${present[@]}" > "${excluded}"
+    while read -r member; do say "not stored (ci/inputs-not-stored.json): ${member}"; done < "${excluded}"
     # Everything goes below one directory, so that 'restore' takes exactly that
     # directory and none of the files docker adds to an exported container.
     # 'S': symbolic link targets are stored as they are.
-    tar -C "${root}" -cf - --transform='s,^,takx-inputs/,S' "${present[@]}" | docker import - "${reference}" >/dev/null
+    tar -C "${root}" -cf - --anchored --no-wildcards --exclude-from="${excluded}" \
+      --transform='s,^,takx-inputs/,S' "${present[@]}" | docker import - "${reference}" >/dev/null
+    rm -f "${excluded}"
     docker push -q "${reference}" >&2
     if [[ -n "${also}" ]]; then
       # A second name for the same object. It is a convenience for the next
@@ -227,7 +251,14 @@ PY
     digest_of "${reference}"
     docker image rm "${reference}" >/dev/null 2>&1 || true
     ;;
+  complete)
+    [[ $# -eq 2 ]] || { echo "usage: inputs.sh complete ARCH" >&2; exit 2; }
+    # shellcheck source=takx/desktop-prototype/arch.sh
+    . "${here}/../arch.sh"
+    arch="$(takx_arch_get arch "$2")"
+    python3 -I -B "${here}/not_stored.py" complete "${root}" "${arch}"
+    ;;
   *)
-    echo "usage: inputs.sh key ARCH TOOLCHAIN_ID | save REFERENCE [ALSO] | restore REFERENCE | latest ARCH | seeds ARCH | seed REFERENCE" >&2
+    echo "usage: inputs.sh key ARCH TOOLCHAIN_ID | save REFERENCE [ALSO] | restore REFERENCE | latest ARCH | seeds ARCH | seed REFERENCE | complete ARCH" >&2
     exit 2;;
 esac

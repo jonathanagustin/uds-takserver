@@ -7,8 +7,11 @@ The arm64 port left `provider_cache.py`, `providers.json`, `assemble/`, `stages/
 
 ## Results on GitHub-hosted runners (2026-11-25 and 2026-11-26)
 
-Runs 45702964185 to 45736488806 of `.github/workflows/takx-desktop-prototype.yaml`, on `ubuntu-24.04-arm` (arm64) and `ubuntu-24.04` (amd64). Nothing below is a validation: Kernel 8.30.5 + project patches and CommonCommo 1.17.2 patched, built from the override tree, unqualified. The only arm64 GUI start is the unattended one of the boot step described below.
+Runs 45702964185 to 45739989039 of `.github/workflows/takx-desktop-prototype.yaml`, on `ubuntu-24.04-arm` (arm64) and `ubuntu-24.04` (amd64). Nothing below is a validation: Kernel 8.30.5 + project patches and CommonCommo 1.17.2 patched, built from the override tree, unqualified. The only arm64 GUI start is the unattended one of the boot step described below.
 
+- **Third pass in a row on arm64 (run 45739989039).** As in runs 45730520989 and 45736488806: all 24 providers restored from `takx-desktop-proto-ci/cache`, `kernel.sh all` (496 s) with nine of nine controls, `client.sh all` with the tracked arm64 lock, assembly (547 files) with `prototype/assemble.patch` applied at its recorded lines, and `boot.sh check` `ok` after 298 s. ELF objects: 994 in `P/kernel-composed-native`, 63 in `P/kernel-composed` and 2 in `dist/takx57`, all `aarch64`.
+- **An arm64 assembly or boot failure now fails the leg**, unless the tree receipt says a prototype patch was skipped (`ci/pipeline.py excused`). Until run 45739989039 the step was tolerated on arm64 whatever the cause.
+- **The workflow's packages are public** and its stored inputs held a file that may not be published; see the next section.
 - **arm64 providers.** All 24 passed on the first attempt with the 16 override patches as written: each recipe exited 0, its own tests and receipt checks passed, and the output was pushed to `takx-desktop-proto-ci/cache`. The second run restored all 24. Every ELF object in the 17 native provider directories is `aarch64` (`status/ci-<group>.json`, field `elf`).
 - **arm64 Kernel and client.** `kernel.sh all` and `client.sh all` passed in both runs: 815 native translation units, the ELF audit, the nine Kernel controls in the runtime image, and the TAKX 5.7 compile with zero compiler errors. Both runs wrote the same Kernel JAR (`kernel-8.30.5-linux-arm64-public-cpu.jar`, SHA-256 `8ee97f9a...fa7c4`) and the same client lock, now tracked as `client/inputs.lock.arm64.json`.
 - **arm64 assembly.** Failed as predicted below in the first five runs: `assemble: missing input .../P/kernel-composed/package/kernel-8.30.5-linux-amd64-public-cpu.jar`. Since run 45727946867 the arm64 tree copy carries `overrides/arm64/prototype/assemble.patch` and `assemble.sh` passes there: 547 files, 265,775,057 bytes, with `kernel-8.30.5-linux-arm64-public-cpu.jar`, the `natives-linux-aarch64` JARs of GlueGen, JOGL and JOCL and `ffmpeg-4.1.3-1.5.1-linux-arm64.jar`; the five JOCL native JARs of other platforms are listed under `left_out`. The amd64 tree of run 45730520989 has the same 547 files (269,855,653 bytes).
@@ -19,6 +22,18 @@ Runs 45702964185 to 45736488806 of `.github/workflows/takx-desktop-prototype.yam
 - **amd64 client lock, per build lineage.** The four differing entries are JARs built by the provider stages (their manifests and entries carry the build time) and the composed Kernel classes JAR. The amd64 leg wrote the same lock in three runs (SHA-256 `adbb4402...96c1`); it is tracked as `client/inputs.lock.amd64.ci.json` and selected by `TAKX_CLIENT_LOCK_LINEAGE=ci`, which `ci/pipeline.py` sets whenever the hand-built images were not usable. `client/inputs.lock.json` is unchanged and still applies to the hand-built providers. The arm64 lock was renamed to `client/inputs.lock.arm64.ci.json` for the same reason.
 - **Inputs after a key change (runs 45724029364, 45726536612).** A JSON file added below `takx/` gave the inputs a new key, the amd64 inputs job fetched everything again and Maven Central answered HTTP 429 for 150 required files. A fetch for a new key now starts from `cache/` and `jars/runtime-extras/` of the newest stored inputs (`ci/inputs.sh seed`), and `fetch_inputs.py` asks the Google-hosted Maven Central mirror once after a 429 (`fetched_from` in `status/fetch.json`). In the next run both architectures seeded 435 cache files and verified 553 of 566 records, as a full fetch does, without a 429.
 - **Inputs.** In the first run every job repeated the whole fetch and Maven Central answered the last amd64 job with HTTP 429. The inputs are now fetched once per architecture by the `inputs` job, stored as `takx-desktop-proto-ci/inputs:<arch>-<key>` (`ci/inputs.sh`) and restored by every other job.
+
+## The packages this workflow writes can be read without a login
+
+Found on 2026-11-26, after ten runs. It needs a decision by the owner of the repository; the workflow cannot change it.
+
+- **Fact.** The repository is public, and every package the workflow created with `GITHUB_TOKEN` is readable anonymously: an anonymous token from `ghcr.io/token` lists the tags and reads the manifests of `takx-desktop-proto-ci/inputs`, `takx-desktop-proto-ci/toolchain`, `takx-desktop-proto-ci/runtime` and `takx-desktop-proto-ci/cache/proj`. The hand-pushed `takx-desktop-proto-cache/*` answers the same request with `DENIED`: those packages are private, which is also why the workflow cannot read them.
+- **What was published that should not have been.** An inputs object holds everything `fetch.sh` fetched, and that includes the bytedeco FFmpeg native JAR of its architecture (`jars/runtime-extras/ffmpeg-4.1.3-1.5.1-linux-x86_64.jar` or `-linux-arm64.jar`). `libavutil` inside both says `libavutil license: nonfree and unredistributable` (configured with `--enable-gpl --enable-nonfree`). The eight objects stored until run 45739989039 hold it:
+  - arm64: `sha256:63c1651a909d601920ad201e73c6f21bc90275a03ed4246b138a41dc69cc5d90`, `sha256:ff6cb9e7d03a77d6141228890dcefa769fe3e0a7daba409ab87a1b85910a0f0f`, `sha256:32b637dd585ee8c6760a953c80cbba2241ddcaf486534bd6112e0e7de24cb3d7`, `sha256:bd82e36ebd5e086b9e8f175c29da96ac6e7c1360429d2c286ea6f9b102ecf833`;
+  - amd64: `sha256:20b4e3339e6914c8652e6040824efae3b28eff211da39d58b18d0e3b63fda148`, `sha256:0bda440311c9bd78a4e642259d54c6c93abff4c9f86521f9ea51f33be7ed1b2f`, `sha256:7eae98f0d12d8eb995604f911a1f86744899b7a94bd72b56f38244f0a597bd8b`, `sha256:0fe955f12339a4a6fa1301d08871e8ed714b936f55ed5b2c61fff8cb57a5e80f`.
+- **What is not affected.** No provider output holds that JAR (`not_stored.py scan` over `P/` of the development sandbox finds it only in `P/takx57-runtime-jars`, which the client stage writes and nothing pushes, and in the assembled trees). The workflow uploads no assembled tree; its artifacts are logs, status files, receipts and the frame of the boot check.
+- **What the workflow does since.** `ci/inputs-not-stored.json` lists the two JARs with URL, size and digests. `ci/inputs.sh save` leaves out every file below the stored directories that is one of them by content and prints each; the key prefix is now `inputs 2`, so no job restores an older object by key. The client job, the only one that reads the JAR, downloads it from Maven Central after the restore and compares it with the list (`ci/inputs.sh complete`, `ci/enter.sh --runtime`); the build is otherwise unchanged and the JAR still reaches `P/takx57-runtime-jars` and the assembled tree on the runner, as before.
+- **What only the owner can do.** The eight objects above stay readable until they are deleted or the package is made private (github.com, the `takx-desktop-proto-ci/inputs` package, Package settings: "Delete this version" for each, or "Change visibility"). Once `ci/inputs-seeds.json` names objects stored by the new code, nothing refers to the old ones. Whether the other packages should be public at all is the same decision: the provider cache holds built binaries of the open-source providers without notice files, and the toolchain and runtime images hold Debian and Temurin. Making all `takx-desktop-proto-ci/*` packages private does not break the workflow, because the repository that created them keeps its Actions access.
 
 ## Provider cache (`provider_cache.py`, `providers.json`)
 
@@ -55,6 +70,17 @@ Until then the arm64 tree copy is given both changes by `overrides/arm64/prototy
 
 On arm64 the workflow starts `assemble.sh` and `boot.sh` from the tree copy, so their `$repo` is the copy and `run-in-toolchain.sh` mounts the base repository's `upstream/` and `.git/` into it.
 
+### An assembler change that is not committed yet names the loader directory with the full MD5
+
+Seen on 2026-11-26 in the shared development sandbox, in the uncommitted version of `assemble/assemble.py` that ships a derived Kernel JAR (`derive_jar.py`). It is described here because it will fail the amd64 leg of the workflow the first time it runs there.
+
+- The new code computes `built_md5.hexdigest()` of the Kernel JAR, requires `'/%s/' % built_md5.hexdigest()` to occur in `stock_loader_java_library_path` of `status/kernel-composed.json`, and replaces it with `derivation['output']['md5']` (`derive-receipt.json`, written by `derive_jar.py` with a plain `hexdigest()` as well).
+- The stock loader does not name its directory with the full digest: `HashingUtils.md5sum` of Kernel 8.30.5 removes one leading `0` (the control failure above). Since that fix `kernel/compose.py` writes the loader's name into `stock_loader_java_library_path`.
+- The amd64 Kernel JAR this workflow builds has the MD5 `04d88bf97b2800d2d5f064f2c14f5441`, and its status file says `${java.io.tmpdir}/takkernel/engine/4d88bf97b2800d2d5f064f2c14f5441/lib/linux64` (run 45736488806, `status/kernel-composed.json`). The new check therefore stops with `assemble: unexpected stock loader path` on amd64 in CI. The arm64 JAR (`45a8cff1...`) and the JAR of the development sandbox do not start with `0`, which is why it passes there.
+- The second half is silent: a derived JAR whose own MD5 starts with `0` (one in sixteen) gets a `KERNEL_STOCK_LOADER_SUBDIR` with one character too many, `launch.sh` puts a directory on `java.library.path` that the loader never creates, and the GDAL binding is unavailable without a message, exactly as in the failed controls.
+
+What it needs: apply the loader's rule to both digests (drop one leading `0`, as `stock_loader_directory_name` in `kernel/compose.py` and `kernel/controls.py` does), or let `derive_jar.py` record the directory name next to the MD5. Nothing in this port can do that from outside: an override patch exists only for arm64, and this is the amd64 tree.
+
 ## Tests that fail inside the arm64 tree by design
 
 `takx/kernel-native/test_gdal_history.py` (4 tests) fails when run from the tree copy. It checks a frozen historical GDAL producer against the digests of the unpatched sibling recipes, which the patched copy cannot have. The prototype does not use that path (`kernel-native/build.py` is not run; fresh providers are never "historical"), and the lanes do not replay kernel-native tests. The offline tests of the other 15 patched recipes give the same result in the tree as in the tracked tree.
@@ -63,8 +89,30 @@ On arm64 the workflow starts `assemble.sh` and `boot.sh` from the tree copy, so 
 
 - `stages/kernel.sh kernel-baseline` (optional, not part of `all`): `kernel-native/build.py` and `toolchain.py` keep their x86_64 checks.
 - `server/15-uds-cli.sh`, `30-zarf-init.sh`, `40-core.sh`, `50-tak.sh`: `amd64` asset and bundle names.
-- `image/`: not reviewed for arm64.
+- `image/`, `zarf/`, `chart/`, `bundle/`, `stages/image.sh`, `stages/package.sh`: amd64 only; the next section lists every place.
 - Image tags `takx-desktop-proto:toolchain` and `:runtime` are local, single-architecture tags. The workflow pushes `takx-desktop-proto-ci/toolchain:<arch>-<Dockerfile digest>` and pulls by digest.
+
+## Image and package: what a second architecture and a flavor need
+
+The workflow ends with an assembled tree and one unattended boot check per architecture. It builds no image and no package, for either architecture, and the desktop package has no flavor. Reviewed at commit c30c324 (the files are being changed; line numbers are of that commit). None of this is ported, and none of it was run on arm64.
+
+What the build side already gives on arm64: `dist/takx57` with `kernel-8.30.5-linux-arm64-public-cpu.jar`, the `natives-linux-aarch64` JARs and aarch64 objects in `native/linux64`, from the tree copy, in every run since 45727946867. Every name below is available from `arch.sh` (`arch.sh get temurin`, `jogamp`, `machine`, `multiarch`, `debian`, `docker`).
+
+| Place | amd64 today | What arm64 needs |
+| --- | --- | --- |
+| `image/Dockerfile:32-33` | Temurin `jdk_x64` asset and its SHA-256 | the aarch64 asset with its own pin, selected by `TARGETARCH` as `../Dockerfile:51-59` does (`3e4eca7e...7084`, also in `inputs.arm64.lock.json`). Unchanged, an arm64 build installs an x86-64 JDK |
+| `image/Dockerfile:22` | Debian base pinned by digest | nothing: `../Dockerfile` uses the same digest and builds on `ubuntu-24.04-arm`, so it is a multi-platform index |
+| `image/check_native_closure.py:150,173,210` | `ldconfig -p` entries with `x86-64`, libraries of machine `x86-64`, the count `x86_64` | the machine of the image (on arm64 `ldconfig -p` writes `AArch64` where amd64 has `x86-64`), with everything else reported as foreign |
+| `image/elf_audit.sh:41,93` | `is_linux_amd64` (`e_machine` 62), and the one allowed library with lazy symbols named `jogl-all-2.5.0-natives-linux-amd64.jar!/natives/linux-amd64/libnewt_head.so` | `e_machine` 183 and the `natives-linux-aarch64` name; whether that library has the same undefined symbols on aarch64 is not known |
+| `image/verify/build_gates.sh` gates 2 and 3 | follow from the two files above | the same |
+| `image/build.sh:61` | `docker buildx build` for the host platform, one local tag | nothing for a native build on an arm64 runner; a tag per architecture if both are kept side by side |
+| `zarf/zarf.yaml:29,31,58` | "(amd64 only)", `architecture: amd64`, `selector.architecture: amd64` | the architecture from `uds zarf package create --architecture`, as the root package does (`.github/workflows/release.yaml:171`) |
+| `chart/templates/deployment.yaml:50-52` | `nodeSelector kubernetes.io/arch: amd64` | the package's architecture |
+| `bundle/uds-bundle.yaml:36`, `bundle/create-bundle.sh:67` | `architecture: amd64`, `zarf-package-takx-desktop-amd64-TAG` | the same |
+| `stages/package.sh:358,378,450` | `amd64` in the archive and bundle names | `arch.sh get arch` |
+| `zarf/test_package.py:571,590,902`, `image/test_image.py:136,162` | assert the amd64 values | both architectures |
+
+Flavors. In this repository a flavor is a Zarf component filter: the root `zarf.yaml` marks its components `only.flavor: upstream` and the release creates `--flavor upstream` once per architecture on a native runner. The desktop package has no `only.flavor` and one image, built here from source on one Debian base. Nothing before the image stage depends on a flavor: providers, Kernel, client and the assembled tree are the same for any. A flavor of the desktop package is therefore a decision about the image (which base it is built on, and where it is published) and belongs to the owners of `image/` and `zarf/`; with one base there is one honest flavor, `upstream`. Once `stages/image.sh` and `stages/package.sh` take the architecture from `arch.sh`, a job after "kernel, client, boot" can run them in a flavor by architecture matrix on the runner that assembled the tree. The assembled tree is deliberately not uploaded as an artifact: at this commit it still holds files the assembler's owners are removing for their licences (the bytedeco FFmpeg natives among them).
 
 ## Known risks for the first arm64 run
 

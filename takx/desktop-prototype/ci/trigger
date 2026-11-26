@@ -41,5 +41,13 @@
 #        tree and the tree receipt under a name the artifact upload keeps.
 # run 10: the prototype patch of the assembler may now match at other line
 #        numbers (the tracked assembler is being changed); otherwise as run 9.
+# run 11: the packages this workflow writes turned out to be readable without
+#        a login, and the stored inputs held the bytedeco FFmpeg native JAR
+#        ("nonfree and unredistributable"). ci/inputs.sh save now leaves the
+#        files of ci/inputs-not-stored.json out, the key prefix is 'inputs 2'
+#        (so both architectures fetch again, seeded, and store a new object),
+#        and the client job downloads the JAR from Maven Central and checks its
+#        pin. Also: an arm64 assembly or boot failure fails the leg unless the
+#        assembler patch was skipped. From the provider cache.
 arches=amd64,arm64
 providers=cached

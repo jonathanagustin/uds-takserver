@@ -19,9 +19,14 @@
 #                        changed is downloaded.
 #                        Writes status/inputs.ref for the job output.
 #   --inputs REFERENCE   every other job: restore exactly REFERENCE, the output
-#                        of the inputs job. No public source is asked. An empty
-#                        REFERENCE means the inputs job failed for this
-#                        architecture: the job stops before it does anything.
+#                        of the inputs job. An empty REFERENCE means the inputs
+#                        job failed for this architecture: the job stops before
+#                        it does anything. No public source is asked, with one
+#                        exception: with --runtime (the client job) the files
+#                        the stored inputs leave out because they may not be
+#                        published (ci/inputs-not-stored.json) are downloaded
+#                        from their public source and compared with their pins
+#                        (ci/inputs.sh complete). No other job reads them.
 #
 # What it does, as root (the stages write root-owned files below the work root
 # and Git refuses a checkout owned by another user):
@@ -145,7 +150,12 @@ PY
 }
 if [[ "${mode}" == restore ]]; then
   reference="$("${proto}/ci/inputs.sh" restore "${inputs}")"
-  record_inputs "${reference}" "restored from"
+  how="restored from"
+  if ((with_runtime)); then
+    "${proto}/ci/inputs.sh" complete "${arch}"
+    how="completed with the files of ci/inputs-not-stored.json from their public source after a restore from"
+  fi
+  record_inputs "${reference}" "${how}"
   say "inputs restored from ${reference}"
   exit 0
 fi
