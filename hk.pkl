@@ -25,7 +25,7 @@ steps {
   ["shell"] {
     // Dependency trees and mutation sandboxes contain third-party shell sources.
     check = "uds run lint:shell --no-progress --with 'exclusion=build pepr/node_modules pepr/mutation/node_modules pepr/mutation/.stryker-tmp takx/compat/mutation/target'"
-    glob = List("tasks.yaml", "tasks/**/*.yaml", ".github/workflows/**/*.yaml", "zarf.yaml", "common/zarf.yaml")
+    glob = List("tasks.yaml", "tasks/**/*.yaml", ".github/workflows/**/*.yaml", "zarf.yaml", "common/**/zarf.yaml")
   }
   ["actionlint"] {
     check = "actionlint"
@@ -68,11 +68,11 @@ steps {
   }
   ["zarf-tools"] {
     check = "uds run lint:zarf-tools --no-progress"
-    glob = List("zarf.yaml", "common/zarf.yaml")
+    glob = List("zarf.yaml", "common/**/zarf.yaml")
   }
   ["zarf-lint"] {
     check = "uds zarf dev lint . --flavor upstream --set DOMAIN=uds.dev --set TAK_IMAGE_TAG=5.7-RELEASE-14"
-    glob = List("zarf.yaml", "common/zarf.yaml", "charts/takserver/**/*.yaml", "charts/cloudtak/**/*.yaml")
+    glob = List("zarf.yaml", "common/**/zarf.yaml", "charts/takserver/**/*.yaml", "charts/cloudtak/**/*.yaml")
   }
   ["icon"] {
     check = "bash .github/scripts/check-icon.sh"

@@ -259,9 +259,10 @@ jobs:
         run: |
           set -euo pipefail
           package="$(ls zarf-package-takserver-"${ARCH}"-*.tar.zst)"
-          # The zarf.yaml inside the archive records the build architecture.
+          # Beta archives contain both compatibility and native definitions.
+          # Require every document to report the target architecture.
           tar --zstd -xOf "${package}" zarf.yaml > "${RUNNER_TEMP}/zarf.yaml"
-          built="$(uds zarf tools yq -r '.build.architecture' "${RUNNER_TEMP}/zarf.yaml")"
+          built="$(uds zarf tools yq eval-all -r '[(.build.architecture // "missing")] | unique | .[]' "${RUNNER_TEMP}/zarf.yaml")"
           echo "${package}: build.architecture=${built}"
           test "${built}" = "${ARCH}"
 

@@ -75,7 +75,7 @@ class InventoryTests(unittest.TestCase):
     def test_actual_package_includes_all_eleven_images_and_local_import(self):
         images, sources = S.inventory(ROOT / 'zarf.yaml', 'upstream')
         self.assertEqual(len(images), 11)
-        self.assertTrue({'zarf.yaml', 'common/zarf.yaml'} <= sources.keys())
+        self.assertEqual(set(sources), {'zarf.yaml', 'common/zarf.yaml', 'common/cloudtak/zarf.yaml'})
         for name in ('takserver-api', 'takserver-config', 'takserver-ignite', 'cloudtak', 'postgis'):
             self.assertTrue(any('/' + name + ':' in image for image in images))
 
@@ -144,35 +144,14 @@ class InventoryTests(unittest.TestCase):
 
     def test_v1beta1_staged_production_inventory_matches_v1alpha1(self):
         from tests import test_zarf_beta_production_parity as parity
-        root_alpha = yaml.safe_load((ROOT / 'zarf.yaml').read_text())
-        common_alpha = yaml.safe_load((ROOT / 'common/zarf.yaml').read_text())
-        expected_images, _ = S.inventory(ROOT / 'zarf.yaml', 'upstream')
+        expected_images, expected_sources = S.inventory(ROOT / 'zarf.yaml', 'upstream')
         with tempfile.TemporaryDirectory() as directory:
             dest = Path(directory)
-            root_beta = {
-                'apiVersion': 'zarf.dev/v1beta1',
-                'kind': 'ZarfPackageConfig',
-                'metadata': root_alpha['metadata'],
-                'values': root_alpha['values'],
-                'components': [parity._convert_component(c) for c in root_alpha['components']],
-            }
-            common_comp = parity._convert_component(common_alpha['components'][0])
-            common_comp.pop('name', None)
-            common_meta = dict(common_alpha['metadata'])
-            common_meta.setdefault('version', root_alpha['metadata'].get('version', 'dev'))
-            common_beta = {
-                'apiVersion': 'zarf.dev/v1beta1',
-                'kind': 'ZarfComponentConfig',
-                'metadata': common_meta,
-                'component': common_comp,
-            }
-            (dest / 'common').mkdir()
-            (dest / 'common/zarf.yaml').write_text(yaml.safe_dump(common_beta, sort_keys=False))
-            (dest / 'zarf.yaml').write_text(yaml.safe_dump(root_beta, sort_keys=False))
+            parity.stage_beta_tree(dest)
             beta_images, sources = S.inventory(dest / 'zarf.yaml', 'upstream')
             self.assertEqual(beta_images, expected_images)
             self.assertEqual(len(beta_images), 11)
-            self.assertEqual(set(sources), {'zarf.yaml', 'common/zarf.yaml'})
+            self.assertEqual(set(sources), set(expected_sources))
 
     def test_v1beta1_rejects_invalid_images_selectors_and_imports(self):
         cases = (

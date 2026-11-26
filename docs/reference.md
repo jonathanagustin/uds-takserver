@@ -38,7 +38,7 @@ The EKS, RKE2, and AKS workflows are manual. They initialize and validate the Op
 
 | Path | Purpose |
 | --- | --- |
-| `zarf.yaml`, `common/zarf.yaml` | Package metadata, variables, images, and the `takserver` and `cloudtak` components |
+| `zarf.yaml`, `common/zarf.yaml`, `common/cloudtak/zarf.yaml` | Root package metadata, inputs and image pins, plus imported TAK Server and CloudTAK charts |
 | `charts/takserver/` | Config chart: UDS `Package`, ConfigMaps, standard TAK ports, and the certificate Job |
 | `charts/cloudtak/` | CloudTAK chart: Deployment, PostGIS, and its UDS `Package` |
 | `values/` | Values overlays for the upstream chart and the Pepr module |

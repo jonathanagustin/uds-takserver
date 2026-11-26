@@ -324,6 +324,7 @@ check_match "bundle/uds-config.yaml" relevant
 check_match "bundle/full/uds-bundle.yaml" relevant
 check_match "zarf.yaml" relevant
 check_match "common/zarf.yaml" relevant
+check_match "common/cloudtak/zarf.yaml" relevant
 check_match "tasks.yaml" relevant
 check_match "tasks/test.yaml" relevant
 check_match "tests/upgrade.sh" relevant

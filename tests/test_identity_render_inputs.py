@@ -133,11 +133,14 @@ class BaselineChartOverrideTests(unittest.TestCase):
             node=schema['properties'][component]
             self.assertFalse(node['additionalProperties']);self.assertEqual(set(node['properties']),set(charts))
             self.assertTrue(all(value['type']=='object' for value in node['properties'].values()))
-        package=yaml.safe_load((ROOT/'common/zarf.yaml').read_text())
-        common_components=[package['component']] if 'component' in package else package['components']
-        charts=[('takserver',chart) for component in common_components for chart in component.get('charts',[])]
-        cloud=yaml.safe_load((ROOT/'zarf.yaml').read_text())
-        charts += [('cloudtak',chart) for component in cloud['components'] if component['name']=='cloudtak' for chart in component.get('charts',[])]
+        manifest = yaml.safe_load((ROOT / 'zarf.yaml').read_text())
+        charts = []
+        for entry in manifest['components']:
+            source = ROOT / entry['import']['path'] / 'zarf.yaml'
+            package = yaml.safe_load(source.read_text())
+            component = next(c for c in package['components'] if c['name'] == entry['name'])
+            charts.extend((entry['name'], chart) for chart in component.get('charts', []))
+            charts.extend((entry['name'], chart) for chart in entry.get('charts', []))
         bridges=[(component,chart['name'],mapping) for component,chart in charts for mapping in chart.get('values',[])
                  if mapping['sourcePath'].startswith('.chartOverrides.')]
         self.assertEqual(len(bridges),4)

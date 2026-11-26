@@ -134,24 +134,8 @@ components:
     description: Deploy CloudTAK, a browser map client connected to this TAK Server
     only:
       flavor: upstream
-    charts:
-      - name: uds-cloudtak
-        namespace: cloudtak
-        version: 0.1.0
-        localPath: charts/cloudtak
-        valuesFiles:
-          - values/filesystem-backup-switch.yaml
-        # Sets the PostGIS StorageClass only when CLOUDTAK_STORAGE_CLASS is
-        # not empty. An empty object otherwise.
-        templatedValuesFiles:
-          - values/filesystem-backup-switch.yaml.tpl
-          - values/cloudtak-storage.yaml.tpl
-          - values/cloudtak-publish-image.yaml.tpl
-        values:
-          - sourcePath: .global.domain
-            targetPath: .domain
-          - sourcePath: .chartOverrides.cloudtak.uds-cloudtak
-            targetPath: .
+    import:
+      path: common/cloudtak
     healthChecks:
       - apiVersion: uds.dev/v1alpha1
         kind: Package

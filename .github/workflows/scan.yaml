@@ -7,7 +7,7 @@ on:
   pull_request:
     paths:
       - "zarf.yaml"
-      - "common/zarf.yaml"
+      - "common/**/zarf.yaml"
       - "charts/takserver/**"
       - "charts/**"
       - "values/**"

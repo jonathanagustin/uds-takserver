@@ -1,0 +1,29 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# yaml-language-server: $schema=https://raw.githubusercontent.com/zarf-dev/zarf/main/zarf.schema.json
+kind: ZarfPackageConfig
+metadata:
+  name: cloudtak
+  description: CloudTAK chart imported by the TAK Server package
+
+components:
+  - name: cloudtak
+    charts:
+      - name: uds-cloudtak
+        namespace: cloudtak
+        version: 0.1.0
+        localPath: ../../charts/cloudtak
+        valuesFiles:
+          - ../../values/filesystem-backup-switch.yaml
+        # Sets the PostGIS StorageClass only when CLOUDTAK_STORAGE_CLASS is
+        # not empty. An empty object otherwise.
+        templatedValuesFiles:
+          - ../../values/filesystem-backup-switch.yaml.tpl
+          - ../../values/cloudtak-storage.yaml.tpl
+          - ../../values/cloudtak-publish-image.yaml.tpl
+        values:
+          - sourcePath: .global.domain
+            targetPath: .domain
+          - sourcePath: .chartOverrides.cloudtak.uds-cloudtak
+            targetPath: .
