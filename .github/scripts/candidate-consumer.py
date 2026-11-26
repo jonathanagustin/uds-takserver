@@ -355,7 +355,9 @@ def validate_state(path, context=None):
         expected = identity(group, state['architecture'], context)
         require(entry['inputs'] == expected['inputs'] and entry['tag'] == expected['tag'], 'candidate state image inputs changed')
         if entry['origin']['kind'] != 'published-immutable':
-            api = ARTIFACTS.GitHub(context['repository'], os.environ.get('GH_TOKEN', ''))
+            # UDS tasks can shadow GH_TOKEN with an included task variable.
+            token = os.environ.get('CANDIDATE_API_TOKEN') or os.environ.get('GH_TOKEN', '')
+            api = ARTIFACTS.GitHub(context['repository'], token)
             selected = ARTIFACTS.select_run(api, context, group)
             producer = {**expected['producer'], 'run_id': selected['id'], 'run_attempt': selected['run_attempt']}
             require(entry['origin']['producer'] == producer, 'canonical producer selection changed after candidate preparation')
