@@ -14,6 +14,7 @@ on:
       - "bundle/**"
       - ".github/container-and-chart/**"
       - ".github/workflows/scan.yaml"
+      - ".github/actions/wait-for-app-images/**"
       - ".github/scripts/pin-image-tags.sh"
       - ".github/scripts/strict-scan-compare.py"
       - ".github/scripts/candidate-scan-mappings.py"
@@ -51,49 +52,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Check whether Docker inputs changed
-        id: docker
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set +e
-          ./.github/scripts/docker-inputs-changed.sh
-          code=$?
-          set -e
-          if [ "${code}" -eq 0 ]; then
-            echo "changed=true" >> "${GITHUB_OUTPUT}"
-          elif [ "${code}" -eq 1 ]; then
-            echo "changed=false" >> "${GITHUB_OUTPUT}"
-          else
-            echo "docker-inputs-changed.sh failed (${code})." >&2
-            exit 1
-          fi
-
-      - name: Wait for the six TAK images
-        if: steps.docker.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BUILD_IF_MISSING: "false"
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: ./.github/scripts/wait-for-tak-images.sh
-
-      - name: Confirm the published TAK images
-        if: steps.docker.outputs.changed != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CHECK_ONCE: "true"
-          BUILD_IF_MISSING: "false"
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: ./.github/scripts/wait-for-tak-images.sh
-
-      # The Test workflow builds the CloudTAK image when its inputs change.
-      # Wait for that build instead of reading an older image or none.
-      - name: Wait for the CloudTAK image
-        run: ./.github/container-and-chart/cloudtak/build.sh --wait
-
-      # Same for the PostGIS image.
-      - name: Wait for the PostGIS image
-        run: ./.github/container-and-chart/postgis/build.sh --wait
+      - name: Wait for application images
+        uses: ./.github/actions/wait-for-app-images
+        with:
+          github-token: ${{ github.token }}
 
   # The same steps as uds-common's callable-scan.yaml (v1.32.1), with one
   # added: the plain image tags in zarf.yaml are written from main only, so a

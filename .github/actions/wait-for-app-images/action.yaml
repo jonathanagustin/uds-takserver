@@ -1,0 +1,60 @@
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+name: Wait for application images
+description: Verify the TAK Server, CloudTAK, and PostGIS images for this checkout.
+inputs:
+  github-token:
+    description: Token with read access to candidate workflow metadata.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Check whether Docker inputs changed
+      id: docker
+      env:
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      shell: bash
+      run: |
+        set +e
+        ./.github/scripts/docker-inputs-changed.sh
+        code=$?
+        set -e
+        if [ "${code}" -eq 0 ]; then
+          echo "changed=true" >> "${GITHUB_OUTPUT}"
+        elif [ "${code}" -eq 1 ]; then
+          echo "changed=false" >> "${GITHUB_OUTPUT}"
+        else
+          echo "docker-inputs-changed.sh failed (${code})." >&2
+          exit 1
+        fi
+
+    - name: Wait for the six TAK images
+      if: steps.docker.outputs.changed == 'true'
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        BUILD_IF_MISSING: "false"
+        EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      shell: bash
+      run: ./.github/scripts/wait-for-tak-images.sh
+
+    - name: Confirm the published TAK images
+      if: steps.docker.outputs.changed != 'true'
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        CHECK_ONCE: "true"
+        BUILD_IF_MISSING: "false"
+        EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      shell: bash
+      run: ./.github/scripts/wait-for-tak-images.sh
+
+    # The Test workflow builds the CloudTAK image when its inputs change.
+    # Wait for that build instead of reading an older image or none.
+    - name: Wait for the CloudTAK image
+      shell: bash
+      run: ./.github/container-and-chart/cloudtak/build.sh --wait
+
+    # Same for the PostGIS image.
+    - name: Wait for the PostGIS image
+      shell: bash
+      run: ./.github/container-and-chart/postgis/build.sh --wait
