@@ -4,9 +4,10 @@ Date: 2026-11-22
 
 ## Status
 
-Proposed (tracking issue [#852](https://github.com/jonathanagustin/uds-takserver/issues/852)).
-The candidate stays a draft pull request. `main` keeps the ADR 0025 runtime until
-every acceptance item below passes.
+Adopted for TAK Server in [#871](https://github.com/jonathanagustin/uds-takserver/pull/871).
+The digest-pinned DHI builder and runtime are on `main`. The outstanding
+qualification and evaluation items remain tracked in
+[#852](https://github.com/jonathanagustin/uds-takserver/issues/852).
 
 ## Context
 
@@ -18,9 +19,9 @@ variants are a paid tier.
 
 The spike in #856 built `takserver-api` on `17-jdk-debian13-dev` on native amd64
 and arm64 and ran a toolchain smoke (`java`, `keytool`, `curl`, `nc`, `ps`,
-`openssl`). That is the only evidence so far.
+`openssl`). The later qualification run is described below.
 
-## Proposal
+## Decision
 
 Use `dhi.io/eclipse-temurin:17-jdk-debian13-dev`, pinned by index digest, for the
 builder and runtime stages. The `-dev` variant keeps a shell and apt, which the
@@ -35,12 +36,14 @@ authenticated image comparisons, signature verification, and the native install
 and upgrade matrix including airgap. Additionally: confirm the PKCS#8 key
 normalization still interoperates with the Pepr runtime on Debian 13 OpenSSL, and
 decide how fork pull requests (no secrets) and airgap mirroring obtain DHI bases.
-Do not weaken gates to pass. If it fails, keep this draft or close it.
+The outstanding checks use the same acceptance criteria.
 
 ## Not established
 
-No fresh install, upgrade, airgap, Copa, or Pepr interoperability result exists for
-this base yet. Whether the free Community catalog stays free is outside our control.
+The first qualification run includes fresh install, upgrade, airgap and Copa
+results. Dedicated Pepr key interoperability evidence, Full Core and PostgreSQL
+15 upgrade results, and the fork and airgap mirroring decision remain open.
+Whether the free Community catalog stays free is outside our control.
 
 ## First native qualification
 
@@ -57,6 +60,6 @@ Run [45078250033](https://github.com/jonathanagustin/uds-takserver/actions/runs/
   the PKCS#8 keys, but there is no separate Pepr key interoperability control for
   Debian 13 OpenSSL.
 
-Still open before acceptance: a second clean arm64 upgrade run, the full-core
+Outstanding qualification after adoption: a second clean arm64 upgrade run, the full-core
 run, signature verification evidence, and the fork pull request and airgap
 mirroring decision.
