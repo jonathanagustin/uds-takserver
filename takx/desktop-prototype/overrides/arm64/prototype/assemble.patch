@@ -6,8 +6,9 @@
 # Never applied to the tracked file, which another part of the prototype owns
 # and which stays amd64-only: arch_tree.py applies this, with fuzz 0, to the
 # copy of the tree under <work root>/overrides/arm64/tree, and only on an arm64
-# host. Unlike a recipe patch it is not a condition of that copy: when the
-# tracked assembler changes so that a hunk no longer applies exactly, the copy
+# host. Unlike a recipe patch it may match at other line numbers than the
+# ones below, and it is not a condition of that copy: when the tracked
+# assembler changes so that a line of a hunk no longer matches, the copy
 # keeps the tracked file, the tree receipt says 'skipped', and only the
 # assembly stage of arm64 is affected. Delete this file once the tracked
 # assembler reads the two names from arch.sh (ci/ARCH-CACHE-NOTE.md).

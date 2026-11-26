@@ -26,11 +26,14 @@ files and from the path of the copy; they can never equal an amd64 key.
 A second kind, overrides/<arch>/prototype/<name>.patch, changes files of the
 prototype itself that the architecture port does not own and that are still
 amd64-only (STAGE_PREFIXES: the assembler). Such a patch is applied to the
-copy in the same way, after the recipe patches, but it is not a condition of
-the tree: when it no longer applies exactly, because the tracked file moved
-on, the copy keeps the tracked file, the receipt records the patch as
-'skipped' with the reason, and only the stage that needed it is affected.
-No provider cache key depends on these files.
+copy after the recipe patches, also with fuzz 0: every line of every hunk has
+to match. Because its target is still being worked on, two things differ from
+a recipe patch. A hunk may match at another line number than the patch names
+(lines were added or removed elsewhere in the file); the receipt then lists
+those hunks under 'moved'. And the patch is not a condition of the tree: when
+a hunk no longer matches, the copy keeps the tracked file, the receipt records
+the patch as 'skipped' with the reason, and only the stage that needed it is
+affected. No provider cache key depends on these files.
 
 Usage:
   arch_tree.py ensure --arch ARCH [--root ROOT]   build or re-verify the copy
@@ -66,6 +69,8 @@ IGNORED = ('__pycache__', '*.pyc')
 # Mount points for the base repository's submodule checkout and Git directory.
 MOUNT_POINTS = ('upstream', '.git')
 INEXACT = re.compile(r'succeeded at \d+ (?:with fuzz|\(offset)')
+FUZZY = re.compile(r'succeeded at \d+ with fuzz')
+MOVED = re.compile(r'Hunk #\d+ succeeded at \d+ \(offset -?\d+ lines?\)')
 # What a patch of overrides/<arch>/prototype/ may change.
 STAGE_DIRECTORY = 'prototype'
 STAGE_PREFIXES = ('takx/desktop-prototype/assemble/',)
@@ -199,7 +204,7 @@ def apply_stage(tree, patches, current):
             reason = '%s does not exist in the tree' % missing[0]
         else:
             trial = subprocess.run(argv + ['--dry-run'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            if trial.returncode or INEXACT.search(trial.stdout):
+            if trial.returncode or FUZZY.search(trial.stdout):
                 reason = 'does not apply exactly to the tracked file: %s' % ' '.join(trial.stdout.split())[:300]
         if reason:
             rows.append({'name': name, 'sha256': sha(patch), 'skipped': reason})
@@ -209,11 +214,15 @@ def apply_stage(tree, patches, current):
         result = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         after = listing(tree)
         changed = sorted(item for item in set(current) | set(after) if current.get(item) != after.get(item))
-        if result.returncode or changed != sorted(set(targets)):
+        if result.returncode or FUZZY.search(result.stdout) or changed != sorted(set(targets)):
             raise Refusal('%s changed %s, its headers name %s:\n%s' % (name, changed, sorted(set(targets)),
                                                                     result.stdout.strip()))
-        rows.append({'name': name, 'sha256': sha(patch),
-                     'files': {item: {'before': current[item], 'after': after[item]} for item in changed}})
+        row = {'name': name, 'sha256': sha(patch),
+               'files': {item: {'before': current[item], 'after': after[item]} for item in changed}}
+        moved = MOVED.findall(result.stdout)
+        if moved:
+            row['moved'] = moved
+        rows.append(row)
         current = after
     return rows, current
 
@@ -350,7 +359,9 @@ def main(argv=None):
                     if 'skipped' in row:
                         print('%s %s: NOT APPLIED, %s' % (arch, row['name'], row['skipped']))
                     else:
-                        print('%s %s: fuzz 0, %s' % (arch, row['name'], ', '.join(sorted(row['files']))))
+                        print('%s %s: fuzz 0, %s%s' % (arch, row['name'], ', '.join(sorted(row['files'])),
+                                                      '; %d hunks at another line than recorded' % len(row['moved'])
+                                                      if row.get('moved') else ''))
                 if len(rows) > len(recipe_rows):
                     print('%s: %d of %d prototype patches apply exactly (a skipped one affects only its stage)' % (
                         arch, sum('files' in row for row in rows) - len(recipe_rows), len(rows) - len(recipe_rows)))

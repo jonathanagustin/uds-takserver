@@ -39,5 +39,7 @@
 # run 9: repeat of run 8, which was the first run with every job green on
 #        both architectures. Adds the ELF machine record of the assembled
 #        tree and the tree receipt under a name the artifact upload keeps.
+# run 10: the prototype patch of the assembler may now match at other line
+#        numbers (the tracked assembler is being changed); otherwise as run 9.
 arches=amd64,arm64
 providers=cached
