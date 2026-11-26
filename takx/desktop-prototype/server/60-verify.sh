@@ -57,10 +57,17 @@ if [[ -s "${dir}/client.pem" ]]; then
       -CAfile "${dir}/ca.pem" -verify_return_error -verify_hostname "${TAK_STREAM_HOST}" \
       -cert "${dir}/client.pem" -key "${dir}/client.key" </dev/null 2>&1 | grep -E 'Verify return code'; then :; fi
   note "client-certificate API as ${identity}: SNI ${TAK_API_HOST} for the route, certificate name ${TAK_CERT_NAME} checked"
-  printf 'GET /Marti/api/version HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n' "${TAK_API_HOST}" |
+  answer="$(printf 'GET /Marti/api/version HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n' "${TAK_API_HOST}" |
     openssl s_client -quiet -connect "${PASSTHROUGH_GATEWAY_IP}:${TAK_API_PORT}" -servername "${TAK_API_HOST}" \
       -CAfile "${dir}/ca.pem" -verify_return_error -verify_hostname "${TAK_CERT_NAME}" \
-      -cert "${dir}/client.pem" -key "${dir}/client.key" 2>/dev/null | grep -v -i '^set-cookie' | tr -d '\r' | sed -n '1p;$p'
+      -cert "${dir}/client.pem" -key "${dir}/client.key" 2>/dev/null | grep -v -i '^set-cookie' | tr -d '\r' | sed -n '1p;$p' | cut -c1-200)"
+  echo "${answer}"
+  # A revoked certificate still completes the handshake and gets HTTP 500
+  # ("Attempt to use revoked certificate" in the API log).
+  if [[ "${answer}" != "HTTP/1.1 200"* ]]; then
+    echo "FAIL: the client-certificate API did not answer 200 for ${identity}"
+    fail=1
+  fi
   note "wrong trust root is rejected (system roots do not include the TAK CA)"
   if openssl s_client -connect "${PASSTHROUGH_GATEWAY_IP}:${TAK_STREAM_PORT}" \
       -verify_return_error </dev/null >/dev/null 2>&1; then

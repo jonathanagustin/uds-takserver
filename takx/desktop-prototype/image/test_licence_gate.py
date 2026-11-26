@@ -179,6 +179,53 @@ class TreeCase(unittest.TestCase):
         self.assertIn(('lib/ui-wizard-reference.jar', 'deny'), self.flagged(report))
         self.assertIn(('load/broken.jar', 'unknown'), self.flagged(report))
 
+    def zip_bytes(self, entries):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
+            for name, data in entries.items():
+                archive.writestr(name, data)
+        return buffer.getvalue()
+
+    def test_archives_inside_jars_and_loose_archives_are_opened(self):
+        self.clean_tree()
+        # Compressed, so the raw bytes of the outer files do not hold the string.
+        inner = self.zip_bytes({'lib/libavutil.so.56': ELF + b'libavutil license: nonfree and unredistributable' * 20})
+        self.jar('lib/a-1.0.jar', {'x/A.class': b'\xca\xfe\xba\xbe', 'bundled/natives.zip': inner},
+                 'public Maven artifact g:a:1.0 (https://repo)')
+        self.put('conf/icons.zip', self.zip_bytes({'set/arial_msdf.png': b'png' * 50, 'set/tool': ELF,
+                                                    'set/ok.png': b'png'}), 'official TAKX 5.7 deployment/bin')
+        report = self.run_gate()
+        flagged = self.flagged(report)
+        self.assertIn(('lib/a-1.0.jar!/bundled/natives.zip!/lib/libavutil.so.56', 'deny'), flagged)
+        self.assertIn(('conf/icons.zip!/set/arial_msdf.png', 'deny'), flagged)
+        self.assertIn(('conf/icons.zip!/set/tool', 'unknown'), flagged)
+        self.assertFalse(report['build_may_proceed'])
+        # The archives themselves are still judged by their own rules.
+        self.assertNotIn(('conf/icons.zip', 'unknown'), flagged)
+
+    def test_unreadable_and_too_deeply_nested_archives_are_unknown(self):
+        self.clean_tree()
+        self.put('conf/broken.zip', licence_gate.ZIP_MAGIC + b'not an archive at all', 'official TAKX 5.7 deployment/bin')
+        data = self.zip_bytes({'leaf.txt': b'text'})
+        for level in range(licence_gate.MAX_DEPTH + 1):
+            data = self.zip_bytes({'level%d.zip' % level: data})
+        self.put('conf/deep.zip', data, 'official TAKX 5.7 deployment/bin')
+        report = self.run_gate()
+        reasons = {item['path']: item['reason'] for item in report['flagged']}
+        self.assertIn('cannot be read', reasons['conf/broken.zip'])
+        deep = [path for path, reason in reasons.items() if 'nested deeper' in reason]
+        self.assertEqual(len(deep), 1)
+        self.assertEqual(deep[0].count('!/'), licence_gate.MAX_DEPTH + 1)
+        self.assertFalse(report['build_may_proceed'])
+
+    def test_a_plain_nested_archive_changes_nothing(self):
+        self.clean_tree()
+        self.put('conf/icons.zip', self.zip_bytes({'set/a.png': b'png', 'set/more.zip': self.zip_bytes({'b.png': b'png'})}),
+                 'official TAKX 5.7 deployment/bin')
+        report = self.run_gate()
+        self.assertTrue(report['clean'])
+        self.assertEqual(report['counts']['allow'], 4)
+
     def test_aggregated_review_is_one_item_with_a_count(self):
         for index in range(5):
             self.put('data/%d.csv' % index, b'1', 'data directory')

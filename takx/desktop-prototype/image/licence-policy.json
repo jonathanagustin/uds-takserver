@@ -52,13 +52,14 @@
   {
    "id": "proprietary-font-file",
    "licence": "LicenseRef-unlicensed-font",
-   "pattern": "(?i)(^|/)(arial|ariblk|calibri|cambria|candara|consola|constan|corbel|cour|comic|georgia|impact|lucon|segoe|tahoma|times|trebuc|verdana|webdings|wingding)[a-z0-9 _-]*\\.(ttf|otf|ttc|fnt)$",
-   "reason": "font file named after a Microsoft font"
+   "pattern": "(?i)(^|/)(arial|ariblk|calibri|cambria|candara|consola|consta[n]|corbel|cour|comic|georgia|impact|lucon|segoe|tahoma|times|trebuc|verdana|webdings|wingding)[a-z0-9 _-]*\\.(ttf|otf|ttc|fnt)$",
+   "reason": "font file named after a Microsoft font",
+   "note": "consta[n] (Constantia) is written with a character class so that the repository spelling check does not read the file stem as a typo"
   },
   {
    "id": "proprietary-font-atlas",
    "licence": "LicenseRef-unlicensed-font",
-   "pattern": "(?i)(^|/)(arial|ariblk|calibri|cambria|candara|consola|constan|corbel|cour|comic|georgia|impact|lucon|segoe|tahoma|times|trebuc|verdana)[a-z0-9]*_m?sdf\\.(png|json)$",
+   "pattern": "(?i)(^|/)(arial|ariblk|calibri|cambria|candara|consola|consta[n]|corbel|cour|comic|georgia|impact|lucon|segoe|tahoma|times|trebuc|verdana)[a-z0-9]*_m?sdf\\.(png|json)$",
    "reason": "pre-generated glyph atlas named after a Microsoft font; Microsoft does not permit converting its fonts to other formats"
   }
  ],

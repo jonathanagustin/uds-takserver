@@ -77,6 +77,7 @@ python3 -I "${app}/licence_gate.py" --tree "${tree}" --policy "${app}/licence-po
   { grep -E '^(DENY|UNKNOWN)' "${out}/licence-gate-flagged.txt"; echo "the licence gate failed"; exit 1; }
 grep -c '' "${out}/licence-gate-flagged.txt" | sed 's/^/items the licence gate flags for review: /'
 test ! -e "${tree}/modules/prototype/libs/main/ffmpeg-4.1.3-1.5.1-linux-x86_64.jar"
+test -z "$(find "${tree}" -name '*joost*' -o -name '*jocl*' -o -name '*wizard-reference*')"
 
 date -u +%FT%TZ >"${out}/verify.ok"
 echo "all gates passed"

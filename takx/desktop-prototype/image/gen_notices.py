@@ -77,9 +77,11 @@ COMPONENTS = {
                ATAK + " revision 9f6893dd657feacc35ec5de03dad721c2e44170e, takkernel/ and takthirdparty/", True,
                "patches in patches/ (receipts.kernel-composed); third-party archives in fetched_inputs; "
                "provider licence texts in LICENSES/providers"),
-    "kernel-java-overlay": ("seven Kernel classes rebuilt with the desktop-prototype overlay patches",
-                            "GPL-3.0 (atak-civ LICENSE.md)", "kernel sources + patches/ (receipts.kernel-overlay)",
-                            True, ""),
+    "kernel-java-overlay": ("Kernel classes rebuilt with the desktop-prototype overlay patches and from the "
+                            "takx/kernel-render-context sources where they are newer than the composed Kernel; "
+                            "tree.kernel_java_overlay lists the patches, the refreshed sources and every class",
+                            "GPL-3.0 (atak-civ LICENSE.md)",
+                            "kernel sources + patches/ (manifest.json kernel_java_overlay)", True, ""),
     "kernel-dependency-jars": ("JARs the Kernel build depends on, frozen by takx/kernel-java",
                                "per JAR; texts found inside are in LICENSES/jars",
                                "public Maven artifacts and atak-civ third-party builds", False,
@@ -169,10 +171,31 @@ def find_patch(repo, path, digest):
     return None, None
 
 
-def copy_licence(source, target, index, origin):
+def write_licence(data, target, index, origin):
+    """Write one licence file and index it once.
+
+    Two sources may flatten to the same name (a provider keeps a file both in
+    source/ and in licenses/). With equal bytes that is one file with two
+    origins; with different bytes the second gets a numbered name, so nothing
+    is overwritten and the index has exactly one row per file."""
     os.makedirs(os.path.dirname(target), exist_ok=True)
-    shutil.copyfile(source, target)
-    index.append((target, origin))
+    known = {path: position for position, (path, _) in enumerate(index)}
+    candidate, number = target, 1
+    while candidate in known:
+        with open(candidate, "rb") as stream:
+            if stream.read() == data:
+                index[known[candidate]] = (candidate, index[known[candidate]][1] + "; " + origin)
+                return
+        number += 1
+        candidate = f"{target}.{number}"
+    with open(candidate, "wb") as stream:
+        stream.write(data)
+    index.append((candidate, origin))
+
+
+def copy_licence(source, target, index, origin):
+    with open(source, "rb") as stream:
+        write_licence(stream.read(), target, index, origin)
 
 
 # Licence files of code linked into the bundled native libraries that the
@@ -238,9 +261,7 @@ def collect_texts(out, tree, policy, cache, fetch, index, problems):
             problems.append(f"no licence text for {identifier}")
             continue
         target = os.path.join(base, identifier.replace(" ", "_") + ".txt")
-        with open(target, "wb") as stream:
-            stream.write(data)
-        index.append((target, f"text of {identifier}: {origin}"))
+        write_licence(data, target, index, f"text of {identifier}: {origin}")
         written[identifier] = os.path.relpath(target, out)
     return written
 
@@ -308,10 +329,8 @@ def collect_licences(out, tree, root, repo, problems, index):
                     if info.filename.endswith((".class", ".png", ".gif")):
                         continue
                     target = os.path.join(base, "jars", name, info.filename.replace("/", "__"))
-                    os.makedirs(os.path.dirname(target), exist_ok=True)
-                    with open(target, "wb") as stream:
-                        stream.write(archive.read(info))
-                    index.append((target, f"inside {os.path.relpath(os.path.join(folder, name), tree)}: {info.filename}"))
+                    write_licence(archive.read(info), target, index,
+                                  f"inside {os.path.relpath(os.path.join(folder, name), tree)}: {info.filename}")
     return len(index)
 
 
@@ -422,6 +441,9 @@ def main(argv=None):
                           options.fetch_texts, index, problems)
     write_index(out, index)
     licence_count = len(index)
+    on_disk = sum(len(names) for _, _, names in os.walk(os.path.join(out, "LICENSES"))) - 1  # without INDEX.tsv
+    if on_disk != licence_count or len({target for target, _ in index}) != licence_count:
+        problems.append(f"LICENSES holds {on_disk} files but INDEX.tsv lists {licence_count}")
     patches = collect_patches(out, root, repo, problems, manifest)
 
     # The licence gate over the tree and the notices written so far.

@@ -13,8 +13,11 @@ missing. Exit status 0 with items under REVIEW is a build that may exist but
 must not be published; the report says "clean": false and lists them.
 
 The gate reads the tree itself, not a list somebody wrote: it walks every
-file, opens every JAR and looks at every entry. It is not a legal review; it
-enforces a recorded policy (licence-policy.json next to this script):
+file, opens every JAR and looks at every entry. An entry or a loose file that
+is itself a ZIP archive (an icon set, a JAR inside a JAR) is opened too, down
+to MAX_DEPTH levels; an archive that cannot be read or sits deeper is
+UNKNOWN. It is not a legal review; it enforces a recorded policy
+(licence-policy.json next to this script):
 
   allow / review / deny   licence identifiers. 'review' is a licence that is
                           known and permits redistribution but whose
@@ -47,6 +50,7 @@ which keeps an otherwise allowed item out of a clean result; with
 """
 import argparse
 import fnmatch
+import io
 import json
 import os
 import re
@@ -57,6 +61,8 @@ ORDER = {'allow': 0, 'review': 1, 'unknown': 2, 'deny': 3}
 FAILING = ('unknown', 'deny')
 MAVEN_ORIGIN = re.compile(r'^public Maven artifact (\S+) \(')
 ELF_MAGIC = b'\x7fELF'
+ZIP_MAGIC = b'PK\x03\x04'
+MAX_DEPTH = 3
 FONT_OR_AUDIO = re.compile(r'\.(ttf|otf|ttc|woff2?|pfb|pfa|fnt|bdf|wav|mp3|ogg|au|aiff?)$|_m?sdf\.(png|json)$', re.I)
 
 
@@ -183,19 +189,38 @@ class Gate:
             self.add(relative, 'jar', 'unknown', None, 'not a readable ZIP archive')
             return
         with archive:
-            for info in archive.infolist():
-                if info.is_dir():
-                    continue
-                inner = '%s!/%s' % (relative, info.filename)
-                data = archive.read(info)
-                if self.scan(inner, info.filename, data):
-                    continue
-                if data[:4] == ELF_MAGIC:
-                    self.judge(inner, 'native', match_rule(self.policy['natives'], inner),
-                               'native library inside a JAR without a "natives" rule')
-                elif FONT_OR_AUDIO.search(info.filename):
-                    self.judge(inner, 'embedded', match_rule(self.policy['embedded'], inner),
-                               'font, font atlas or audio inside a JAR without an "embedded" rule')
+            self.members(relative, archive, 0)
+
+    def members(self, outer, archive, depth):
+        """Every entry of an open archive: deny scans, natives, fonts and audio, nested archives."""
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            inner = '%s!/%s' % (outer, info.filename)
+            data = archive.read(info)
+            if self.scan(inner, info.filename, data):
+                continue
+            if data[:4] == ELF_MAGIC:
+                self.judge(inner, 'native', match_rule(self.policy['natives'], inner),
+                           'native library inside an archive without a "natives" rule')
+            elif FONT_OR_AUDIO.search(info.filename):
+                self.judge(inner, 'embedded', match_rule(self.policy['embedded'], inner),
+                           'font, font atlas or audio inside an archive without an "embedded" rule')
+            elif data[:4] == ZIP_MAGIC:
+                self.nested(inner, data, depth + 1)
+
+    def nested(self, path, data, depth):
+        """Open a ZIP archive found as a loose file (depth 0) or inside another archive."""
+        if depth > MAX_DEPTH:
+            self.add(path, 'archive', 'unknown', None, 'archive nested deeper than %d levels; not opened' % MAX_DEPTH)
+            return
+        try:
+            archive = zipfile.ZipFile(io.BytesIO(data))
+        except zipfile.BadZipFile:
+            self.add(path, 'archive', 'unknown', None, 'starts like a ZIP archive but cannot be read')
+            return
+        with archive:
+            self.members(path, archive, depth)
 
     def tree(self, tree):
         with open(os.path.join(tree, 'manifest.json'), encoding='utf-8') as stream:
@@ -229,6 +254,8 @@ class Gate:
                 else:
                     self.judge(relative, 'asset', match_rule(self.policy['files'], relative, origin),
                                'no "files" rule for this path with origin %r' % origin)
+                    if data[:4] == ZIP_MAGIC:
+                        self.nested(relative, data, 0)
         for relative in sorted(set(origins) - seen):
             self.add(relative, 'file', 'unknown', None, 'in manifest.json but not in the tree')
         for glob, group in sorted(self.aggregated.items()):

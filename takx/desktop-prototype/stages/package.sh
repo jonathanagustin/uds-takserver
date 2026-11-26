@@ -18,10 +18,11 @@
 #   helm          `helm lint --strict` and `helm template` of ../chart, with
 #                 the default values and with every optional branch on
 #   render        `zarf dev inspect manifests`: what the package would apply
-#   crds          read the Package, TakClient and AuthorizationPolicy CRDs from the cluster
-#                 (kubectl get, nothing else) and turn them into JSON Schemas
+#   crds          read the Package, TakClient, AuthorizationPolicy and
+#                 DestinationRule CRDs from the cluster (kubectl get, nothing
+#                 else) and turn them into JSON Schemas
 #   validate      kubeconform: every rendered object against the Kubernetes
-#                 schemas and those three CRD schemas, unknown fields rejected
+#                 schemas and those four CRD schemas, unknown fields rejected
 #   lookup        `helm template --dry-run=server`: the chart's lookup of the
 #                 passthrough gateway Service against the cluster. It reads
 #                 that one Service; nothing is sent to be applied
@@ -29,7 +30,10 @@
 #                 rules, the Secret projection, the UDS Core policies
 #   create        `zarf package create` of the staged tree into pkg/out, with
 #                 the image read from the local Docker image store
-#   inspect       `zarf package inspect` definition, images, SBOM, attachments
+#   inspect       `zarf package inspect` definition, images, SBOM, attachments;
+#                 then the decompressed archive: the definition documents
+#                 Zarf stored and the image digest in its OCI layout against
+#                 the image id in pkg/status/image.json
 #   upstream      resolve the four upstream package references of the bundle
 #                 anonymously (definition only, no layers)
 #   bundle        ../bundle/create-bundle.sh --packages takx-desktop, then
@@ -92,7 +96,7 @@ uds() { (cd "${work}" && "${UDS}" "$@"); }
 # Files this stage owns, for the linters.
 package_files() {
   (cd "${repo}" && find takx/desktop-prototype/zarf takx/desktop-prototype/chart takx/desktop-prototype/bundle \
-    takx/desktop-prototype/stages/package.sh -type f | LC_ALL=C sort)
+    takx/desktop-prototype/stages/package.sh -type f -not -path '*/__pycache__/*' | LC_ALL=C sort)
 }
 
 image_tag() {
@@ -201,7 +205,13 @@ do_zarf_lint() {
   local rc=0
   {
     echo "== uds zarf dev lint ${work}/stage/zarf"
-    uds zarf dev lint "${work}/stage/zarf" --no-color || rc=1
+    uds zarf dev lint "${work}/stage/zarf" --no-color 2>&1 | tee "${work}/zarf-lint-stage.txt" || rc=1
+    # The staged tree names its image by digest; the tracked tree carries
+    # the placeholder tag and draws the warning.
+    if grep -q -i 'not pinned with digest' "${work}/zarf-lint-stage.txt"; then
+      echo "the staged package does not pin its image by digest"
+      rc=1
+    fi
     echo "== uds zarf dev lint ${proto}/zarf (as tracked, with the placeholder tag)"
     uds zarf dev lint "${proto}/zarf" --no-color || rc=1
     echo "zarf-lint exit ${rc}"
@@ -293,12 +303,14 @@ do_render() {
 do_crds() {
   local name
   mkdir -p "${work}/crds/schemas"
-  for name in packages.uds.dev takclients.tak.uds.dev authorizationpolicies.security.istio.io; do
+  for name in packages.uds.dev takclients.tak.uds.dev authorizationpolicies.security.istio.io \
+    destinationrules.networking.istio.io; do
     kubectl get crd "${name}" -o json >"${work}/crds/${name}.json"
   done
   python3 -I "${proto}/zarf/test_package.py" --crd-schemas "${work}/crds/schemas" \
     "${work}/crds/packages.uds.dev.json" "${work}/crds/takclients.tak.uds.dev.json" \
-    "${work}/crds/authorizationpolicies.security.istio.io.json" | tee "${evidence}/crds.txt"
+    "${work}/crds/authorizationpolicies.security.istio.io.json" \
+    "${work}/crds/destinationrules.networking.istio.io.json" | tee "${evidence}/crds.txt"
   kubectl version -o json | python3 -I -c 'import json, sys
 print("cluster", json.load(sys.stdin)["serverVersion"]["gitVersion"])' | tee -a "${evidence}/crds.txt"
 }
@@ -374,7 +386,7 @@ do_create() {
 }
 
 do_inspect() {
-  local tag archive rc=0
+  local tag archive rc=0 image_id
   tag="$(image_tag)"
   archive="${out}/zarf-package-takx-desktop-amd64-${tag}.tar.zst"
   rm -rf "${work}/inspect"
@@ -398,7 +410,20 @@ do_inspect() {
   [[ "$(tail -1 "${evidence}/inspect.txt")" == "inspect exit 0" ]]
   (cd "${repo}" && TAKX_PACKAGE_WORK="${work}" python3 -I takx/desktop-prototype/zarf/test_package.py \
     --built "${work}/inspect" "${tag}") | tee "${evidence}/inspect-check.txt"
-  write_status inspect ok "definition, images, SBOM and attachments read back from $(basename "${archive}")"
+  # The archive itself: which definition documents Zarf stored, and whether
+  # the image in its OCI layout is the one stages/image.sh built. The
+  # archive is decompressed for this and removed again (about 0.7 GB).
+  image_id="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["image_id"])' \
+    "${root}/pkg/status/image.json")"
+  rm -rf "${work}/archive"
+  uds zarf tools archiver decompress "${archive}" "${work}/archive" --no-color >/dev/null
+  rc=0
+  (cd "${repo}" && python3 -I takx/desktop-prototype/zarf/test_package.py --archive "${work}/archive" "${image_id}") |
+    tee "${evidence}/archive-check.txt" || rc=1
+  cp "${work}/archive/zarf.yaml" "${work}/inspect/zarf.yaml-as-stored"
+  rm -rf "${work}/archive"
+  [[ "${rc}" == 0 ]]
+  write_status inspect ok "definition, images, SBOM and attachments read back from $(basename "${archive}"); image pinned as ${image_repo}:${tag}@${image_id}, the manifest in the package's OCI layout"
 }
 
 # Resolve every upstream package of the bundle without its layers: the

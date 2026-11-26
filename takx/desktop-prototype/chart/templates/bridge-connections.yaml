@@ -1,0 +1,31 @@
+# yamllint disable-file
+# Copyright 2026 uds-takserver authors
+# SPDX-License-Identifier: GPL-3.0-only
+
+# The bridge (websockify) serves every TCP connection from a process of its
+# own, and that process lives as long as the connection. The waypoint in
+# front of the pod is an Envoy, which keeps the HTTP connections it opened in
+# a pool for reuse (an hour, when idle). One load of the noVNC page opens
+# about twenty of them. In the first deploy (2026-11-26) the web container
+# held 44 such processes and 173 MiB of its 256 MiB limit after four page
+# loads, minutes after the last browser had gone: a few more and the kernel
+# would have killed the container.
+#
+# So the waypoint is told to use each connection to the bridge for one
+# request and to close idle ones. With this rule three page loads in a row
+# left one process and 35 MiB. A WebSocket is one request on one connection
+# and stays open as long as the browser keeps it.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: takx-desktop-bridge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "takx-desktop.labels" . | nindent 4 }}
+spec:
+  host: takx-desktop.{{ .Release.Namespace }}.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      http:
+        maxRequestsPerConnection: 1
+        idleTimeout: 30s

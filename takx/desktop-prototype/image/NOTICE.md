@@ -27,7 +27,8 @@ This image is a prototype built by the `uds-takserver` project from public sourc
 | --- | --- | --- |
 | `ffmpeg-4.1.3-1.5.1-linux-x86_64.jar` (bytedeco FFmpeg natives) | not shipped: the binaries state "nonfree and unredistributable" | no video playback, recording or media length analysis; one error in the log when a project opens |
 | `uds-takserver-ui-wizard-reference.jar` | not shipped: CDDL-only | none seen; no class refers to it |
-| `joost-0.9.1.jar` | not shipped: MPL-1.1 only | none seen; no class refers to it |
+| `joost-0.9.1.jar` | not shipped: MPL-1.1 only | none seen; no class refers to it. Four STX sheets in `resources/export/` stay; nothing in TAKX 5.7 opens them |
+| `jocl-2.5.0.jar`, `jocl-main-2.5.0.jar`, `jocl-2.5.0-natives-linux-amd64.jar` (JogAmp OpenCL binding) | not shipped: flagged for review (Apache-1.1 parts) and unused | none seen; no class refers to `com.jogamp.opencl`. JOGL and GlueGen stay |
 | 24 font atlas files in the Kernel JAR (`assets/fonts/arial*`, `cour*`, `segoeui*`) | removed from the copy in this image; the index `font_resources.json` lists no atlas | none seen; Kernel 8.30.5 does not open them |
 | RUNPATH of `libtakengine.so` and `libtakenginejni.so` in the Kernel JAR | dynamic entry removed from the copies in this image | none; the libraries are mapped by absolute path |
 
@@ -55,7 +56,7 @@ This project is GPL-3.0-only. TAKX and `atak-civ` carry the text of the GNU Gene
 - This product includes software developed by the Indiana University Extreme! Lab (http://www.extreme.indiana.edu/).
 - This product includes software developed by the Apache Software Foundation (http://www.apache.org/).
 - Map styles in the Kernel JAR: © OpenMapTiles (https://openmaptiles.org/), design under CC-BY 4.0; map data © OpenStreetMap contributors.
-- JogAmp (GlueGen, JOGL, JOCL) parts are under BSD-2-Clause, BSD-3-Clause, BSD-4-Clause, Apache-1.1, Apache-2.0, SGI Free Software License B and the Ubuntu Font Licence; see `LICENSES/texts/`.
+- JogAmp (GlueGen, JOGL) parts are under BSD-2-Clause, BSD-3-Clause, BSD-4-Clause, Apache-1.1, Apache-2.0, SGI Free Software License B and the Ubuntu Font Licence; see `LICENSES/texts/`.
 - The Apache-2.0 JARs keep their `NOTICE` files inside them; copies are in `LICENSES/jars/`.
 
 ## Cryptography

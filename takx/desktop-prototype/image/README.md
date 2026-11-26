@@ -12,7 +12,7 @@ What is inside is TAKX 5.7 (`0b59a9bb`) built from public sources on Kernel 8.30
 `../stages/image.sh` records the exact commands. Each step is bounded, so they can be run one at a time.
 
 ```bash
-export TAKX_ASSEMBLE_NAME=takx57-r2               # the tree to build from; default takx57 (see ../stages/assemble.sh)
+export TAKX_ASSEMBLE_NAME=takx57-head             # the tree to build from; default takx57 (see ../stages/assemble.sh)
 takx/desktop-prototype/stages/image.sh context    # copy dist/<tree>, compare, check the manifest
 takx/desktop-prototype/stages/image.sh notices    # licence texts, NOTICE.md, SOURCES.json, patches, licence gate report
 takx/desktop-prototype/stages/image.sh gate       # the licence gate alone
@@ -101,7 +101,7 @@ The image ships no FFmpeg natives. The build TAKX declares (`org.bytedeco:ffmpeg
 
 - **Effect.** When a project opens, `MediaPlayerManager.startService` fails with `UnsatisfiedLinkError: no jniavutil in java.library.path`. The error is logged once and the other project services start. The Media dock opens; playback, recording and media length analysis cannot work.
 - **Add-on.** Mount a directory of natives for JavaCPP FFmpeg 4.1.3-1.5.1 (`libavutil.so.56`, `libjniavutil.so` and the rest, as they lie under `org/bytedeco/ffmpeg/linux-x86_64/` of a natives JAR) at `/opt/takx-addons/video`, read-only. The entrypoint appends it to `java.library.path` and JavaCPP loads from there. Whoever supplies them is responsible for their licence.
-- **Tested.** With such a directory mounted the error is gone and the JVM maps `libavutil.so.56`, `libavcodec.so.58`, `libavformat.so.58`, `libswresample.so.3` and their JNI libraries from it. Playing a video was not tested. The chart has no value for this mount.
+- **Tested.** With such a directory mounted read-only (the 16 libraries of the natives JAR, on 2026-11-26) the error is gone and the JVM maps `libavutil.so.56`, `libavcodec.so.58`, `libavformat.so.58`, `libswresample.so.3` and their four JNI libraries from it. Playing a video was not tested. The chart has no value for this mount.
 
 ### Probes
 
@@ -143,18 +143,18 @@ The image build copies the tree byte for byte: it patches no binary and repacks 
 
 `gen_notices.py` writes the notices context, which the image carries at `/usr/share/takx-desktop/`: `NOTICE.md`, `LICENSES/` with an index, `SOURCES.json`, `licence-gate.json`, `patches/`, `locks/` and `debian-packages.tsv`. See `NOTICE.md` for what each holds.
 
-`SOURCES.json` identifies the source of every file of the tree, but it is a manifest, not the source. It says `"publishable": false` and lists why. The image must not be distributed until those points are closed (issue #934). Its counts are computed per category: of the fetched inputs, how many have a URL and a SHA-256, how many only a SHA-256, how many were built here, how many are git checkouts without a digest.
+`SOURCES.json` identifies the source of every file of the tree, but it is a manifest, not the source. It says `"publishable": false` and lists why. The image must not be distributed until those points are closed (issue #934). Its counts are computed per category: of the fetched inputs, how many have a URL and a SHA-256, how many only a SHA-256, how many were built here, how many are git checkouts without a digest. `LICENSES/INDEX.tsv` has one row per file; the generator fails when the two numbers differ.
 
 ### Licence gate
 
-`licence_gate.py` walks the tree, opens every JAR and judges every JAR, native library and asset against `licence-policy.json`. It is not a legal review; it enforces a recorded policy seeded from the compliance work behind issue #934.
+`licence_gate.py` walks the tree, opens every JAR and judges every JAR, native library and asset against `licence-policy.json`. An entry or a loose file that is itself a ZIP archive (the icon sets, an archive inside a JAR) is opened as well, three levels deep, and its entries get the same deny checks. It is not a legal review; it enforces a recorded policy seeded from the compliance work behind issue #934.
 
 - **Denied or unknown fails the build.** `gen_notices.py` runs the gate and fails; `build.sh` refuses to build on such a report; and the image build runs the gate again on the tree inside the image (`verify/build_gates.sh`, gate 6).
 - **Deny-list.** Any file that contains the string "nonfree and unredistributable" or `--enable-nonfree`, whatever its POM says; CDDL-only and MPL-1.1-only artifacts; font files and font atlases named after Microsoft fonts.
-- **Unknown.** A Maven artifact whose exact version is not in the policy, a native library or a font inside a JAR without a rule of its own, a file without an origin in `manifest.json`, a licence in use whose text is missing from `LICENSES/texts`.
+- **Unknown.** A Maven artifact whose exact version is not in the policy, a native library or a font inside a JAR or a nested archive without a rule of its own, a file without an origin in `manifest.json`, an archive that cannot be read or is nested deeper than three levels, a licence in use whose text is missing from `LICENSES/texts`.
 - **Review.** A known licence that permits redistribution but leaves a question for somebody qualified (EPL-2.0 or BSD-4-Clause next to GPL-3.0 code, assets with no statement of their own). These do not fail the build. They keep `"clean": false`, and the image stays `publishable: false`.
 
-`licence-gate.json` in the image lists what is still flagged. The licence texts in `LICENSES/texts` come from the SPDX license list at a pinned tag, each checked against the SHA-256 in the policy; they are fetched once into `pkg/licence-texts`. The identifiers for POM names such as "BSD License" are a normalisation; the policy says where no text was compared.
+`licence-gate.json` in the image lists what is still flagged. On the tree of 2026-11-26 that is 44 items, all under review, none denied or unknown; [STATUS.md](../STATUS.md) groups them. The licence texts in `LICENSES/texts` come from the SPDX license list at a pinned tag, each checked against the SHA-256 in the policy; they are fetched once into `pkg/licence-texts`. The identifiers for POM names such as "BSD License" are a normalisation; the policy says where no text was compared.
 
 Patches named by a build receipt are checked against the SHA-256 in that receipt. When the working tree no longer has that version, the generator takes it from the git history and says so in `SOURCES.json`.
 

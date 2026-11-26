@@ -98,7 +98,10 @@ cache="${here}/../provider_cache.py"
 
 cache_restored() { # name marker: 0 when the cache installed a verified P/<name>
   [[ "${TAKX_PROTO_CACHE:-}" != off ]] || return 1
-  python3 -I "${cache}" restore "$1" >>"${ROOT}/logs/provider-cache.log" 2>&1 || return 1
+  # A restored tree has to pass the receipt check of a built one (check below)
+  # before its status says ok: everything after --verify-with is that command.
+  python3 -I "${cache}" restore "$1" --verify-with "${check_command[@]}" "$1" "${P}" \
+    >>"${ROOT}/logs/provider-cache.log" 2>&1 || return 1
   already_ok "$1" "$2" && return 0
   set_aside "$1"; return 1
 }
@@ -173,9 +176,13 @@ else:
 PY
 )
 
-check() { # name: receipt checks, inside the same image (tool paths and hashes are image-specific)
-  # The wrapper does not attach stdin, so the program is passed as an argument.
-  "${run}" -e PYTHONDONTWRITEBYTECODE=1 -- /usr/bin/python3 -I -B -c "${CHECK_PY}" "$1" "${P}"
+# The receipt checks, inside the same image (tool paths and hashes are
+# image-specific). The wrapper does not attach stdin, so the program is passed
+# as an argument. check runs these words after a build, and cache_restored
+# gives the same words to the provider cache for a restored tree.
+check_command=("${run}" -e PYTHONDONTWRITEBYTECODE=1 -- /usr/bin/python3 -I -B -c "${CHECK_PY}")
+check() { # name
+  "${check_command[@]}" "$1" "${P}"
 }
 
 finish() { # name rc started notes-when-ok outputs...

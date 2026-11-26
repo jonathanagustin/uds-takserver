@@ -9,8 +9,11 @@ desktop prototype, and export a client identity for TAKX. They record what was
 run on 2026-11-25. They are a sandbox recipe, not an install guide: the
 supported path is `uds run default` on a `k3d-core-slim-dev` cluster.
 
-No TAKX connection has been made yet. The peers so far are OpenSSL, a small
-Cursor on Target (CoT) probe and CloudTAK's own server connection.
+TAKX has connected to this server since: from a container on the host
+([STATUS.md](../STATUS.md), "Connected run") and from a pod of the desktop
+package ([zarf/README.md](../zarf/README.md), "What the deploy showed"). The
+VM has also restarted once with the server deployed; see
+[After a VM restart](#after-a-vm-restart).
 
 ## What ran, in order
 
@@ -27,7 +30,8 @@ Cursor on Target (CoT) probe and CloudTAK's own server connection.
 | Checks | `60-verify.sh` | see [Evidence](#evidence) |
 | Identities | `70-takclients.sh`, `export_takclient.py` | three `TakClient`s Ready, files exported |
 | Keycloak test users | `80-keycloak-users.sh` | `doug`, `mapuser` |
-| After a VM restart | `90-resume.sh` | reruns 10, 45 and 60; redeploys nothing |
+| After a VM restart | `90-resume.sh` | k3s, admission, registry, mesh, workloads, the CloudTAK pod, the exported identities, then 45 and 60; redeploys nothing |
+| Desktop package checks | `deploy_devusers.py`, `deploy_browser.cjs`, `deploy_probe.py` | used by `../stages/deploy.sh`; see [zarf/README.md](../zarf/README.md) |
 
 `env.sh` holds shared settings. State is outside the repository under
 `/var/lib/takx-proto`: `server/logs`, `server/endpoints.env`, `status/server-*.json`
@@ -132,6 +136,7 @@ Disk: 9.9 GiB of the allowance left.
 | Client-certificate API | `10.44.0.12:443` | SNI `takserver-api.uds.dev` |
 | Enrollment (not used) | `10.44.0.12:8446` | SNI `takserver.uds.dev`; SNI `takserver` gets no certificate |
 | CloudTAK, Keycloak | `10.44.0.11:443` | `map.uds.dev`, `sso.uds.dev`, public `*.uds.dev` certificate |
+| TAKX desktop package, when deployed | `10.44.0.11:443` | `takx.uds.dev`; `45-hosts.sh` writes the name |
 
 Read the current addresses from `/var/lib/takx-proto/server/endpoints.env`.
 
@@ -205,9 +210,46 @@ Read at `release/5.7` (0b59a9b). None of this has been run against the server.
   group, including `TakxIsolation`. Compare `takx-outsider` against
   `takx-desktop`, not against CloudTAK's admin view.
 - **CloudTAK sign-in is untested**, and it has no basemap here.
-- **VM restart is untested.** `90-resume.sh` passed against the running
-  cluster only.
-- Certificates from `TakClient` expire on 2026-12-25.
+- **A second VM restart has not happened.** The fixes below were run against
+  reproductions of the two failures, not against another restart.
+- Certificates from `TakClient` expire on 2026-12-26, since the restart
+  reissued them.
+
+## After a VM restart
+
+The VM restarted on 2026-11-26 at about 18:14 UTC with everything deployed.
+Docker was started again and `90-resume.sh` was run as it then was. What
+happened, and what the scripts do about it now:
+
+| What happened | Cause | Now |
+| --- | --- | --- |
+| `10-k3s.sh` ended with `FATAL: verify: pod create refused for 60s` on a cluster that was coming up | the bootstrap's `--verify` creates a pod. With UDS Core deployed that create passes the Pepr admission webhooks, which fail closed, and their pods were still starting | `10-k3s.sh` starts k3s without the proof, waits until a server-side dry run of a pod passes admission, then asks for the proof |
+| gateway pods sat in `ErrImagePull` for a while | the Zarf registry pod had restarted and workloads were started before it answered | `90-resume.sh` waits for the registry and the Zarf agent, then the mesh, the gateways and Keycloak, before the TAK workloads |
+| the CloudTAK pod stayed `0/3` (17 restarts of its init container in 66 minutes) | `merge-trust` writes `ca-bundle.pem` with mode 0444 into an `emptyDir`. After a restart the kubelet runs the init container again in the same pod, the file is still there, and the write fails with `EACCES` every time | `90-resume.sh` deletes a CloudTAK pod in that state once; the new pod has an empty volume. The cause is in `charts/cloudtak/files/merge-trust.mjs` of this repository and is not fixed there |
+| every exported identity was revoked: `/Marti/api/version` answered `500`, "Attempt to use revoked certificate" | each `TakClient` got a new certificate when the TAK Server came back (new serial, `Ready` transition at 18:18:59 to 18:19:02). The API log shows the file users being created again; the operator reissues when its private enrollment state is lost. Not followed further | `90-resume.sh` compares each export's certificate with the fingerprint on its Secret and exports again when they differ; `60-verify.sh` now fails when the API does not answer `200` |
+
+The rest came back by itself: node Ready, datastore, images, registry volume,
+the three gateways with their addresses, Keycloak, the TAK Server with its
+database.
+
+How the fixes were checked, later the same day, without another restart
+(`logs/90-resume-20261126-reproduction.log`):
+
+- The four Pepr admission pods were deleted. A pod create was refused
+  ("no endpoints available for service pepr-uds-core"); `10-k3s.sh` waited
+  11 seconds and the bootstrap's proof then passed.
+- The CloudTAK pod's sandbox was stopped with `crictl`, which makes the
+  kubelet rerun the init container on the same volume. It failed as after
+  the restart; `90-resume.sh` replaced the pod and CloudTAK became available.
+- A second run exported the three stale identities again and the API
+  answered `200`.
+
+Not reproduced: the registry coming up late, and a k3s server that has to be
+started (it was running throughout).
+
+What a restart means for clients: every certificate a `TakClient` issued
+before it is revoked. A device or a desktop that holds one has to be given the
+new Secret.
 
 ## Removing it
 

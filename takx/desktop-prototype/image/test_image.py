@@ -337,6 +337,25 @@ class NoticesTest(unittest.TestCase):
             self.assertEqual(gen_notices.find_patch(tmp, "a.patch", digest), (b"--- a\n+++ b\n", "working tree"))
             self.assertEqual(gen_notices.find_patch(tmp, "a.patch", "0" * 64), (None, None))
 
+    def test_licence_index_has_one_row_per_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            index = []
+            target = str(Path(tmp, "LICENSES", "providers", "p", "LICENSE"))
+            source = Path(tmp, "LICENSE.in")
+            source.write_bytes(b"one text")
+            gen_notices.copy_licence(str(source), target, index, "provider p (source/LICENSE)")
+            # The same bytes under the same name again: one file, both origins.
+            gen_notices.write_licence(b"one text", target, index, "provider p (licenses/LICENSE)")
+            # Other bytes under that name: a second file, nothing overwritten.
+            gen_notices.write_licence(b"another text", target, index, "provider p (other/LICENSE)")
+            gen_notices.write_licence(b"another text", target, index, "provider p (third/LICENSE)")
+            self.assertEqual([path for path, _ in index], [target, target + ".2"])
+            self.assertEqual(index[0][1], "provider p (source/LICENSE); provider p (licenses/LICENSE)")
+            self.assertEqual(index[1][1], "provider p (other/LICENSE); provider p (third/LICENSE)")
+            self.assertEqual(Path(target).read_bytes(), b"one text")
+            self.assertEqual(Path(target + ".2").read_bytes(), b"another text")
+            self.assertEqual(sorted(path.name for path in Path(target).parent.iterdir()), ["LICENSE", "LICENSE.2"])
+
 
 class ProbeTest(unittest.TestCase):
     def test_png_round_trip_and_luma(self):

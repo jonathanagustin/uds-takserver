@@ -24,8 +24,10 @@ Left out for their licence (``LICENCE_EXCLUDED``, ``manifest.json``
 ``licence_exclusions``): the bytedeco FFmpeg native JAR, whose binaries state
 "nonfree and unredistributable" (video needs a user-supplied add-on, see
 ``launch.sh``); the CDDL-only wizard reference JAR, which no class of the
-client refers to; and joost (MPL-1.1 only, a ``runtimeOnly`` declaration no
-class refers to). The Kernel JAR in the tree is a derived copy
+client refers to; joost (MPL-1.1 only, a ``runtimeOnly`` declaration no
+class refers to); and JOCL (JogAmp terms with Apache-1.1 parts, flagged for
+review; a ``runtimeOnly`` declaration no class refers to). The Kernel JAR in
+the tree is a derived copy
 (``derive_jar.py``): font atlases without a licence removed, RUNPATH removed
 from two native libraries; the manifest records both digests.
 
@@ -89,6 +91,13 @@ KERNEL_SAME_CLASSES = {
 # their licence. Key: 'group:artifact' and whether the rule is for the JARs
 # with a classifier (native JARs) or for all of them. image/licence_gate.py
 # checks the result independently, by content.
+JOCL_RULE = {
+    'licence': 'jogamp.org POM: BSD-2-Clause, BSD-3-Clause, SGI-B-2.0, Apache-2.0, Apache-1.1, Ubuntu Font Licence; '
+               'the Apache-1.1 part is under review next to GPL-3.0 code, not denied',
+    'effect': 'none seen: runtimeOnly declarations of gradle/platformDependencies.gradle and binCreator.gradle. '
+              'JOGL and GlueGen, which the globe needs, stay and carry the same open question',
+    'evidence': 'no class of any other JAR in the tree names com.jogamp.opencl, with slashes or with dots; '
+                'the client booted and rendered the globe without the three JARs'}
 LICENCE_EXCLUDED = {
     ('org.bytedeco:ffmpeg', 'classifier'): {
         'licence': 'the binaries state "nonfree and unredistributable" (built with --enable-nonfree)',
@@ -99,8 +108,12 @@ LICENCE_EXCLUDED = {
         'evidence': 'boot of the tree without the JAR; the Java wrapper JARs (ffmpeg, javacpp) stay'},
     ('net.sf.joost:joost', 'all'): {
         'licence': 'MPL-1.1 only (POM)',
-        'effect': 'none seen: a runtimeOnly declaration of gradle/platformDependencies.gradle',
+        'effect': 'none seen: a runtimeOnly declaration of gradle/platformDependencies.gradle. The four STX sheets '
+                  'resources/export/*.stx (the language joost runs) stay in the tree; no TAKX 5.7 source file '
+                  'names ".stx" or resources/export, so nothing opens them',
         'evidence': 'no class, service file or XML of any other JAR in the tree names net.sf.joost'},
+    ('org.jogamp.jocl:jocl', 'all'): dict(JOCL_RULE),
+    ('org.jogamp.jocl:jocl-main', 'all'): dict(JOCL_RULE),
 }
 # Recipe outputs that are not shipped because of their licence.
 LICENCE_EXCLUDED_UI = {

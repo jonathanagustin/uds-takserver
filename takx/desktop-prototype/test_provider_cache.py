@@ -3364,7 +3364,8 @@ exit 0
                 ('echo \'{"Descriptor":{"digest":7}}\'', None),
                 ('echo \'{"Descriptor":null}\'', None), ('echo \'{"digest":"%s"}\'' % digest, None),
                 ('echo "{"', None), ('true', None),
-                ('echo \'{"Descriptor":{"digest":"%s"}}\'; exit 1' % digest, None)):
+                ('echo \'{"Descriptor":{"digest":"%s"}}\'; exit 1' % digest, None),
+                ('echo \'{"Descriptor":{"digest":"%s"}}\'; kill -9 $$' % digest, None)):
             self.script('manifest', text)
             with self.subTest(text=text):
                 self.assertEqual(self.registry.digest('reg/p:tag'), expected)
@@ -3386,6 +3387,7 @@ exit 0
         for text, expected in (('echo \'["%s","%s"]\'' % (one, two), one), ('echo \'["%s"]\'' % two, two),
                                ('echo "[]"', None), ('echo null', None), ('echo \'"%s"\'' % one, None),
                                ('echo "[7]"', None), ('echo "{"', None), ('true', None),
+                               ('echo \'[7,"%s"]\'' % one, None), ('echo \'[null,"%s"]\'' % one, None),
                                ('echo \'["%s"]\'; exit 1' % one, None), ('echo \'["%s"]\'; kill -9 $$' % one, None)):
             self.script('image', text)
             with self.subTest(text=text):
@@ -3463,6 +3465,14 @@ exit 0
         with self.assertRaisesRegex(PC.CacheError, r'^docker import failed \(-9\): $'):
             self.registry.publish('reg/p:tag', self.context, ['p.tar'], {})
         self.assertNotIn('push', [call.split()[0] for call in self.calls()])
+        # A copy out of the pulled image that was killed has not copied the file.
+        for name in ('pull', 'image', 'manifest'):
+            (self.dir / ('script-' + name)).unlink()
+        self.script('image', 'echo "{}"')
+        self.script('cp', 'echo partly > "$3"; kill -KILL $$')
+        with self.assertRaisesRegex(PC.CacheError, '^docker cp failed: $'):
+            self.registry.fetch('reg/p:tag', self.dir, ['p.tar'])
+        self.assertEqual(self.calls()[-2:], ['rm -f ', 'rmi reg/p:tag'])
 
 
 class MoreDetails(ServiceCase):
@@ -4227,7 +4237,7 @@ class ToolchainCore(unittest.TestCase):
                          {'arch': None, 'environment': {'A': '', 'B': ' b '}, 'tools': {'x': ''}, 'packages': None})
         for line in ('arch', 'arch\tamd64\textra', 'env\tA', 'env\tA\tb\tc', 'tool\tgcc', 'tool\tgcc\ta\tb',
                      'packages', 'packages\ta\tb', 'warning: something', ' arch\tamd64', 'ARCH\tamd64', '\t',
-                     'x' * 200):
+                     'tools\tgcc\t14', 'zzz\ta\tb', 'envy\tA\tb', 'archive\tx', 'packagess\tx', 'x' * 200):
             with self.subTest(line=line), self.assertRaises(PC.CacheError) as caught:
                 PC.parse_probe('arch\tamd64\n' + line + '\n')
             self.assertEqual(str(caught.exception),
@@ -4583,6 +4593,40 @@ class Toolchain(ServiceCase):
         self.assertEqual((out.getvalue(), self.registry.calls), (FINGERPRINT + '\tamd64\n', []))
         self.assertEqual(self.record(), toolchain_record())
 
+    def test_outputs_are_held_back_from_the_second_after_the_record_was_replaced(self):
+        self.registry.toolchain, self.registry.layer = 'sha256:' + '9' * 64, 'sha256:' + 'c' * 64
+        for now, expected in ((5001.2, 5002), (5002.0, 5003), (6000.999, 6001)):   # odd and even seconds
+            self.write_json('status/toolchain.json', toolchain_record())
+            service = self.new_service()
+            service.rerecord = True
+            with self.subTest(now=now), mock.patch.object(PC.time, 'time', return_value=now):
+                service.toolchain(local=True)
+                self.assertEqual(self.record()['outputs_before'], expected)
+
+    def test_record_is_written_below_a_work_root_that_does_not_exist_yet(self):
+        root = Path(self.tmp.name) / 'new' / 'work-root'
+        tree = PC.WorkTree(root, self.repo)
+        tree.record_toolchain(toolchain_record())
+        self.assertEqual(json.loads((root / 'status/toolchain.json').read_text()), toolchain_record())
+        self.assertEqual(os.listdir(root / 'status'), ['toolchain.json'])
+        self.assertEqual(tree.toolchain_record(), toolchain_record())
+
+    def test_keys_follow_the_record_the_local_check_accepted_whichever_way_it_changed(self):
+        layers = ['sha256:' + '%x' % digit * 64 for digit in range(16)]
+        lower = [layer for layer in layers if fingerprint(layer=layer) < FINGERPRINT]
+        higher = [layer for layer in layers if fingerprint(layer=layer) > FINGERPRINT]
+        self.assertTrue(lower and higher)
+        for layer in (lower[0], higher[0]):
+            service = self.new_service()
+            before = service.key('base')                       # derived from the record of setUp
+            self.write_json('status/toolchain.json', toolchain_record(layer=layer))   # same image id: accepted
+            with self.subTest(layer=layer):
+                self.assertEqual(service._check_toolchain(), (fingerprint(layer=layer), 'amd64'))
+                self.assertNotEqual(service.key('base'), before)
+                self.assertEqual(service.key('base'), self.new_service().key('base'))
+                self.assertEqual(service.explain('base')['toolchain'], fingerprint(layer=layer))
+            self.write_json('status/toolchain.json', toolchain_record())
+
     def test_record_command_always_probes_and_reports_failures(self):
         out = io.StringIO()
         self.assertEqual(PC.main(['toolchain', '--record'], service=self.service, out=out), 0)
@@ -4856,6 +4900,25 @@ class Replace(ServiceCase):
         self.assertEqual(self.messages, ['provider-cache: base is already cached under this key; the registry did not '
                                          'name the entry, so the one refused here is not replaced: ' + self.ref])
         self.assertEqual((self.registry.published, self.notes()), (1, note))
+
+    def test_replacing_entry_may_have_any_digest_but_the_refused_one(self):
+        store = self.registry.store
+        for number, digest in enumerate(('sha256:' + '0' * 64, 'sha256:' + 'f' * 64, None)):
+            self.registry.digests[self.ref] = self.digest = 'sha256:' + '7' * 64
+            self.corrupt()
+            self.refuse()
+            self.make('base')
+
+            def stored(ref, labels, content, digest=digest):
+                store(ref, labels, content)
+                self.registry.digests[ref] = digest      # lower, higher, or not named by the registry
+            del self.messages[:]
+            with self.subTest(digest=digest), mock.patch.object(self.registry, 'store', stored):
+                self.assertEqual(self.service.push('base'), self.ref)
+                self.assertEqual(self.registry.published, 2 + number)
+                self.assertEqual(self.notes(), {})
+                self.assertIn('provider-cache: replaced ' + self.ref, self.messages[-1])
+            self.set_aside('base')
 
     def test_push_that_leaves_the_refused_entry_under_the_tag_is_an_error(self):
         self.corrupt()
@@ -5297,12 +5360,309 @@ class Runner(unittest.TestCase):
             self.fail('the process the wrapper started is still running')
         self.assertEqual((self.dir / 'docker-calls').read_text(), 'rm -f takx-verify-proj-%d\n' % os.getpid())
 
+    def test_stopping_a_check_reports_the_timeout_whatever_the_clean_up_meets(self):
+        (self.dir / 'wrapper-behaviour').write_text('sleep 300\n')
+        (self.dir / 'docker').write_text('#!/bin/bash\nprintf \'%s\\n\' "$*" >> "$(dirname "$0")/docker-calls"\n'
+                                         'echo "No such container" >&2\nexit 1\n')
+        runner = PC.ToolchainRunner(self.dir / 'wrapper', 1, str(self.dir / 'docker'))
+        with self.assertRaises(PC.CacheError) as caught:    # removing the container fails: still the timeout
+            runner.run('proj', [], ['x'], self.log)
+        self.assertEqual(str(caught.exception), 'the check of proj did not finish in 1 s')
+        self.assertEqual((self.dir / 'docker-calls').read_text(), 'rm -f takx-verify-proj-%d\n' % os.getpid())
+        # The process group is gone by the time it is killed: still the timeout.
+        killpg = os.killpg
+
+        def gone(group, signal):
+            killpg(group, signal)
+            raise ProcessLookupError(3, 'No such process')
+        with mock.patch.object(PC.os, 'killpg', gone), self.assertRaises(PC.CacheError) as caught:
+            runner.run('proj', [], ['x'], self.log)
+        self.assertEqual(str(caught.exception), 'the check of proj did not finish in 1 s')
+
     def test_wrapper_or_log_that_cannot_be_used_is_a_refusal(self):
         missing = PC.ToolchainRunner(self.dir / 'no-wrapper', 30)
         with self.assertRaisesRegex(PC.CacheError, '^the check of proj could not be started: .*No such file'):
             missing.run('proj', [], ['x'], self.log)
         with self.assertRaisesRegex(PC.CacheError, '^the check of proj could not be started: '):
             self.runner.run('proj', [], ['x'], self.dir / 'no-directory' / 'check.log')
+
+
+class FakeLaneCheck:
+    """What `restore --verify-with` sets on the service: records the call, answers with a code."""
+
+    def __init__(self, root, code=0, events=None):
+        self.root, self.code, self.calls = Path(root), code, []
+        self.events = [] if events is None else events
+
+    def run(self, name, log):
+        self.calls.append((name, str(log)))
+        self.events.append(('lane', os.path.isdir(self.root / 'P' / name),
+                            (self.root / 'status' / (name + '.json')).exists(), (self.root / 'logs').is_dir()))
+        if isinstance(self.code, Exception):
+            raise self.code
+        return self.code
+
+
+class OrderedRunner(FakeRunner):
+    def __init__(self, root, events, code=0):
+        super().__init__(root, code)
+        self.events = events
+
+    def run(self, name, env, argv, log):
+        self.events.append(('recipe',))
+        return super().run(name, env, argv, log)
+
+
+class LaneSuppliedCheck(ServiceCase):
+    """A check the lane brings itself: `restore NAME --verify-with COMMAND...`."""
+
+    def document(self):
+        value = manifest()
+        value['providers']['base']['verify'] = {'env': [], 'argv': ['python3', '{repo}/takx/one/check.py']}
+        return value
+
+    def setUp(self):
+        super().setUp()
+        self.events = []
+        self.runner = OrderedRunner(self.root, self.events)
+        self.lane = FakeLaneCheck(self.root, events=self.events)
+        self.service = self.checked()
+        for name in ('base', 'side'):
+            self.make(name)
+            self.service.push(name)
+            self.set_aside(name)
+        self.ref, self.side = self.service.ref('base'), self.service.ref('side')
+        self.digest = self.registry.digests[self.ref]
+        del self.messages[:]
+
+    def checked(self, lane=True, **options):
+        options.setdefault('runner', self.runner)
+        service = PC.ProviderCache(self.document(), PC.WorkTree(self.root, self.repo), self.registry,
+                                   'reg.example/cache', '', self.messages.append, **options)
+        self.assertIsNone(service.lane_check)   # nothing runs a lane's command unless the lane gave one
+        service.lane_check = self.lane if lane else None
+        return service
+
+    def notes(self):
+        path = self.root / 'cache-state/refused.json'
+        return json.loads(path.read_text()) if path.exists() else None
+
+    def test_lane_check_runs_after_the_recipes_on_the_tree_in_place_before_the_status_says_ok(self):
+        self.assertEqual(self.service.restore('base'), self.ref)
+        self.assertEqual(self.events, [('recipe',), ('lane', True, False, True)])
+        self.assertEqual(self.lane.calls, [('base', '%s/logs/base-verify.log' % self.root)])
+        self.assertEqual(self.runner.calls[0][3], '%s/logs/base-verify.log' % self.root)
+        self.assertEqual(self.service.tree.status_of('base'), 'ok')
+        self.assertEqual(self.messages, ["provider-cache: restored base from %s (9 entries verified, the recipe's "
+                                         "own check passed, the lane's own check passed)" % self.ref])
+        self.assertIsNone(self.notes())
+
+    def test_lane_check_is_the_only_check_of_a_provider_that_declares_none(self):
+        self.assertEqual(self.service.restore('side'), self.side)
+        self.assertEqual(self.events, [('lane', True, False, True)])
+        self.assertEqual(self.lane.calls, [('side', '%s/logs/side-verify.log' % self.root)])
+        self.assertEqual(self.messages, ["provider-cache: restored side from %s (9 entries verified, the lane's "
+                                         "own check passed)" % self.side])
+
+    def test_tree_the_lane_rejects_is_taken_out_and_the_entry_is_replaced_after_the_rebuild(self):
+        before = settled(self.tmp.name)
+        self.lane.code = 1
+        with self.assertRaises(PC.Rejected) as caught:
+            self.service.restore('base')
+        self.assertEqual(str(caught.exception), "base: the lane's own check rejects the restored output; see "
+                                                "logs/base-verify.log")
+        self.assertEqual(self.events, [('recipe',), ('lane', True, False, True)])
+        after = settled(self.tmp.name)
+        after.pop('root/logs')
+        self.assertEqual(after, before)           # no tree, no status, no scratch
+        note = self.notes()[self.ref]
+        self.assertEqual((note['kind'], note['digest'], note['reason']), ('bundle', self.digest, str(caught.exception)))
+        published = self.registry.published
+        self.make('base')
+        self.service.push('base')
+        self.assertEqual(self.registry.published, published + 1)
+        self.assertNotEqual(self.registry.digests[self.ref], self.digest)
+        self.assertEqual(self.notes(), {})
+
+    def test_lane_check_is_not_asked_about_a_tree_the_recipes_check_rejects(self):
+        self.runner.code = 1
+        with self.assertRaises(PC.Rejected) as caught:
+            self.service.restore('base')
+        self.assertEqual(str(caught.exception), "base: the recipe's own check rejects the restored output; see "
+                                                "logs/base-verify.log")
+        self.assertEqual(self.events, [('recipe',)])
+        self.assertEqual(self.lane.calls, [])
+
+    def test_lane_check_that_could_not_run_is_no_judgement_of_the_entry(self):
+        before = settled(self.tmp.name)
+        for code in (2, 125, 127, -9, CacheErrorFromRunner):
+            self.lane.code = code() if code is CacheErrorFromRunner else code
+            with self.subTest(code=code), self.assertRaises(PC.CacheError) as caught:
+                self.service.restore('side')
+            self.assertNotIsInstance(caught.exception, PC.Rejected)
+            if code is not CacheErrorFromRunner:
+                self.assertEqual(str(caught.exception), "side: the lane's own check could not be run here (exit %s); "
+                                                        "see logs/side-verify.log" % code)
+            after = settled(self.tmp.name)
+            after.pop('root/logs')
+            self.assertEqual(after, before)
+            self.assertIsNone(self.notes())
+
+    def test_switching_the_checks_off_switches_the_lanes_off_too(self):
+        for what, service, expected in (('off', self.checked(verify=False), []),
+                                        ('no lane command', self.checked(lane=False), [('recipe',)]),
+                                        ('no runner', self.checked(runner=None), [('lane', True, False, True)])):
+            del self.events[:], self.messages[:]
+            with self.subTest(what=what):
+                service.restore('base')
+                self.assertEqual(self.events, expected)
+            self.set_aside('base')
+
+    # -- the command line ----------------------------------------------------
+    def cli(self, *argv, service=None):
+        errors = io.StringIO()
+        service = service or self.checked(lane=False)
+        with mock.patch.object(PC.sys, 'stderr', errors):
+            code = PC.main(list(argv), service=service, out=io.StringIO())
+        return code, errors.getvalue(), service
+
+    def test_everything_after_verify_with_is_the_command_word_for_word(self):
+        words = ['/bin/sh', '-c', 'exit 0', '-e', 'A=1', '--', 'restore', '--no-verify', '--verify-with', '', 'x y']
+        code, text, service = self.cli('restore', 'side', '--verify-with', *words)
+        self.assertEqual(code, 0, text)
+        self.assertIsInstance(service.lane_check, PC.LaneCheck)
+        self.assertEqual((service.lane_check.command, service.lane_check.timeout), (words, 900))
+        self.assertTrue(service.verify)
+        self.assertEqual(self.service.tree.status_of('side'), 'ok')
+        self.assertIn("the lane's own check passed", self.messages[-1])
+        # The time allowed is the one of the recipe's check.
+        self.runner.timeout = 41
+        self.set_aside('side')
+        code, text, service = self.cli('restore', 'side', '--verify-with', 'true')
+        self.assertEqual((code, service.lane_check.timeout), (0, 41))
+        self.set_aside('side')
+        code, text, service = self.cli('restore', 'side', '--verify-with', 'true', service=self.checked(
+            lane=False, runner=None))
+        self.assertEqual((code, service.lane_check.timeout), (0, 900))
+
+    def test_command_sees_the_tree_in_place_and_decides(self):
+        program = 'test -s "$0/P/side/complete.json" && test ! -e "$0/status/side.json" && exit "$1"'
+        code, text, service = self.cli('restore', 'side', '--verify-with', '/bin/sh', '-c', program,
+                                       str(self.root), '0')
+        self.assertEqual((code, text), (0, ''))
+        self.assertEqual(self.service.tree.status_of('side'), 'ok')
+        self.assertIn("\n===== provider-cache restore side: the lane's own check (/bin/sh, 5 words)\n",
+                      (self.root / 'logs/side-verify.log').read_text())
+        self.set_aside('side')
+        code, text, service = self.cli('restore', 'side', '--verify-with', '/bin/sh', '-c', program,
+                                       str(self.root), '1')
+        self.assertEqual((code, text), (1, "provider-cache: restore side failed: side: the lane's own check rejects "
+                                           "the restored output; see logs/side-verify.log\n"))
+        self.assertFalse(os.path.lexists(self.root / 'P/side'))
+        self.assertEqual(self.notes()[self.side]['kind'], 'bundle')
+        code, text, service = self.cli('restore', 'side', '--verify-with', '/bin/sh', '-c', program,
+                                       str(self.root), '7')
+        self.assertEqual((code, text), (1, "provider-cache: restore side failed: side: the lane's own check could "
+                                           "not be run here (exit 7); see logs/side-verify.log\n"))
+        code, text, service = self.cli('restore', 'side', '--verify-with', str(self.root / 'no-such-command'))
+        self.assertEqual(code, 1)
+        self.assertIn('restore side failed: the check of side could not be started: ', text)
+        self.assertFalse(os.path.lexists(self.root / 'P/side'))
+
+    def test_no_verify_wins_over_a_command(self):
+        code, text, service = self.cli('restore', '--no-verify', 'side', '--verify-with', 'false')
+        self.assertEqual((code, text), (0, ''))
+        self.assertEqual((service.lane_check.command, service.verify), (['false'], False))
+        self.assertEqual(self.service.tree.status_of('side'), 'ok')
+        self.assertFalse((self.root / 'logs').exists())
+
+    def test_verify_with_needs_restore_one_name_and_a_command(self):
+        for argv in (['push', 'side', '--verify-with', 'true'], ['restore', '--verify-with', 'true'],
+                     ['restore', 'base', 'side', '--verify-with', 'true'], ['restore', 'side', '--verify-with'],
+                     ['key', 'side', '--verify-with', 'true'], ['migrate', 'side', '--verify-with', 'true'],
+                     ['status', '--verify-with', 'true'], ['toolchain', '--verify-with', 'true'],
+                     ['status', '--remote', '--verify-with', 'true']):
+            with self.subTest(argv=argv), self.assertRaises(SystemExit) as caught:
+                self.cli(*argv)
+            self.assertEqual(caught.exception.code, 2)
+            self.assertFalse(os.path.lexists(self.root / 'P/side'))
+            self.assertEqual(self.lane.calls, [])
+
+
+class LaneCheckAdapter(unittest.TestCase):
+    """LaneCheck: the lane's command on the host, word for word."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        (self.dir / 'command').write_text(RUNNER_WRAPPER)
+        os.chmod(self.dir / 'command', 0o755)
+        self.log = self.dir / 'check.log'
+        self.command = str(self.dir / 'command')
+
+    def calls(self):
+        text = (self.dir / 'wrapper-calls').read_text()
+        return [[line[4:] for line in block.split('\n') if line.startswith('ARG ')]
+                for block in text.split('CALL\n')[1:]]
+
+    def test_defaults_and_words(self):
+        check = PC.LaneCheck((Path('/x/run'), '-e', 'A=1'))
+        self.assertEqual((check.command, check.timeout), (['/x/run', '-e', 'A=1'], 900))
+
+    def test_command_runs_as_given_and_its_output_goes_into_the_log(self):
+        self.log.write_text('earlier\n')
+        words = [self.command, '-e', 'A=two words', '--', 'python3', '-c', 'pass', '', 'sqlcipher']
+        self.assertEqual(PC.LaneCheck(words, 30).run('sqlcipher', self.log), 0)
+        self.assertEqual(self.calls(), [words[1:]])
+        self.assertEqual(self.log.read_text(), "earlier\n\n===== provider-cache restore sqlcipher: the lane's own "
+                                               "check (%s, 9 words)\nto stdout\nto stderr\n" % self.command)
+
+    def test_exit_status_is_passed_on_and_input_is_not_inherited(self):
+        check = PC.LaneCheck([self.command], 30)
+        for code in (1, 2, 125):
+            (self.dir / 'wrapper-behaviour').write_text('exit %d\n' % code)
+            self.assertEqual(check.run('kml', self.log), code)
+        (self.dir / 'wrapper-behaviour').write_text('kill -9 $$\n')
+        self.assertEqual(check.run('kml', self.log), -9)
+        (self.dir / 'wrapper-behaviour').write_text('cat; echo "end of input"\n')
+        self.assertEqual(check.run('kml', self.log), 0)
+        self.assertTrue(self.log.read_text().endswith('to stderr\nend of input\n'))
+
+    def test_command_that_does_not_finish_is_stopped_with_everything_it_started(self):
+        (self.dir / 'wrapper-behaviour').write_text(
+            'trap "" HUP INT QUIT USR1 USR2 TERM FPE ALRM PIPE\nsleep 300 & echo $! > "$dir/child"; wait\n')
+        check = PC.LaneCheck([self.command], 1)
+        outcome = []
+
+        def run():
+            try:
+                check.run('kml', self.log)
+            except PC.CacheError as error:
+                outcome.append(str(error))
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        thread.join(15)
+        child = int((self.dir / 'child').read_text())
+        if thread.is_alive():  # not stopped: do it here so that nothing outlives the test
+            os.killpg(os.getpgid(child), 9)
+            thread.join(15)
+            self.fail('the check was not stopped')
+        self.assertEqual(outcome, ['the check of kml did not finish in 1 s'])
+        for _ in range(50):  # the kill is asynchronous
+            try:
+                os.kill(child, 0)
+            except ProcessLookupError:
+                break
+            threading.Event().wait(0.1)
+        else:
+            self.fail('the process the command started is still running')
+
+    def test_command_or_log_that_cannot_be_used_is_a_refusal(self):
+        with self.assertRaisesRegex(PC.CacheError, '^the check of kml could not be started: .*No such file'):
+            PC.LaneCheck([str(self.dir / 'no-command')], 30).run('kml', self.log)
+        with self.assertRaisesRegex(PC.CacheError, '^the check of kml could not be started: '):
+            PC.LaneCheck([self.command], 30).run('kml', self.dir / 'no-directory' / 'check.log')
 
 
 class Migrate(ServiceCase):
@@ -5373,7 +5733,8 @@ class Migrate(ServiceCase):
         self.assertEqual(meta, dict(old_meta, schema=2, key=key, key_inputs=self.service.explain('base'), adopted_from={
             'schema': 1, 'key': old_meta['key'], 'ref': self.old_ref, 'digest': old_digest,
             'toolchain_image_id': TOOLCHAIN_ID}))
-        self.assertTrue(content['meta.json'].endswith(b'\n'))
+        # Written like the meta.json of a pushed bundle: sorted, one space of indent, a final newline.
+        self.assertEqual(content['meta.json'], (json.dumps(meta, sort_keys=True, indent=1) + '\n').encode())
         tar_sha = hashlib.sha256(content['base.tar']).hexdigest()
         self.assertEqual(self.messages, ['provider-cache: base is now also %s (was %s, 9 entries verified, tar sha256 '
                                          '%s)' % (ref, self.old_ref, tar_sha)])
@@ -5604,6 +5965,13 @@ if command == 'restore':
     os.makedirs(os.path.join(root, 'P', name))
     with open(os.path.join(root, 'P', name, os.environ['STUB_MARKER']), 'w') as stream:
         stream.write('restored\n')
+    if '--verify-with' in sys.argv and os.environ.get('STUB_VERIFY') == 'run':
+        import subprocess
+        words = sys.argv[sys.argv.index('--verify-with') + 1:]
+        with open(os.environ['STUB_LOG'] + '.verify', 'a') as stream:
+            stream.write(json.dumps(words) + '\n')
+        if subprocess.call(words, stdout=subprocess.DEVNULL) != 0:
+            sys.exit(1)
     with open(os.path.join(root, 'status', name + '.json'), 'w') as stream:
         json.dump({'stage': name, 'status': 'ok', 'restored_from': 'ref'}, stream)
     sys.exit(0)
@@ -5682,6 +6050,30 @@ class LaneHooks(unittest.TestCase):
                 self.assertEqual(code, 0, text)
                 self.assertEqual([c for c in self.calls('cache') if c.endswith(' ' + provider)],
                                  ['restore ' + provider])
+
+    def test_lane1_gives_the_cache_the_receipt_check_it_runs_after_a_build(self):
+        code, text = self.lane('lane1.sh', STUB_RESTORE='hit', STUB_VERIFY='run')
+        self.assertEqual(code, 0, text)
+        self.assertIn('sqlcipher restored from the provider cache', text)
+        words, = [json.loads(line) for line in self.calls('verify')]
+        self.assertEqual(os.path.realpath(words[0]), str(self.stages.parent / 'run-in-toolchain.sh'))
+        self.assertEqual(words[1:8], ['-e', 'PYTHONDONTWRITEBYTECODE=1', '--', '/usr/bin/python3', '-I', '-B', '-c'])
+        self.assertIn("sys.exit('lane1 check ' + name + ': ' + message)", words[8])
+        self.assertEqual(words[9:], ['sqlcipher', str(self.root / 'P')])
+        # The cache ran those words once; a build in a new work root runs the same words as its own check.
+        joined = ' '.join(words[1:]) + '\n'
+        self.assertEqual(Path(str(self.log) + '.run').read_text().count(joined), 1)
+        self.assertEqual(self.builds(), [line for line in self.builds() if 'takx-sqlcipher' not in line])
+        os.rename(self.root, str(self.root) + '-restored')
+        code, text = self.lane('lane1.sh')
+        self.assertEqual(code, 0, text)
+        self.assertEqual(len([b for b in self.builds() if 'takx-sqlcipher' in b]), 1)
+        self.assertEqual(Path(str(self.log) + '.run').read_text().count(joined), 2)
+        # Every step of lane1 restores through the same function.
+        lane1 = (HERE / 'stages/lane1.sh').read_text()
+        self.assertEqual(lane1.count('restore "$1" --verify-with "${check_command[@]}" "$1" "${P}"'), 1)
+        self.assertEqual(lane1.count('python3 -I "${cache}" restore'), 1)
+        self.assertIn('\ncheck() { # name\n  "${check_command[@]}" "$1" "${P}"\n}\n', lane1)
 
     def test_cache_miss_builds_then_pushes(self):
         for lane, (step, provider, marker, outputs) in self.CASES.items():
@@ -5919,7 +6311,9 @@ class RepositoryManifest(unittest.TestCase):
             with self.subTest(lane=lane):
                 self.assertEqual(subprocess.run(['/bin/bash', '-n', str(path)]).returncode, 0)
                 self.assertIn('provider_cache.py"\n', text)
-                self.assertIn('restore "$1" >>', text)
+                # lane1 also hands over its receipt check; the other lanes' checks are in providers.json.
+                self.assertIn('restore "$1" --verify-with "${check_command[@]}" "$1" "${P}" \\\n    >>'
+                              if lane == 'lane1.sh' else 'restore "$1" >>', text)
                 self.assertIn('push "$1" >>', text)
                 self.assertEqual(text.count('[[ "${TAKX_PROTO_CACHE:-}" != off ]] || return'), 2)
                 # cache_push is the last word of its function and cannot fail it.
@@ -6033,6 +6427,20 @@ class RepositoryManifest(unittest.TestCase):
                 # Everything else a check reads is a prerequisite, which restore requires to be ok.
                 for item in call['env'][1:]:
                     self.assertRegex(item, r'^[A-Z_]+=\{root\}/P/(%s)$' % '|'.join(entry['prerequisites']))
+
+    def test_providers_without_any_post_restore_check_are_exactly_these(self):
+        providers = self.manifest['providers']
+        lane1 = sorted(name for name, entry in providers.items() if entry['lane'] == 'lane1.sh')
+        self.assertEqual(lane1, ['cesium', 'cesium-acq', 'kml', 'sqlcipher'])
+        self.assertEqual([name for name in lane1 if 'verify' in providers[name]], [])
+        # lane1 hands its receipt check to restore (--verify-with); that check knows each of its providers.
+        text = (HERE / 'stages/lane1.sh').read_text()
+        program = text[text.index("CHECK_PY=$(cat <<'PY'\n"):text.index('\nPY\n)\n')]
+        for name in lane1:
+            self.assertEqual(program.count("if name == '%s':\n" % name), 1, name)
+        unchecked = sorted(name for name, entry in providers.items() if 'verify' not in entry and name not in lane1)
+        self.assertEqual(unchecked, ['commoncommo', 'consumers57', 'curl', 'gis-java', 'kernel-java', 'mdb', 'scene',
+                                     'ui-original', 'ui-wizard-reference', 'worldwind-interop', 'worldwind-java'])
 
     def test_wrappers_delegate_to_the_module(self):
         for script, command in (('push-cache.sh', 'push'), ('restore-cache.sh', 'restore')):

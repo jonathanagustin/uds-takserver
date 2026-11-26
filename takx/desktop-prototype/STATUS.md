@@ -21,6 +21,8 @@ It runs on Kernel 8.30.5 plus project patches (not the private 8.57.11), CommonC
 
 Paths are relative to the work root `/var/lib/takx-proto` unless they start with `demo/`.
 
+The sections down to "Connected run with CloudTAK" describe the tree `dist/takx57` of 2026-11-25. The image and the package are built from a newer tree, `dist/takx57-head`; see [Image, package and licences](#image-package-and-licences-2026-11-26) at the end.
+
 ## Success criteria
 
 | Criterion | Result |
@@ -332,3 +334,158 @@ Nothing secret is in the repository or in `demo/out`. `secrets/cloudtak-user/` h
 1. Decide the deployment change for TAKX's HTTPS API: 8443 by port on the passthrough gateway, or the gateway names in the server certificate. Then drive missions and data packages and look for a positive result.
 2. Rotate a live TakClient certificate and re-import it without deleting the TakClient.
 3. Record both screens side by side on a machine with a GPU, with a basemap in CloudTAK.
+
+## Image, package and licences (2026-11-26)
+
+The image and the Zarf package were rebuilt from a tree assembled from the branch as it is now, with the findings of the packaging review fixed and the licence blockers of issue #934 removed or recorded. The image boots with nothing mounted and renders the globe; the licence gate passes the build and is **not clean**: 44 items are under review, so the image stays `publishable: false`. Nothing was pushed, and nothing was deployed in that session. One machine, software rendering, sessions of two to five minutes: not acceptance.
+
+| Artifact | Value |
+| --- | --- |
+| Tree | `dist/takx57-head`, 645 files, 259 MB, `manifest.json` SHA-256 `47e84e568bba2c8c1d73ac5c44cd0e452fb57ff50d2c17a3fec54c9dcb3af390` |
+| Image | `ghcr.io/jonathanagustin/uds-takserver/takx-desktop:5.7-0b59a9bb-proto-47e84e568bba` (also `takx-desktop:5.7-proto-47e84e568bba`), ID and manifest digest `sha256:18c21b79a9050d74603ac0232e43d9cd357e485df1d30672669489bdca7c861c`, 2.11 GB, local Docker store only |
+| Package | as built in this session: 681,558,019 bytes, SHA-256 `9fb9a2b237f2a927d499e89e45d744151dca038d8a70a1dd00930c57e53ab916`. Replaced under the same name after the deploy; the current file is in the table of [Deployed in a pod](#deployed-in-a-pod-2026-11-26) |
+| Bundle | as built in this session (this package only): SHA-256 `1135fc53e371926964e05f78d9299308fbf5048fa9700ea7eb51587f77464ae5`. Replaced with the package |
+| Evidence | `pkg/evidence/r5/` (final image), `pkg/package/evidence/` (final package), logs in `pkg/r5/`. Earlier builds of this session, superseded: `pkg/evidence/r4/` and `r4-control/` (same tree; the image differed in the spelling of one pattern in the policy file), `pkg/evidence/r3/` and `r3-addon/` (the tree before JOCL was left out) |
+
+The repository was at commit `f43ba66` with uncommitted changes when the notices were generated; `SOURCES.json` in the image says so (`repository.dirty`, with the paths). A rebuild after those changes are committed keeps the tag, because the tag names the tree, and gets another image digest; the package must then be created again, which the digest pin enforces.
+
+### What the tree contains
+
+- **Kernel.** The JAR the Kernel stage built (Kernel 8.30.5 + project patches, compiled before the render-context source fix), shipped as a derived copy (below). In front of it in the same module sits the overlay JAR with 40 classes, so these win: `RenderContextBinding` (4 classes) and `GLMapView` (34), compiled from the current `takx/kernel-render-context` sources because they are newer than what the Kernel stage compiled; `AssetManager` (2, overlay patch 03); `GLUtils` (2, overlay patch 02). Overlay patch 01 no longer exists. `manifest.json` (`kernel_java_overlay`) lists every class and both source digests.
+- **Same content as the earlier unreviewed tree.** A first assembly from the branch was file for file identical to `dist/takx57-r2`, which an interrupted run had left. The final tree differs from it by the three JOCL JARs.
+- **Not connected.** This tree and this image were booted and driven locally. No TAK Server connection was made with them; the connected runs above used `dist/takx57`.
+- **Controls.** The nine Kernel controls describe the built JAR. None was rerun with the overlay or with the derived copy.
+
+### Packaging review findings
+
+| # | Finding | What was done | Evidence |
+| --- | --- | --- | --- |
+| 1 | GDAL and PROJ data missing | The assembly copies `share/gdal` (93 files) and `share/proj` (11); `launch.sh` and the image entrypoint set `GDAL_DATA` and `PROJ_LIB`; the entrypoint refuses to start without them; `selftest.sh check` fails on `Unable to open EPSG support file` | No such line in the image's log. Control, on the previous build of the same tree: with the data directory hidden and the entrypoint guard cut out, GDAL logs the error and the check fails on exactly these two checks (`pkg/evidence/r4-control/selftest.control.json`) |
+| 2 | "No listening TCP port" was false | Texts corrected. The chart renders a NetworkPolicy that isolates the pod for ingress and an Istio AuthorizationPolicy that denies every port but 6080; the UDS `Package` has no ingress rule. `zarf/README.md`, "Which ports can be reached", names the enforcer of each | Listeners read from `/proc/net/tcp` in the self-test: 6080, 4242, 8087 and one ephemeral port on every address, one more on loopback (`pkg/evidence/r5/jvm.json`). Objects rendered and schema-valid. **Not exercised in a cluster** |
+| 3 | Image pinned by tag | The staged package and chart name `<tag>@sha256:<digest>`; without a digest nothing is staged | `package.sh inspect`: both definition documents carry the digest, and the one manifest in the package's OCI layout has it |
+| 4 | RUNPATH ending in an empty element | The derived Kernel JAR has `DT_RUNPATH` removed from `libtakengine.so` and `libtakenginejni.so`. The built JAR and its receipt are untouched; the manifest records both digests of each library | `elf_audit.sh`: 0 run paths with an empty or relative element in 21 libraries. `selftest.sh linker` under `LD_DEBUG=libs`: 0 search paths with an empty or relative element, 0 files tried by a relative name, no Kernel `RUNPATH`, nothing below `/var/lib/takx-proto` |
+| 5 | Built package says `zarf.dev/v1alpha1` | Nothing to change. Zarf 1.0.1 creates the package from the v1beta1 sources and stores two documents in the archive's `zarf.yaml`: its own v1alpha1 conversion first, then the v1beta1 definition. It has no option to omit the first | `pkg/package/inspect/zarf.yaml-as-stored`; `package.sh inspect` checks for exactly these two documents |
+
+### Left out or changed for its licence
+
+| Item | What was done | Visible effect | How it was checked |
+| --- | --- | --- | --- |
+| `ffmpeg-4.1.3-1.5.1-linux-x86_64.jar` (bytedeco natives, "nonfree and unredistributable") | not in the tree; the gate denies any file that contains that string | **Video is lost**: no playback, recording or media length analysis. When a project opens, `MediaPlayerManager.startService` logs one `UnsatisfiedLinkError: no jniavutil`; the other services start. The Media dock opens and offers to add a file or a URL | Boot of the image, one such error in its log; I viewed the frames `pkg/evidence/r3/ui-media-add.png`, `r4/ui-media.png` and `r5/browser-novnc.png` |
+| Video as an add-on | a directory of natives the user supplies at `/opt/takx-addons/video` is appended to `java.library.path` | With the 16 libraries of the excluded JAR mounted read-only, the error is gone and the JVM maps `libavutil.so.56`, `libavcodec.so.58`, `libavformat.so.58`, `libswresample.so.3` and four JNI libraries from the mount (`pkg/evidence/r3-addon/`). **Playing a video was not tried.** The chart has no value for the mount | one boot on 2026-11-26 |
+| `uds-takserver-ui-wizard-reference.jar` (CDDL-only) | not in the tree | none seen. No class is required at boot or later: no TAKX source file imports `org.netbeans`, and no class of any JAR in the tree names `org.netbeans.api.wizard`, `spi.wizard` or `modules.wizard`. TAKX's own wizards are `gov.takx.commons.wizard` | scan of every class and service file in the tree; boot; File menu and Point Dropper opened |
+| `joost-0.9.1.jar` (MPL-1.1 only) | not in the tree | none seen. A `runtimeOnly` declaration; no class or service file names `net.sf.joost`. Four STX sheets (`resources/export/*.stx`), the language joost runs, stay in the tree, and no TAKX 5.7 source file opens them. The Data ribbon is empty in this build, so no export path could be driven | same scan; `grep` of the TAKX sources |
+| JOCL (`jocl-2.5.0.jar`, `jocl-main-2.5.0.jar`, natives JAR; JogAmp terms with Apache-1.1 parts) | not in the tree | none seen. `runtimeOnly` declarations; no class outside JOCL names `com.jogamp.opencl` | same scan; the image without them boots and renders the globe (`pkg/evidence/r4/`, `r5/`) |
+| 24 font atlases named after Arial, Courier and Segoe UI in the Kernel JAR | removed from the derived copy; the index lists no atlas. Not regenerated | none. Labels and widget text render: I viewed a placed marker with its label, the compass and the "NO GPS" notice (`pkg/evidence/r5/browser-novnc.png`), and the status line (`r3/ui-marker.png`) | see below |
+
+**How the Kernel uses the atlases.** It does not. The only reader is `GlyphAtlas_open` / `GlyphAtlas_loadBitmap` in `renderer/core/GlyphAtlas.cpp`, which no other file of `takkernel` calls. TAKX sets the option `default-font-atlas-uri` to `asset://fonts`, and nothing in Kernel 8.30.5 reads that option. Since 8.13.0 `GLGlyphAtlas2` generates glyphs at run time (`takkernel/VERSION.md`). The JSON files are in the output format of `msdf-atlas-gen`; atak-civ has no generator and no description of the format. Regenerating them from an open font was therefore not done: the result would be data that nothing loads.
+
+**Kept, although flagged.** XPP3 is compiled into `jboss-modules`, which parses the module descriptors with it at boot. AspectJ is referenced by the woven platform classes and by the bootstrap. The four Jakarta API JARs are referenced by Weld, Hibernate and the TAKX client and platform classes. JOGL and GlueGen draw the globe. `jai-imageio-core` registers image readers through service files, so the class scan cannot show it unused.
+
+### What the licence gate still flags
+
+`image/licence_gate.py` judged 582 items of the tree: 538 allowed, 0 denied, 0 unknown, 44 under review. The report is `licence-gate.json` in the image and the `LICENCE-GATE` attachment of the package. On the unfiltered tree `dist/takx57` the same gate denies 45 items and reports 18 unknown, and the build stops.
+
+| Count | What | Open question |
+| --- | --- | --- |
+| 10 | `worldCities.csv`, `TAKX_legacy.zip`, three `.wav` files, five icon set archives | no statement of their own; covered only by the repository `LICENSE.md` |
+| 9 | `jogl-all` and its natives JAR, seven native libraries inside | Apache-1.1 parts next to GPL-3.0 code |
+| 6 | `aspectjrt`, `aspectjweaver`, four Jakarta API JARs | EPL-2.0 next to GPL-3.0-only code (the Jakarta JARs also offer GPL-2.0 with the Classpath exception) |
+| 4 | the four TAKX JARs | ten TAKX source files carry Proprietary, NDA or EULA headers; upstream has not confirmed the GPL covers them |
+| 3 | `gluegen-rt`, its natives JAR and library | BSD-4-Clause advertising clause |
+| 3 | three symbol fonts in `JavaRendererUtils` | no font-specific notice inside an Apache-2.0 artifact |
+| 2 | `libgdal.so`, `libgdalalljni.so` | the strings MRSID and ECW; that no proprietary codec is linked is the recipe's statement |
+| 2 | `share/gdal` (93 files), `share/proj` (11 files) | tables derived from EPSG, ESRI and IGNF data, terms not checked one by one |
+| 1 | `libtakengine.so` | KTX notices of the Cesium Native dependency carry ETC and Kodak terms; whether such code is compiled in is unconfirmed |
+| 1 | the Kernel JAR | eleven CA certificates and data files without their own statement |
+| 1 | `jboss-modules` | XPP3 acknowledgement clause (the acknowledgement is in `NOTICE.md`) |
+| 1 | `jai-imageio-core` | nuclear-facility acknowledgement wording |
+| 1 | `spacemusic.au` in the WorldWind JAR | origin not stated |
+
+Beyond the gate, `SOURCES.json` lists why the image is not publishable: no source archives are recorded for the Maven and Kernel dependency binaries, two fetched inputs have no verified digest, the export classification is open, and the image carries a source manifest, not the source.
+
+### Notices and counts
+
+- `LICENSES/` in the image holds 269 files, and `INDEX.tsv` has 269 rows. An earlier run indexed four SQLCipher provider files twice and reported 273; the generator now writes one row per file and fails when the two numbers differ.
+- It holds one text per licence identifier the policy allows or keeps under review (21 files; 19 identifiers are in use), the licence files of libmicrohttpd, nghttp2, ngtcp2, protobuf, curl and libglvnd that the review missed, and every licence and notice file found inside the JARs (64 of the 144 JARs carry one; the other 80 are covered by the identifier texts).
+- Fetched inputs are counted by what is recorded for each: 451 with a URL and a SHA-256, 99 with a SHA-256 only, 11 built by the prototype, 3 git checkouts, 2 unverified. The earlier "566 with URL and SHA-256" is gone.
+- The OCI label lists the licence identifiers in use, not `GPL-3.0-only`.
+
+### Verified on the final image
+
+`stages/image.sh` and `image/verify/selftest.sh`, run step by step on `takx-desktop:5.7-proto-47e84e568bba`:
+
+- **Nothing mounted.** Two containers on `--network none`, tmpfs and one tmpfs volume only, no bind mount; `/var/lib/takx-proto` does not exist inside.
+- **Read-only root, non-root.** Read-only root filesystem, uid 10001 and 10002, no capabilities, no-new-privileges.
+- **Boots.** The `started` probe passed after about 40 s; all 15 checks passed with the JVM 130 s old; peak memory 2.27 GB with `-Xmx2g`.
+- **Globe rendered.** I viewed the frame: title `TAKX 5.7 SNAPSHOT : 2026_11_26_19_00_36 (Developer's Edition)`, Earth imagery, star field, compass, a marker placed with Point Dropper and its label, the Media dock, clock 19:02:38 UTC.
+- **Browser bridge live.** A raw RFB client through `/websockify` read two frames five seconds apart that differ. Headless Chromium loaded noVNC and its canvas showed the desktop with the marker placed a minute earlier; that screenshot is the frame described above (`pkg/evidence/r5/browser-novnc.png`).
+- **Supervision.** Killing websockify ends only the web container; killing the JVM fails all three probes and ends the desktop container.
+- **Layer scan.** 15 layers, 18,957 files: no sandbox CA, no private key outside an unmodified Debian library, no key store, no build path.
+- **Unit tests.** 62 image, gate and derive tests and 55 package tests pass on Python 3.11, 3.12 and 3.13.
+
+### Not verified
+
+- **Any deploy**, in that session. The package was deployed later the same day: see [Deployed in a pod](#deployed-in-a-pod-2026-11-26).
+- **Video with the add-on**, beyond the libraries being mapped.
+- **A TAK Server connection** with this tree or this image, in that session. The deploy made one from the pod.
+- **Import and export paths.** The Data ribbon is empty in this build, so nothing that might have used the wizard JAR or joost could be clicked; the conclusion rests on the class scan.
+- **arm64.** The image and the package are amd64 only; `derive_jar.py` and the image were not run on arm64 here.
+- **Soak.** The longest session of this image was about four minutes.
+
+## Deployed in a pod (2026-11-26)
+
+The `takx-desktop` package was deployed to the sandbox cluster of `server/` (single-node k3s, UDS Core 1.16.0, TAK Server package 1.4.0 with CloudTAK), used through the tenant gateway from a real browser, connected to the TAK Server from inside the pod, and removed again. 19:27 to 20:13 UTC, one machine, software rendering: not acceptance. The cluster is back at its baseline and **the package is not deployed now**. [zarf/README.md](zarf/README.md), "What the deploy showed", has every result with its numbers; this is the summary. Paths are under `/var/lib/takx-proto/deploy` unless they start with `demo/`, `server/`, `stages/` or `pkg/`.
+
+| Artifact | Value |
+| --- | --- |
+| Package deployed first | SHA-256 `9fb9a2b237f2a927d499e89e45d744151dca038d8a70a1dd00930c57e53ab916` (the build of the section above). The checks ran on it |
+| Package deployed over it | SHA-256 `02b3925c698bf7db0176b2e3ebdb247bab7527ff1b6323a611ee97b030088315`: the same plus the chart's DestinationRule. The sign-in gate was rerun on it, and the pod replacement and the removal ran on it |
+| Package in `pkg/out` now | 681,482,841 bytes, SHA-256 `9eb3f7538e69b166c272a8439955b38cc6eea88f2e2f3056c354bec071eb2c38`. Same image; its rendered objects are identical to the second package's, and it carries the README and chart comments written after the deploy. **Not deployed** |
+| Bundle in `pkg/out` now | this package only, SHA-256 `1027f7daec09e9bc02298c6ad00d9382ee98e9746cee3cb6b0065eef52524234`. Never deployed |
+| Image | unchanged: `sha256:18c21b79a9050d74603ac0232e43d9cd357e485df1d30672669489bdca7c861c`, local, `publishable: false` |
+
+### What was shown
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Admission | The pod passed UDS Core's Pepr policies and the Zarf agent with no exemption. Mutations: image references to the cluster registry (tag dropped, digest kept), pull Secret, the waypoint label, annotations. No security field changed | `evidence/04-admission-mutations.txt`, `03-pod.yaml` |
+| Identity | `TakClient` `takx-browser` Ready in one second; two keys copied, byte-identical; six staged files mode 0400 on a read-only memory volume; no secret value in any log or evidence file | `evidence/05-identity.txt`, `17-secret-scan.txt` |
+| Boot in the pod | Globe rendered; I viewed the frame read from the pod's display. 43 minutes, restarts 0; desktop container 1.8 to 2.0 GiB, peak 2.1 GiB; about 0.22 CPU on average | `evidence/06-pod-frame-1.png`, `07-monitor.tsv` |
+| Sign-in gate | Without a session `/` and `/websockify` (plain and as a WebSocket upgrade) get `302` to Keycloak and end at Authservice (`ext_authz_denied`, no upstream). `doug` (`/UDS Core/Admin`) reaches the live desktop in Chromium; I viewed the screenshot. `mapuser` (not in the group) gets `403` from Keycloak and no bridge | `evidence/08-gate-unauthenticated.txt`, `09-gate-doug/`, `10-gate-mapuser/`, `11-waypoint-access.log` |
+| Isolation | From a pod in another namespace and from a pod in the namespace, 6080, 4242, 8087 and the ephemeral port are refused. With NetworkPolicy opened for a test, ztunnel's log names the chart's DENY policy for the other ports and the operator's policy for 6080. Egress: only `takserver:8089` answers; the Kubernetes API, the internet and ten other destinations do not | `evidence/13-isolation-ingress.txt`, `13-isolation-ztunnel-mesh-layer.log`, `14-isolation-egress.txt` |
+| Connection from the pod | Connected to `ssl://takserver:8089` at the first attempt with the staged identity, server name checked. The server lists `CN=takx-browser`, `tls`, `Operators`, `TAKX-CIV 5.7.4-SNAPSHOT`. One synthetic marker each way with the scripted peer `takx-peer`; `takx-outsider` in another group received neither | `evidence/15-connection/` |
+| Lifecycle | Pod deleted: replacement Available in 48 s with a new project and no connection; added again, it connected. Package removed in 7 s; namespace (deleted by `stages/deploy.sh`, Zarf leaves it), `TakClient`, its Secret and the copy are gone; everything else as in the baseline except Authservice | `evidence/20-lifecycle/`, `22-removal-comparison.txt` |
+
+### What was found
+
+- **The node is inside the trust boundary.** A process in the node's host network namespace reaches `pod-IP:6080` without signing in (HTTP 200) and the JVM's ports 4242 and 8087. kube-router and Istio ambient both let the node's own traffic through to its pods. The chart cannot close this; `zarf/README.md` and the chart say so now. Evidence: `evidence/13-isolation-ingress.txt` section D, `13-isolation-node-rules.txt`.
+- **Authservice restarts on deploy and on removal** (UDS operator; new pods at 19:27:37 and 20:12:35), which ends the sessions of every application behind it. TAK Server, CloudTAK and Keycloak pods kept their UIDs and restart counts. Evidence: `evidence/21-authservice-replicasets.txt`.
+- **The bridge kept one process per pooled connection**: 44 processes and 173 of 256 MiB after four page loads. Fixed with a DestinationRule in the chart (1 process, 35 MiB after three more); package rebuilt and deployed over the running one. Evidence: `evidence/18-bridge-processes/`.
+- **A TAK Server restart reissues every `TakClient` certificate** and revokes the old ones (seen after the VM restart earlier that day). The desktop's Secret copy would then be stale; the identity component has to be deployed again. `server/README.md`, "After a VM restart".
+- **CloudTAK of package 1.4.0 does not survive a node restart by itself**: its init container cannot rewrite a mode 0444 file in its `emptyDir`. `server/90-resume.sh` replaces the pod; the cause, `charts/cloudtak/files/merge-trust.mjs`, is outside this directory and unchanged.
+- Smaller: a second request with the cookie of a pending sign-in makes that sign-in end in "your session has expired"; Point Dropper ignores a typed location unless an icon is selected first; the toast "Failed to query Contact List" repeats while connected (the API port, as before).
+
+### Footage
+
+One take of the desktop used through the browser, in the git-ignored `demo/out/takx/`, with `PROVENANCE-pod-browser.md`. The sign-in was made in a separate, unrecorded browser, and the connection form was filled before the take.
+
+| File | Length | Content |
+| --- | --- | --- |
+| `takx57-pod-browser-raw-take-1080p30.mp4` | 56.6 s | the whole take |
+| `takx57-pod-browser-clip-1-desktop-opens-status-goes-green.mp4` | 18.4 s | a Chromium window opens `takx.uds.dev`, the desktop appears, the "enabled" box is ticked, row and status bar turn green |
+| `takx57-pod-browser-clip-2-peer-marker-label.mp4` | 9.5 s | hover on the peer's marker `SYNTHETIC-PEER-POD-2` |
+| `takx57-pod-browser-clip-3-globe-drag-and-zoom.mp4` | 32.6 s | two drags turn the globe, the wheel zooms in and out |
+
+All four are H.264 High, `yuv420p`, 1920x1080, 30 fps, with no black interval (`*.ffprobe.json`, `*.detect.txt`). I viewed frames of the master at 2.6, 6, 20, 26, 45 and 55 s and of the encoded raw take at 12 s. noVNC scales the desktop to the browser window (about 0.92), and no mouse pointer is drawn. Unpublished.
+
+### Not verified
+
+- **The bundle**: never deployed, and the whole bundle never created.
+- **Sessions**: expiry, logout, and whether an open WebSocket is cut when a session ends. One open desktop stayed connected for 14 minutes and reloaded without a sign-in; cookies moved to another browser after 11 minutes were refused. Not explained.
+- **Renewal and revocation** in the pod, **persistence**, **`egress.hosts`**, any value other than the defaults.
+- **CloudTAK as the pod's peer**, missions, data packages, contacts, video.
+- **`stages/deploy.sh preflight` and `deploy`**: the first deploy was made by hand with the same command, before the script existed; its baseline files were written from the baseline taken by hand. The other steps ran from the script.
+- **A second VM restart** with the corrected `server/90-resume.sh`: its fixes were run against reproductions of the failures only.
+- **The final package** (`9eb3f753...`) in a cluster. It differs from the second deployed package in documentation and comments.
+- **Soak**: the pod ran 43 minutes, its replacement 2.
+

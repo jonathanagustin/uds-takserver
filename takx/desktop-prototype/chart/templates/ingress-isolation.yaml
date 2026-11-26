@@ -23,8 +23,26 @@
 #    from `expose` that names the gateway path; with it in place ztunnel
 #    refuses every other source.
 #
-# None of this has been exercised in a cluster: the chart has not been
-# deployed. Kubelet probes are exec probes and need no ingress.
+# What the first deploy showed (2026-11-26, k3s with kube-router, Istio
+# ambient; ../../zarf/README.md, "Which ports can be reached"):
+#
+# - From a pod in another namespace every port of the pod is refused by
+#   NetworkPolicy. From a pod in the mesh, ztunnel sends the connection to the
+#   pod's waypoint, where NetworkPolicy refuses it.
+# - With a temporary NetworkPolicy that let a test namespace in, ztunnel still
+#   closed 4242, 8087 and the ephemeral port with "explicitly denied by:
+#   takx-desktop/takx-desktop-deny-other-ports", and the UDS operator's own
+#   policy (deny-all-except-waypoint) closed 6080 for everything but the
+#   waypoint, where Authservice answered. The sign-in path worked with the
+#   DENY policy in place.
+# - NOT closed: the node itself. A process in the node's host network
+#   namespace reaches pod-IP:6080 (HTTP 200, no sign-in) and the JVM's ports.
+#   kube-router accepts traffic "to pods when source is the pod's local
+#   node", and Istio ambient exempts host traffic from ztunnel so that
+#   kubelet probes work. Nothing in a chart can change that: whoever has a
+#   shell on the node is inside the trust boundary of this pod.
+#
+# Kubelet probes are exec probes and need no ingress.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

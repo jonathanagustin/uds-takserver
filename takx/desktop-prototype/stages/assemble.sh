@@ -13,7 +13,7 @@
 # SHA-256 of every file. Nothing is launched here.
 #
 # Left out for their licence: the bytedeco FFmpeg native JAR ("nonfree and
-# unredistributable"), the CDDL-only wizard reference JAR and joost. The
+# unredistributable"), the CDDL-only wizard reference JAR, joost and JOCL. The
 # Kernel JAR in the tree is a derived copy (assemble/derive_jar.py): font
 # atlases without a licence removed, RUNPATH removed from two libraries.
 #
@@ -165,6 +165,6 @@ if [[ "${rc}" != 0 || ! -s "${out}/manifest.json" ]]; then
   exit 1
 fi
 status ok "${seconds}" \
-  "runnable tree mirroring official deployment/bin: $(tail -n 1 "${logf}"); Kernel 8.30.5 + project patches (derived copy, see status/kernel-derived${suffix}.json), CommonCommo 1.17.2 patched, NASA WorldWind interop, takx/ui-java rebuilds; hand-written JBoss Modules descriptors; public tak-assets subset only; no FFmpeg natives, no wizard reference JAR, no joost; manifest sha256 $(sha256sum "${out}/manifest.json" | cut -d' ' -f1); nothing launched" \
+  "runnable tree mirroring official deployment/bin: $(tail -n 1 "${logf}"); Kernel 8.30.5 + project patches (derived copy, see status/kernel-derived${suffix}.json), CommonCommo 1.17.2 patched, NASA WorldWind interop, takx/ui-java rebuilds; hand-written JBoss Modules descriptors; public tak-assets subset only; no FFmpeg natives, no wizard reference JAR, no joost, no JOCL; manifest sha256 $(sha256sum "${out}/manifest.json" | cut -d' ' -f1); nothing launched" \
   "${out}" "${out}/manifest.json"
 echo "assemble: ok in ${seconds}s" >&2

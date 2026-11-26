@@ -17,6 +17,7 @@ It is a prototype, not a supported product build. The client runs on substitutes
 | `border-shapefiles` 1.0.0, PostgreSQL bundle | absent (hsqldb is the default database) |
 | bytedeco FFmpeg 4.1.3 natives (public, but "nonfree and unredistributable") | absent; video is a user-supplied add-on |
 | `org.netbeans:wizard` | absent; no class refers to it |
+| `net.sf.joost:joost`, `org.jogamp.jocl:jocl` | absent; no class refers to them |
 
 Nothing here is relabelled as the private version, and none of it has renderer, SDK or client acceptance. [STATUS.md](STATUS.md) records what was run, every fix made to get the client to boot, and what does not work.
 
@@ -64,11 +65,12 @@ The tree mirrors the official `deployment/bin` that `gradle/binCreator.gradle` f
 | --- | --- | --- | --- |
 | `ffmpeg-4.1.3-1.5.1-linux-x86_64.jar` | not copied | its binaries state "nonfree and unredistributable" | `MediaPlayerManager.startService` logs one `UnsatisfiedLinkError` when a project opens; no video. `TAKX_ADDON_LIBRARY_PATH` names a directory of natives the user supplies |
 | `uds-takserver-ui-wizard-reference.jar` | not copied | CDDL-only | none: `gradle/clientDependencies.gradle` declares it, no class refers to it |
-| `joost-0.9.1.jar` | not copied | MPL-1.1 only | none: a `runtimeOnly` declaration, no class refers to it |
-| 24 font atlases in the Kernel JAR (`assets/fonts/arial*`, `cour*`, `segoeui*`) | removed from the derived copy; `font_resources.json` lists no atlas | no licence, named after Microsoft fonts | none: Kernel 8.30.5 never opens them (`GlyphAtlas_open` has no caller; glyphs are generated at run time since 8.13.0). Labels render |
+| `joost-0.9.1.jar` | not copied | MPL-1.1 only | none seen: a `runtimeOnly` declaration, and no class or service file of any JAR in the tree names `net.sf.joost`. Four STX sheets, the language joost runs, stay in `resources/export/`; no TAKX 5.7 source file opens them |
+| `jocl-2.5.0.jar`, `jocl-main-2.5.0.jar`, `jocl-2.5.0-natives-linux-amd64.jar` | not copied | JogAmp terms with Apache-1.1 parts: under review next to GPL-3.0 code, not denied | none seen: `runtimeOnly` declarations, and no class of any other JAR names `com.jogamp.opencl`. JOGL and GlueGen, which the globe needs, stay with the same open question |
+| 24 font atlases in the Kernel JAR (`assets/fonts/arial*`, `cour*`, `segoeui*`) | removed from the derived copy; `font_resources.json` lists no atlas | no licence, named after Microsoft fonts | none: Kernel 8.30.5 never opens them. `GlyphAtlas_open` has no caller outside `GlyphAtlas.cpp`, and nothing in the Kernel reads the option `default-font-atlas-uri` that TAKX sets to `asset://fonts`; glyphs are generated at run time since 8.13.0 (`takkernel/VERSION.md`). Labels render |
 | `RUNPATH` of `libtakengine.so` and `libtakenginejni.so` | dynamic entry removed in the derived copy | it ends in an empty element, which glibc reads as the working directory | none |
 
-The derived copy is named `kernel-8.30.5-linux-amd64-public-cpu-tree.jar`. The JAR the Kernel stage built, its receipt and its nine controls are unchanged and describe the built JAR; no control was rerun with the copy. The stock loader names its extraction directory after the MD5 of the JAR, so `prototype-launch.env` carries the MD5 of the copy. The atlases were not regenerated from an open font: their format is that of `msdf-atlas-gen`, but nothing would read the result.
+The derived copy is named `kernel-8.30.5-linux-amd64-public-cpu-tree.jar`. The JAR the Kernel stage built, its receipt and its nine controls are unchanged and describe the built JAR; no control was rerun with the copy. The stock loader names its extraction directory after the MD5 of the JAR, so `prototype-launch.env` carries the MD5 of the copy. The atlases were not regenerated from an open font. Their JSON is the output format of `msdf-atlas-gen`, and atak-civ has no generator and no description of the format; since no code path opens an atlas, a regenerated set would be dead data that still had to be licensed and kept.
 
 ### Module graph
 
@@ -118,15 +120,17 @@ Network behaviour to know about:
 
 ## Deploy as a package
 
-`stages/image.sh` puts the assembled tree into one self-contained image ([image/README.md](image/README.md)), and `stages/package.sh` turns that image into a Zarf v1beta1 package, `takx-desktop`, and a UDS bundle, `takx-desktop-proto`. The image build fails when the licence gate finds a denied or unknown JAR, native library or asset; the package pins the image by digest. The package runs the client in one pod and serves it to a browser at `https://takx.<domain>/` behind the UDS tenant gateway and Keycloak; a `TakClient` supplies its TAK identity. Both are opt-in and separate from the TAK Server package.
+`stages/image.sh` puts the assembled tree into one self-contained image ([image/README.md](image/README.md)), and `stages/package.sh` turns that image into a Zarf v1beta1 package, `takx-desktop`, and a UDS bundle, `takx-desktop-proto`. The image build fails when the licence gate finds a denied or unknown JAR, native library or asset; the package pins the image by digest. The gate is not clean: it flags 44 items for review, so the image is labelled `publishable: false` and nothing is pushed ([STATUS.md](STATUS.md), "Image, package and licences"). The package runs the client in one pod and serves it to a browser at `https://takx.<domain>/` behind the UDS tenant gateway and Keycloak; a `TakClient` supplies its TAK identity. Both are opt-in and separate from the TAK Server package.
 
 ```bash
+TAKX_ASSEMBLE_NAME=takx57-head takx/desktop-prototype/stages/assemble.sh   # a tree from the current sources
+TAKX_ASSEMBLE_NAME=takx57-head takx/desktop-prototype/stages/image.sh all  # notices, licence gate, image, self-test
 takx/desktop-prototype/stages/package.sh all      # lint, render, validate, test, build, inspect; deploys nothing
 uds zarf package deploy /var/lib/takx-proto/pkg/out/zarf-package-takx-desktop-amd64-<TAG>.tar.zst \
   --components takx-desktop-takclient,takx-desktop-identity --confirm
 ```
 
-The package and a bundle with only this package were built and checked without a cluster. **Neither has been deployed**, and the bundle with Zarf init, UDS Core and TAK Server was written and checked against its upstream packages but not created. [zarf/README.md](zarf/README.md) has the components, the values, the deploy commands, what was checked and what a deploy still has to prove.
+The package and a bundle with only this package were built and checked without a cluster, last on 2026-11-26 from the tree `takx57-head`. The package was then deployed once to the sandbox cluster of `server/`, used through the gateway from a browser, connected to the TAK Server from the pod, and removed again ([STATUS.md](STATUS.md), "Deployed in a pod"; `stages/deploy.sh`). The bundle has not been deployed, and the bundle with Zarf init, UDS Core and TAK Server was written and checked against its upstream packages but not created. [zarf/README.md](zarf/README.md) has the components, the values, the deploy commands, what was checked, what the deploy showed and what is still open.
 
 ## Files in this stage
 

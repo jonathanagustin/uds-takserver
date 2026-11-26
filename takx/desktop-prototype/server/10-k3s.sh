@@ -44,10 +44,39 @@ disable:
 CFG
 fi
 
+# The bootstrap's --verify creates a pod in namespace default and reads its
+# log back. Once UDS Core is deployed, that create passes the Pepr admission
+# webhooks, which fail closed. After a restart their own pods are still
+# starting and refuse every pod for longer than the 60 s the bootstrap
+# retries, so --verify straight after the start reported
+# "FATAL: verify: pod create refused for 60s" on a cluster that was coming up
+# (2026-11-26, the first VM restart with the server deployed). So: start
+# without the proof, wait until admission lets a pod through, then run the
+# proof. On a cluster without admission webhooks the wait returns at once.
+"${BOOTSTRAP}"
+
+# wait_admission <seconds>: a server-side dry run goes through every
+# admission webhook and creates nothing.
+wait_admission() {
+  local deadline=$((SECONDS + $1)) out=""
+  while ((SECONDS < deadline)); do
+    if out="$(kubectl -n default run takx-admission-probe --image=busybox:1.37 --restart=Never \
+      --dry-run=server -o name -- true 2>&1)"; then
+      echo "admission lets a pod through after ${SECONDS}s (${out})"
+      return 0
+    fi
+    sleep 5
+  done
+  echo "admission still refuses a pod after $1 s: ${out}" >&2
+  kubectl get pods -n pepr-system -o wide >&2 || true
+  return 1
+}
+wait_admission "${ADMISSION_WAIT_SECONDS:-900}"
+
 "${BOOTSTRAP}" --verify
 kubectl get nodes -o wide
 if kubectl -n kube-system get ds -o name | grep -q svclb; then
   echo "servicelb DaemonSets exist; the disable setting did not apply" >&2
   exit 1
 fi
-write_status server-k3s ok "k3s up via ${BOOTSTRAP} --verify; servicelb disabled in /etc/rancher/k3s/config.yaml"
+write_status server-k3s ok "k3s up via ${BOOTSTRAP}, admission answering, then --verify; servicelb disabled in /etc/rancher/k3s/config.yaml"

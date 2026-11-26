@@ -35,6 +35,9 @@ As a script it has helpers for stages/package.sh:
                                    JSON Schemas for kubeconform
   --bundle-schema SCHEMA FILE...   uds-bundle.yaml files against uds.schema.json
   --built INSPECT_DIR TAG          what `zarf package inspect` extracted
+  --archive DIR IMAGE_ID           the decompressed package: its zarf.yaml
+                                   documents and the image in its OCI layout
+                                   against the image id of the build
 """
 import copy
 import json
@@ -659,6 +662,115 @@ class Composition(unittest.TestCase):
                 self.assertIn("takx-build-tag", stream.read(), path)
 
 
+class Staging(unittest.TestCase):
+    """create-package.sh --stage-only: the image is pinned by digest. Needs no Docker and no uds."""
+
+    DIGEST = "sha256:" + "ab" * 32
+    TREE = "cd" * 32
+
+    def stage(self, tmp, tag, env):
+        notices = os.path.join(tmp, "notices")
+        if not os.path.isdir(notices):
+            os.makedirs(os.path.join(notices, "LICENSES"))
+            os.makedirs(os.path.join(notices, "patches"))
+            os.makedirs(os.path.join(notices, "locks"))
+            for name in ("NOTICE.md", "licence-gate.json"):
+                with open(os.path.join(notices, name), "w", encoding="utf-8") as stream:
+                    stream.write("{}\n")
+            with open(os.path.join(notices, "SOURCES.json"), "w", encoding="utf-8") as stream:
+                json.dump({"tree": {"manifest_sha256": self.TREE}}, stream)
+        out = os.path.join(tmp, "stage-%d" % len(os.listdir(tmp)))
+        inherited = {key: value for key, value in os.environ.items()
+                     if key not in ("TAKX_IMAGE_DIGEST", "TAKX_IMAGE_SOURCE")}
+        done = subprocess.run((os.path.join(HERE, "create-package.sh"), tag, "--stage-only", out),
+                              capture_output=True, check=False, text=True,
+                              env={**inherited, "TAKX_NOTICES_DIR": notices, **env})
+        return done, out
+
+    def test_registry_source_is_pinned_by_the_digest_the_caller_names(self):
+        tag = "5.7-0b59a9bb-proto-" + self.TREE[:12]
+        with tempfile.TemporaryDirectory() as tmp:
+            done, out = self.stage(tmp, tag, {"TAKX_IMAGE_SOURCE": "registry", "TAKX_IMAGE_DIGEST": self.DIGEST})
+            self.assertEqual(done.returncode, 0, done.stderr)
+            reference = f"{IMAGE}:{tag}@{self.DIGEST}"
+            with open(os.path.join(out, "zarf", "components", "image.yaml"), encoding="utf-8") as stream:
+                component = stream.read()
+            self.assertIn(f"- name: {reference}\n", component)
+            self.assertIn("source: registry", component)
+            with open(os.path.join(out, "chart", "values.yaml"), encoding="utf-8") as stream:
+                self.assertIn(f"\nimage: {reference}\n", stream.read())
+            with open(os.path.join(out, "zarf", "zarf.yaml"), encoding="utf-8") as stream:
+                package = stream.read()
+            self.assertIn(f'version: "{tag}"', package)
+            self.assertNotIn("@sha256", package)
+            for folder, _dirs, names in os.walk(out):
+                for name in names:
+                    if name.endswith((".yaml", ".json", ".md")):
+                        with open(os.path.join(folder, name), encoding="utf-8") as stream:
+                            self.assertNotIn("takx-build-tag", stream.read(), name)
+
+    def test_no_digest_no_package(self):
+        tag = "5.7-0b59a9bb-proto-" + self.TREE[:12]
+        with tempfile.TemporaryDirectory() as tmp:
+            for env in ({"TAKX_IMAGE_SOURCE": "registry"},
+                        {"TAKX_IMAGE_SOURCE": "registry", "TAKX_IMAGE_DIGEST": "sha256:abc"},
+                        {"TAKX_IMAGE_SOURCE": "registry", "TAKX_IMAGE_DIGEST": "latest"}):
+                done, out = self.stage(tmp, tag, env)
+                self.assertNotEqual(done.returncode, 0, env)
+                self.assertIn("No image digest", done.stderr)
+                self.assertFalse(os.path.exists(out))
+
+    def test_tag_must_name_the_tree_of_the_notices(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            done, out = self.stage(tmp, "5.7-0b59a9bb-proto-000000000000",
+                                   {"TAKX_IMAGE_SOURCE": "registry", "TAKX_IMAGE_DIGEST": self.DIGEST})
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn("does not end in", done.stderr)
+            self.assertFalse(os.path.exists(out))
+
+
+@need_uds
+class BuiltArchive(unittest.TestCase):
+    """archive_facts on synthetic decompressed packages."""
+
+    DIGEST = "sha256:" + "ab" * 32
+
+    def archive(self, tmp, documents, manifests, blob=True):
+        os.makedirs(os.path.join(tmp, "images", "blobs", "sha256"))
+        with open(os.path.join(tmp, "zarf.yaml"), "w", encoding="utf-8") as stream:
+            stream.write("\n---\n".join(json.dumps(document) for document in documents) + "\n")
+        with open(os.path.join(tmp, "images", "index.json"), "w", encoding="utf-8") as stream:
+            json.dump({"schemaVersion": 2, "manifests": [{"digest": digest} for digest in manifests]}, stream)
+        if blob:
+            with open(os.path.join(tmp, "images", "blobs", "sha256", self.DIGEST.split(":")[1]), "w", encoding="utf-8") as stream:
+                stream.write("{}")
+        return archive_facts(tmp, self.DIGEST)
+
+    def documents(self, reference):
+        return [{"apiVersion": "zarf.dev/v1alpha1", "components": [{"name": "i", "images": [reference]}, {"name": "c"}]},
+                {"apiVersion": "zarf.dev/v1beta1",
+                 "components": [{"name": "i", "images": [{"name": reference, "id": "desktop"}]}, {"name": "c"}]}]
+
+    def test_a_pinned_package_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checks, facts = self.archive(tmp, self.documents(f"{IMAGE}:5.7-x@{self.DIGEST}"), [self.DIGEST])
+            self.assertTrue(all(checks.values()), checks)
+            self.assertEqual(facts["apiVersions"], ["zarf.dev/v1alpha1", "zarf.dev/v1beta1"])
+
+    def test_tag_only_other_digest_and_other_manifest_fail(self):
+        other = "sha256:" + "cd" * 32
+        cases = ((self.documents(f"{IMAGE}:5.7-x"), [self.DIGEST], True),
+                 (self.documents(f"{IMAGE}:5.7-x@{other}"), [self.DIGEST], True),
+                 (self.documents(f"{IMAGE}:5.7-x@{self.DIGEST}"), [other], True),
+                 (self.documents(f"{IMAGE}:5.7-x@{self.DIGEST}"), [self.DIGEST, other], True),
+                 (self.documents(f"{IMAGE}:5.7-x@{self.DIGEST}"), [self.DIGEST], False),
+                 (self.documents(f"{IMAGE}:5.7-x@{self.DIGEST}")[1:], [self.DIGEST], True))
+        for documents, manifests, blob in cases:
+            with tempfile.TemporaryDirectory() as tmp:
+                checks, _facts = self.archive(tmp, documents, manifests, blob)
+                self.assertFalse(all(checks.values()), (documents, manifests, blob))
+
+
 @need_uds
 class IdentityAction(unittest.TestCase):
     """The component that copies two keys of the TakClient Secret."""
@@ -866,10 +978,11 @@ class Chart(unittest.TestCase):
 
     def test_kinds(self):
         self.assertEqual(sorted(doc["kind"] for doc in self.default),
-                         ["AuthorizationPolicy", "Deployment", "NetworkPolicy", "Package", "Service", "ServiceAccount"])
+                         ["AuthorizationPolicy", "Deployment", "DestinationRule", "NetworkPolicy", "Package", "Service",
+                          "ServiceAccount"])
         self.assertEqual(sorted(doc["kind"] for doc in self.full),
-                         ["AuthorizationPolicy", "Deployment", "NetworkPolicy", "Package", "PersistentVolumeClaim",
-                          "Service", "ServiceAccount"])
+                         ["AuthorizationPolicy", "Deployment", "DestinationRule", "NetworkPolicy", "Package",
+                          "PersistentVolumeClaim", "Service", "ServiceAccount"])
         for doc in self.default + self.full:
             self.assertEqual(doc["metadata"]["namespace"], "takx-desktop")
             self.assertNotIn(doc["kind"], ("Secret", "Role", "RoleBinding", "ClusterRole", "ClusterRoleBinding",
@@ -897,6 +1010,17 @@ class Chart(unittest.TestCase):
         without = helm_template({"network": {"denyOtherPorts": False}})
         self.assertEqual([doc["kind"] for doc in without if doc["kind"] == "AuthorizationPolicy"], [])
         self.assertEqual(one(without, "NetworkPolicy")["spec"]["policyTypes"], ["Ingress"])
+
+    def test_bridge_connections_are_not_pooled(self):
+        """websockify keeps one process per connection: the waypoint must not pool them."""
+        for documents in (self.default, self.full):
+            rule = one(documents, "DestinationRule")
+            self.assertEqual(rule["apiVersion"], "networking.istio.io/v1")
+            service = one(documents, "Service")
+            self.assertEqual(rule["spec"]["host"],
+                             f"{service['metadata']['name']}.{service['metadata']['namespace']}.svc.cluster.local")
+            self.assertEqual(rule["spec"]["trafficPolicy"],
+                             {"connectionPool": {"http": {"maxRequestsPerConnection": 1, "idleTimeout": "30s"}}})
 
     def test_texts_do_not_claim_that_the_desktop_has_no_tcp_port(self):
         for path in (os.path.join(CHART, "templates", "deployment.yaml"), os.path.join(CHART, "templates", "service.yaml"),
@@ -1407,9 +1531,9 @@ def main_built(inspect_dir, tag):
             gate["counts"] == sources["licence_gate"]["counts"] and (gate["clean"] or sources.get("publishable") is False),
         "LICENSES.tar holds the text of every licence in use": all(
             "LICENSES/texts/%s.txt" % name.replace(" ", "_") in licences for name in gate["licences_in_use"]),
-        "no FFmpeg native JAR, wizard reference JAR or joost in the tree": not [
+        "no FFmpeg native JAR, wizard reference JAR, joost or JOCL in the tree": not [
             item["path"] for item in sources["files"]
-            if re.search(r"ffmpeg-[^/]*linux[^/]*\.jar$|wizard-reference|joost", item["path"])],
+            if re.search(r"ffmpeg-[^/]*linux[^/]*\.jar$|wizard-reference|joost|jocl", item["path"])],
         "SOURCES.json maps every tree file": sources["counts"]["files"] == sources["tree"]["files"] == len(sources["files"]),
         "LICENSES.tar holds GPL-3.0-only.txt": "LICENSES/GPL-3.0-only.txt" in licences,
         "LICENSES.tar holds more than 100 files": len(licences) > 100,
@@ -1427,7 +1551,49 @@ def main_built(inspect_dir, tag):
     return 0 if all(checks.values()) else 1
 
 
+def archive_facts(directory, image_id):
+    """Checks on a decompressed package: (checks, facts).
+
+    Zarf 1.0.1 writes two documents into the zarf.yaml of a built package:
+    first its own conversion to zarf.dev/v1alpha1, which is what a CLI
+    older than v1beta1 reads, then the zarf.dev/v1beta1 definition that
+    `zarf package inspect definition` prints. Both must name the image by
+    the digest of the image that was built, and the OCI layout of the
+    package must hold exactly that manifest."""
+    documents = load_yaml(os.path.join(directory, "zarf.yaml"))
+    versions = [document.get("apiVersion") for document in documents]
+    references = []
+    for document in documents:
+        for component in document.get("components", []):
+            for image in component.get("images", []):
+                references.append(image["name"] if isinstance(image, dict) else image)
+    with open(os.path.join(directory, "images", "index.json"), encoding="utf-8") as stream:
+        manifests = json.load(stream)["manifests"]
+    pinned = re.compile(re.escape(IMAGE) + r":[A-Za-z0-9_.-]+@" + re.escape(image_id) + "$")
+    blob = os.path.join(directory, "images", "blobs", "sha256", image_id.split(":", 1)[-1])
+    checks = {
+        "zarf.yaml holds the v1alpha1 conversion and then the v1beta1 definition":
+            versions == ["zarf.dev/v1alpha1", "zarf.dev/v1beta1"],
+        "every document names the one image by tag and by the digest of the built image":
+            len(references) == len(documents) and all(pinned.match(reference) for reference in references),
+        "the OCI layout holds one manifest, with that digest": [m["digest"] for m in manifests] == [image_id],
+        "the manifest blob is in the package": os.path.isfile(blob),
+    }
+    return checks, {"apiVersions": versions, "image_references": sorted(set(references)),
+                    "oci_manifests": [m["digest"] for m in manifests]}
+
+
+def main_archive(directory, image_id):
+    checks, facts = archive_facts(directory, image_id)
+    for label, ok in checks.items():
+        print(f"{'ok  ' if ok else 'FAIL'} {label}")
+    print(json.dumps(facts))
+    return 0 if all(checks.values()) else 1
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--archive":
+        sys.exit(main_archive(sys.argv[2], sys.argv[3]))
     if len(sys.argv) > 1 and sys.argv[1] == "--headers":
         sys.exit(main_headers(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "--action-scripts":

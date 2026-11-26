@@ -20,7 +20,10 @@
   "test_provider_cache.py compares them with the Dockerfile and the wrapper.",
   "'verify', where a provider has it, is the recipe's own cheap re-check of an",
   "existing output: the command its lane runs after a build. restore runs it on",
-  "a restored tree before the status file says ok. It is not part of the key."
+  "a restored tree before the status file says ok. It is not part of the key.",
+  "The four providers of lane1.sh have no 'verify': that lane hands its receipt",
+  "check to restore itself (restore NAME --verify-with COMMAND). The other",
+  "eleven providers without 'verify' have no check of an existing output at all."
  ],
  "schema": 2,
  "toolchain": {

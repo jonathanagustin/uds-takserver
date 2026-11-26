@@ -38,7 +38,8 @@ display:
 jvm:
   # EXTRA_JVM_OPTS of the official runTakx command line. With -Xmx2g the
   # container peaked at 2.1 to 2.2 GB after five idle minutes in the image
-  # self-test (not in a cluster, not under use).
+  # self-test. In the first deploy (43 minutes in a pod, a connection, a few
+  # markers, one browser) it stayed between 1.8 and 2.0 GiB, peak 2.1 GiB.
   extraOpts: "-Xmx2g"
 
 takx:
@@ -99,9 +100,11 @@ network:
   # true: an Istio AuthorizationPolicy with action DENY for every port of the
   # pod other than 6080 (templates/ingress-isolation.yaml). The TAKX JVM
   # listens on TCP 4242, 8087 and one ephemeral port; ztunnel then refuses
-  # them from any source. The NetworkPolicy that isolates the pod for ingress
-  # is always rendered. Set false only if the deny policy is shown to be in
-  # the way of the gateway path; that path has not been run in a cluster.
+  # them from any pod. The NetworkPolicy that isolates the pod for ingress
+  # is always rendered. In the first deploy the sign-in path through the
+  # gateway worked with this policy in place, and ztunnel's log named it when
+  # a test pod was let through the NetworkPolicy. Neither layer covers a
+  # process on the node itself (../zarf/README.md).
   denyOtherPorts: true
 
 persistence:
@@ -123,6 +126,8 @@ resources:
   desktop:
     requests: {cpu: 500m, memory: 2Gi}
     limits: {cpu: "2", memory: 5Gi}
+  # The bridge idles at about 35 MiB. It forks one process per connection:
+  # templates/bridge-connections.yaml keeps the waypoint from pooling them.
   web:
     requests: {cpu: 50m, memory: 64Mi}
     limits: {cpu: 500m, memory: 256Mi}

@@ -37,7 +37,7 @@ sed "/^${begin}\$/,/^${end}\$/d" /etc/hosts > "${tmp}"
 cat >> "${tmp}" <<HOSTS
 ${begin}
 ${admin} keycloak.admin.${DOMAIN}
-${tenant} sso.${DOMAIN} takserver.${DOMAIN} map.${DOMAIN}
+${tenant} sso.${DOMAIN} takserver.${DOMAIN} map.${DOMAIN} ${TAKX_HOST:-takx}.${DOMAIN}
 ${passthrough} takserver-stream.${DOMAIN} takserver-api.${DOMAIN} takserver
 ${end}
 HOSTS
@@ -60,6 +60,8 @@ TAK_API_PORT=443
 TAK_ENROLL_HOST=takserver.${DOMAIN}
 TAK_ENROLL_PORT=8446
 CLOUDTAK_URL=https://map.${DOMAIN}/
+# The desktop package (../zarf), when it is deployed.
+TAKX_DESKTOP_URL=https://${TAKX_HOST:-takx}.${DOMAIN}/
 ENV
 sed -n "/^${begin}\$/,/^${end}\$/p" /etc/hosts
 write_status server-hosts ok "gateway addresses admin=${admin} tenant=${tenant} passthrough=${passthrough} in /etc/hosts and ${SERVER_STATE}/endpoints.env"

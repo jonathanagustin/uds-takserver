@@ -19,15 +19,27 @@ from its outputs (see providers.json):
 A changed recipe therefore misses the cache, and an identical rebuild on a
 fresh machine, with a rebuilt toolchain image, finds it.
 
-Outside the key, deliberately or because nothing here can see it: the text of
-the lane scripts and of run-in-toolchain.sh beyond what the manifest mirrors
-(test_provider_cache.py compares both with the manifest), the steps a lane
-runs around the recipe (seeding its source cache, its own acceptance checks),
-recipe files named test_* and README*, the CA bundle and Java trust store the
-wrapper mounts, Debian package revisions below the gated versions, the host
-kernel, CPU model and docker version, and a non-default lane invocation
-(TAKX_LANE*_FETCH=0, another gis-java directory), for which the lanes switch
-the cache off instead.
+Outside the key, deliberately or because nothing here can see it:
+
+  * the text of the lane scripts and of run-in-toolchain.sh beyond what the
+    manifest mirrors (test_provider_cache.py runs every lane step and the
+    wrapper against stubs and compares what they really execute with the
+    manifest, word for word), and the steps a lane runs around the recipe:
+    seeding its source cache, its own acceptance checks, 'verify';
+  * what the wrapper adds beside the 'wrapper' block: the CA bundle at
+    /ca.crt with SSL_CERT_FILE, CURL_CA_BUNDLE, GIT_SSL_CAINFO, PIP_CERT and
+    REQUESTS_CA_BUNDLE, TAKX_JAVA_TRUSTSTORE, --init, and with TAKX_PROTO_ARCH
+    set --platform and that variable (the architecture itself is in the key);
+  * recipe files named test_* and README*;
+  * the bytes of the inputs: the upstream/atak-civ checkout, the source trees
+    and archives below the work root are named by what the locks and
+    status/fetch.json pin (the recipes compare them with their locks), they
+    are not read again here;
+  * Debian package revisions below the gated versions (the probe records a
+    digest of the package list in status/toolchain.json, outside the
+    fingerprint), the host kernel, CPU model and docker version;
+  * a non-default lane invocation (TAKX_LANE*_FETCH=0, another gis-java
+    directory): the lanes switch the cache off for it instead.
 
 Toolchain fingerprint. The key does not contain an image id, which changes
 with every rebuild. It contains the SHA-256 of what the toolchain is:
@@ -56,6 +68,9 @@ Usage:
   provider_cache.py key [--explain] [NAME...]   print the key (or its inputs)
   provider_cache.py restore [--no-verify] [NAME...]
                                                 pull, verify, install P/<name>
+  provider_cache.py restore NAME --verify-with COMMAND [ARG...]
+                                                the same, and COMMAND must
+                                                accept the restored tree
   provider_cache.py push [NAME...]              save P/<name> when it is ok
   provider_cache.py status [--remote] [--write-index [FILE]]
   provider_cache.py toolchain [--record|--probe-script]
@@ -65,8 +80,8 @@ Environment:
   TAKX_PROTO_ROOT          work root, default /var/lib/takx-proto
   TAKX_PROTO_CACHE         registry prefix, or 'off' to disable restore/push
   TAKX_PROTO_CACHE_TIMEOUT seconds allowed for one docker command (3600)
-  TAKX_PROTO_CACHE_VERIFY  'off' skips the post-restore check of a provider
-  TAKX_PROTO_CACHE_VERIFY_TIMEOUT  seconds allowed for that check (900)
+  TAKX_PROTO_CACHE_VERIFY  'off' skips the post-restore checks of a provider
+  TAKX_PROTO_CACHE_VERIFY_TIMEOUT  seconds allowed for each such check (900)
   TAKX_PROTO_TOOLCHAIN_ID  only for migrate: the toolchain image id that keys
                            of schema 1 were derived from; default: the id
                            recorded in status/images.json. It no longer
@@ -81,7 +96,14 @@ Post-restore check. A provider whose recipe has a cheap re-check of an
 existing output names it in providers.json ('verify': the command its lane
 runs after a build). restore runs it in the toolchain image after the tree is
 in place and before the status file says ok; a rejected tree is taken out
-again and the restore fails, so the lane builds.
+again and the restore fails, so the lane builds. A lane whose acceptance
+check is its own (lane1.sh: the receipt check of sqlcipher, cesium-acq, cesium
+and kml) hands it over instead: everything after `--verify-with` is one
+command, run on the host as it stands (the lane includes its toolchain
+wrapper), at the same point and with the same meaning: exit 0 accepts, exit 1
+rejects the entry, anything else means the check could not be run and judges
+nothing. `--no-verify` and TAKX_PROTO_CACHE_VERIFY=off skip both. A provider
+with neither is trusted on the digests of its bundle alone.
 
 Replacing an entry. An entry under a key is never overwritten, with one
 exception. When restore pulls an entry and has to refuse it, it notes the
@@ -107,7 +129,8 @@ adds one small layer with the new meta.json and labels.
 
 Layout (light hexagonal): the functions up to 'Adapters' are the pure core
 (no I/O); WorkTree, DockerRegistry and ToolchainRunner are the adapters behind
-three small ports; ProviderCache is the application service; main() is the CLI.
+three small ports, LaneCheck is the adapter for a command a lane brings;
+ProviderCache is the application service; main() is the CLI.
 
 The digests checked on restore are stored in the same image as the archive,
 so they detect corruption and mix-ups, not a hostile registry: whoever may
@@ -1237,6 +1260,32 @@ class DockerRegistry:
             self._run('rmi', ref, check=False)
 
 
+def run_logged(command, log, heading, timeout, name, stopped=None):
+    """Exit status of `command`: no input, its own process group, its output
+    appended to `log` below `heading`. A command that does not finish in
+    `timeout` seconds is killed with everything it started, `stopped` (if
+    any) is called, and that is a CacheError, as is one that cannot start."""
+    try:
+        with open(log, 'ab') as stream:
+            stream.write(('\n===== provider-cache restore %s: %s\n' % (name, heading)).encode())
+            stream.flush()
+            process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stream,
+                                       stderr=subprocess.STDOUT, start_new_session=True)
+            try:
+                return process.wait(timeout)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, 9)
+                except OSError:
+                    pass  # it ended in between
+                process.wait()
+                if stopped is not None:
+                    stopped()
+                raise CacheError('the check of %s did not finish in %d s' % (name, timeout))
+    except OSError as error:
+        raise CacheError('the check of %s could not be started: %s' % (name, error))
+
+
 class ToolchainRunner:
     """Port for the recipe's own re-check: one command in the toolchain image,
     through run-in-toolchain.sh like every lane step."""
@@ -1251,25 +1300,26 @@ class ToolchainRunner:
         for item in env:
             command += ['-e', item]
         command += ['--', *argv]
-        try:
-            with open(log, 'ab') as stream:
-                stream.write(('\n===== provider-cache restore %s: %s\n' % (name, ' '.join(argv))).encode())
-                stream.flush()
-                process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stream,
-                                           stderr=subprocess.STDOUT, start_new_session=True)
-                try:
-                    return process.wait(self.timeout)
-                except subprocess.TimeoutExpired:
-                    try:
-                        os.killpg(process.pid, 9)
-                    except OSError:
-                        pass  # it ended in between
-                    process.wait()
-                    subprocess.run([self.docker, 'rm', '-f', container], stdin=subprocess.DEVNULL,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-                    raise CacheError('the check of %s did not finish in %d s' % (name, self.timeout))
-        except OSError as error:
-            raise CacheError('the check of %s could not be started: %s' % (name, error))
+
+        def stopped():
+            subprocess.run([self.docker, 'rm', '-f', container], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+        return run_logged(command, log, ' '.join(argv), self.timeout, name, stopped)
+
+
+class LaneCheck:
+    """A check the lane brings itself (restore --verify-with): one command on
+    the host, word for word. The lane includes its toolchain wrapper, so a
+    container of a command that had to be killed is the lane's to remove."""
+
+    def __init__(self, command, timeout=900):
+        self.command, self.timeout = [str(word) for word in command], timeout
+
+    def run(self, name, log):
+        """Exit status of the command; its output is appended to `log`."""
+        heading = 'the lane\'s own check (%s, %d words)' % (self.command[0], len(self.command))
+        return run_logged(self.command, log, heading, self.timeout, name)
 
 
 # ---------------------------------------------------------------------------
@@ -1283,7 +1333,7 @@ class ProviderCache:
         self.prefix = registry_prefix or DEFAULT_REGISTRY
         self.enabled = self.prefix != 'off'
         self.legacy_id = legacy_toolchain
-        self.verify, self.rerecord = verify, False
+        self.verify, self.rerecord, self.lane_check = verify, False, None
         self.log = log or (lambda message: print(message, file=sys.stderr))
         self._keys, self._context, self._legacy = {}, None, {}
 
@@ -1556,25 +1606,33 @@ class ProviderCache:
                                      'reason': str(error)[:300], 'at': int(time.time())})
 
     def _checker(self, name):
-        """The recipe's own re-check of P/<name> as a callable, or None."""
+        """(callable or None, what passed) for the checks of a restored
+        P/<name>: the recipe's own re-check (providers.json 'verify'), then
+        the command a lane gave with --verify-with."""
+        log = self.tree.root / 'logs' / (name + '-verify.log')
+        checks = []
         call = self.manifest['providers'][name].get('verify')
-        if call is None or not self.verify or self.runner is None:
-            return None
-        values = dict(self.manifest['variables'], root=str(self.tree.root), repo=str(self.tree.repo))
-        env = [render(token, values) for token in call['env']]
-        argv = [render(token, values) for token in call['argv']]
+        if call is not None and self.verify and self.runner is not None:
+            values = dict(self.manifest['variables'], root=str(self.tree.root), repo=str(self.tree.repo))
+            env = [render(token, values) for token in call['env']]
+            argv = [render(token, values) for token in call['argv']]
+            checks.append(('the recipe\'s own check', lambda: self.runner.run(name, env, argv, log)))
+        if self.lane_check is not None and self.verify:
+            checks.append(('the lane\'s own check', lambda: self.lane_check.run(name, log)))
+        if not checks:
+            return None, ''
 
         def check():
             (self.tree.root / 'logs').mkdir(exist_ok=True)
-            code = self.runner.run(name, env, argv, self.tree.root / 'logs' / (name + '-verify.log'))
-            if code == 1:
-                raise Rejected('%s: the recipe\'s own check rejects the restored output; see logs/%s-verify.log'
-                               % (name, name))
-            if code != 0:
-                raise CacheError('%s: the recipe\'s own check could not be run here (exit %s); see '
-                                 'logs/%s-verify.log' % (name, code, name))
+            for whose, run in checks:
+                code = run()
+                if code == 1:
+                    raise Rejected('%s: %s rejects the restored output; see logs/%s-verify.log' % (name, whose, name))
+                if code != 0:
+                    raise CacheError('%s: %s could not be run here (exit %s); see logs/%s-verify.log'
+                                     % (name, whose, code, name))
 
-        return check
+        return check, ''.join(', %s passed' % whose for whose, _ in checks)
 
     def restore(self, name):
         entry = self.manifest['providers'].get(name)
@@ -1618,7 +1676,7 @@ class ProviderCache:
                 raise CacheError('%s: a prerequisite changed during the restore' % name)
             status['restored_from'] = ref
             status['cache_key'] = key
-            check = self._checker(name)
+            check, passed = self._checker(name)
             try:
                 self.tree.install(tree, name, json.dumps(status, indent=1) + '\n', check)
             except FileExistsError:
@@ -1628,8 +1686,7 @@ class ProviderCache:
                 raise
         finally:
             shutil.rmtree(work, ignore_errors=True)
-        self.log('provider-cache: restored %s from %s (%d entries verified%s)'
-                 % (name, ref, len(expected), '' if check is None else ', the recipe\'s own check passed'))
+        self.log('provider-cache: restored %s from %s (%d entries verified%s)' % (name, ref, len(expected), passed))
         return ref
 
     # -- migrate ----------------------------------------------------------------
@@ -1729,14 +1786,18 @@ def build_service(environ=None):
 
 def main(argv=None, service=None, out=None):
     out = out or sys.stdout
+    argv, command = list(sys.argv[1:] if argv is None else argv), None
+    if '--verify-with' in argv:  # everything after it is the lane's command, whatever its words look like
+        argv, command = argv[:argv.index('--verify-with')], argv[argv.index('--verify-with') + 1:]
     parser = argparse.ArgumentParser(prog='provider_cache.py', description=__doc__.split('\n')[0])
     commands = parser.add_subparsers(dest='command', required=True)
     key = commands.add_parser('key', help='print the cache key of each named provider')
     key.add_argument('--explain', action='store_true', help='print the key inputs as JSON')
     key.add_argument('names', nargs='*')
     restore = commands.add_parser('restore', help='pull, verify and install each named provider')
-    restore.add_argument('--no-verify', action='store_true', help='skip the recipe\'s own post-restore check')
-    restore.add_argument('names', nargs='*')
+    restore.add_argument('--no-verify', action='store_true', help='skip the post-restore checks')
+    restore.add_argument('names', nargs='*', help='with one name: --verify-with COMMAND [ARG...] may follow; '
+                                                  'that command must accept the restored tree')
     commands.add_parser('push', help='save each named provider that is ok').add_argument('names', nargs='*')
     migrate = commands.add_parser('migrate', help='re-address bundles saved under schema-1 keys')
     migrate.add_argument('--from-toolchain-id', metavar='ID', help='the image id those keys named')
@@ -1750,6 +1811,8 @@ def main(argv=None, service=None, out=None):
                            help='probe the local image and accept it as the toolchain of this work root')
     toolchain.add_argument('--probe-script', action='store_true', help='print the probe and do nothing else')
     args = parser.parse_args(argv)
+    if command is not None and (args.command != 'restore' or len(args.names) != 1 or not command):
+        parser.error('--verify-with needs `restore`, one NAME before it and a command after it')
     try:
         service = service or build_service()
         providers = service.manifest['providers']
@@ -1795,6 +1858,8 @@ def main(argv=None, service=None, out=None):
     worst = DONE
     if args.command == 'restore' and args.no_verify:
         service.verify = False
+    if command is not None:
+        service.lane_check = LaneCheck(command, getattr(service.runner, 'timeout', 900))
     if args.command == 'migrate' and args.from_toolchain_id:
         service.legacy_id = args.from_toolchain_id
     action = {'restore': service.restore, 'push': service.push, 'migrate': service.migrate}[args.command]
