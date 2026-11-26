@@ -10,8 +10,7 @@ bounded="${here}/agent-diagnostic-command.py"
 # Agent logs are untrusted. Omit the whole stream on authentication markers,
 # including JSON/header variants, before the existing config-secret redactor.
 redact() {
-  local args=()
-  [[ "${1}" == all ]] || args=(--tail "${1}")
+  local lines="$1"
   python3 -c '
 import re, sys
 data = sys.stdin.buffer.read(1048577)
@@ -27,11 +26,22 @@ if re.search(r"authorization|bearer|basic|registry[_. -]?(?:auth|password|creden
     print("Omitted authentication-bearing agent diagnostic")
 else:
     sys.stdout.write(text)
-' | "${filter}" "${args[@]}"
+' | {
+    if [[ "${lines}" == all ]]; then
+      "${filter}"
+    else
+      "${filter}" --tail "${lines}"
+    fi
+  }
 }
 if [[ "${UPGRADE_AGENT_DIAGNOSTICS_INNER:-}" != 1 ]]; then
   log="$(mktemp)"
-  setsid env UPGRADE_AGENT_DIAGNOSTICS_INNER=1 bash "$0" "${1:-unknown}" >"${log}" 2>&1 &
+  # Launch a new process group so the deadline also stops its descendants.
+  UPGRADE_AGENT_DIAGNOSTICS_INNER=1 python3 -c '
+import os, sys
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])
+' bash "$0" "${1:-unknown}" >"${log}" 2>&1 &
   pid=$!
   for ((elapsed = 0; elapsed < 30; elapsed++)); do
     kill -0 "${pid}" 2>/dev/null || break
@@ -78,12 +88,12 @@ if capture 'Docker node discovery' "${scratch}/nodes" docker ps --filter label=a
 fi
 node_count=0
 physical_needed=0
-declare -A eligible_nodes=()
+eligible_nodes=""
 while IFS= read -r node; do
   [[ "${node}" =~ ^k3d-[a-zA-Z0-9_.-]+-(server|agent)-[0-9]+$ ]] || continue
   node_count=$((node_count + 1))
   [[ "${node_count}" -le 2 ]] || break
-  eligible_nodes["${node}"]=1
+  eligible_nodes+="${node}"$'\n'
   if ! capture "Node CRI container list (${node})" "${scratch}/cri" docker exec "${node}" k3s crictl ps -a -o json; then
     physical_needed=1
     continue
@@ -128,7 +138,7 @@ physical_logs() {
     return
   fi
   while IFS=$'\t' read -r node directory attempt; do
-    [[ -n "${eligible_nodes[${node}]:-}" ]] || { echo 'Node physical agent selection: omitted undiscovered node'; continue; }
+    grep -Fxq -- "${node}" <<<"${eligible_nodes}" || { echo 'Node physical agent selection: omitted undiscovered node'; continue; }
     file="/var/log/pods/${directory}/server/${attempt}.log"
     echo "Node physical agent attempt: node=${node} pod-directory=${directory} container=server attempt=${attempt}"
     # Refuse symlink traversal and read only this exact UID/attempt file.
