@@ -36,6 +36,9 @@ Environment of 'run':
                            (the hand-pushed amd64 cache); optional
   TAKX_CI_REPO             repository the stages run from (default: the one
                            that holds this file)
+  TAKX_CI_IMAGE_SOURCE     reference | ci-reused | ci-built (ci/enter.sh). With
+                           the last two the stages get
+                           TAKX_CLIENT_LOCK_LINEAGE=ci (../stages/client.sh)
 
 An architecture with override patches (arm64) is built from its patched copy
 of the tree (../arch_tree.py): every stage script is started from that copy,
@@ -335,6 +338,12 @@ def run_group(name, root, proto):
                                               'them failed or did not push; nothing was run' % ', '.join(missing))
     else:
         env = dict(os.environ, TAKX_PROTO_ROOT=str(root), **NO_WAIT)
+        # Unless the hand-built images were usable (and with them the providers
+        # of the hand-pushed cache), the providers are the workflow's own
+        # builds: the client stage compares with the lock of that lineage.
+        if os.environ.get('TAKX_CI_IMAGE_SOURCE', '') not in ('', 'reference'):
+            env['TAKX_CLIENT_LOCK_LINEAGE'] = 'ci'
+        record['client_lock_lineage'] = env.get('TAKX_CLIENT_LOCK_LINEAGE', '')
         for command in config['run']:
             argv = [str(effective / 'stages' / command[0])] + command[1:]
             print('ci: running %s' % ' '.join(command), flush=True)

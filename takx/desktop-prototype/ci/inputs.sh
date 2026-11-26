@@ -46,7 +46,7 @@
 # *.json below takx/ outside the directories of other parts of the prototype
 # (all recipe locks are among them), the fetch scripts and the override patches
 # of the architecture. The per-architecture client locks
-# (client/inputs.lock.<arch>.json) are left out: the client stage writes them
+# (client/inputs.lock.<arch>[.<lineage>].json) are left out: the client stage writes them
 # and the fetch does not read them. The key names where the inputs are stored;
 # it is not a pin.
 # Every recipe still verifies each input against its own lock when it builds.
@@ -183,7 +183,7 @@ PY
       takx/desktop-prototype/fetch_inputs.py takx/desktop-prototype/fetch.sh takx/desktop-prototype/arch.sh \
       takx/desktop-prototype/arch_tree.py takx/desktop-prototype/run-in-toolchain.sh \
       "takx/desktop-prototype/overrides/${arch}" \
-      | grep -Ev $'\ttakx/desktop-prototype/((server|image|zarf|chart|bundle|assemble|ci)/|client/inputs\\.lock\\.[a-z0-9]+\\.json$)')"
+      | grep -Ev $'\ttakx/desktop-prototype/((server|image|zarf|chart|bundle|assemble|ci)/|client/inputs\\.lock\\.[a-z0-9]+(\\.[a-z0-9]+)?\\.json$)')"
     grep -q $'\tupstream/atak-civ$' <<<"${listing}" || { say "upstream/atak-civ is not in the index of ${repo}"; exit 1; }
     key="$(printf 'inputs 1\n%s\n%s\n%s\n' "${arch}" "$3" "${listing}" | sha256sum | cut -c1-16)"
     echo "${CI_IMAGES}/inputs:${arch}-${key}"

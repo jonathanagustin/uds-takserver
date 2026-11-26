@@ -146,8 +146,37 @@ class StageHandOver(unittest.TestCase):
     def test_tracked_lock_of_the_client_is_per_architecture(self):
         text = (HERE / 'stages/client.sh').read_text()
         self.assertIn('tracked_lock="$repo/takx/desktop-prototype/client/inputs.lock.json"', text)
-        self.assertIn('tracked_lock="${lock_home}/takx/desktop-prototype/client/inputs.lock.${arch}.json"', text)
-        self.assertIn('if [[ "${arch}" != amd64 ]]; then', text)
+        self.assertIn('tracked_lock="${lock_home}/takx/desktop-prototype/client/inputs.lock.${arch}${lineage:+.${lineage}}.json"',
+                      text)
+        self.assertIn('if [[ "${arch}" != amd64 || -n "${lineage}" ]]; then', text)
+
+    def test_tracked_lock_of_the_client_is_per_build_lineage(self):
+        # The hand-built amd64 lock is not the lock of the workflow's providers, and is not edited for them.
+        names = sorted(p.name for p in (HERE / 'client').glob('inputs.lock*.json'))
+        self.assertEqual(names, ['inputs.lock.amd64.ci.json', 'inputs.lock.arm64.ci.json', 'inputs.lock.json'])
+        locks = {name: json.loads((HERE / 'client' / name).read_text()) for name in names}
+        built = ('proto-P:commoncommo/install/java/jcommoncommo.jar', 'proto-P:kernel-java/classpath/gdal-2.4.4-mod-java.jar',
+                 'proto-P:kernel-java/classpath/assimp-4.0.1-mod-jassimp-java.jar')
+        for name in built:
+            digests = {lock['inputs']['classpath-jar'][name] for lock in locks.values()}
+            self.assertEqual(len(digests), 3, 'each lineage built %s itself' % name)
+        for lock in locks.values():
+            self.assertEqual(lock['official_revision'], '0b59a9bb2d0e90dc35c9edfff1c2056daab2b713')
+        # Everything that is fetched or checked out, not built, is the same in the two amd64 lineages.
+        hand, ci = locks['inputs.lock.json'], locks['inputs.lock.amd64.ci.json']
+        for group in hand['inputs']:
+            differing = sorted(key for key in set(hand['inputs'][group]) | set(ci['inputs'][group])
+                               if hand['inputs'][group].get(key) != ci['inputs'][group].get(key))
+            expected = list(built) if group == 'classpath-jar' else \
+                ['proto-P:kernel-composed-java/kernel-8.30.5-composed-classes.jar'] if group == 'composed-kernel-jar' else []
+            self.assertEqual(differing, sorted(expected), group)
+        # The workflow names its lineage; the stage refuses a name that could leave the directory.
+        self.assertIn("env['TAKX_CLIENT_LOCK_LINEAGE'] = 'ci'", (HERE / 'ci/pipeline.py').read_text())
+        refused = subprocess.run(['bash', str(HERE / 'stages/client.sh'), 'lock'], capture_output=True, text=True, timeout=60,
+                                 env=dict(os.environ, TAKX_CLIENT_LOCK_LINEAGE='../x', TAKX_PROTO_ARCH='amd64',
+                                          TAKX_PROTO_ROOT=tempfile.gettempdir() + '/takx-no-such-root'))
+        self.assertEqual(refused.returncode, 2, refused.stderr)
+        self.assertIn('TAKX_CLIENT_LOCK_LINEAGE must be lowercase letters and digits', refused.stderr)
 
 
 class Overrides(unittest.TestCase):
@@ -720,6 +749,18 @@ class PipelineRun(Fixture):
         # The second cache is asked for the group's own provider; the stage restores from the first itself.
         self.assertEqual(self.lines('cache-calls'), ['second restore base %s/provider_cache.py' % self.proto])
 
+    def test_stages_are_told_the_lineage_of_the_providers_they_consume(self):
+        stage = self.proto / 'stages/lane.sh'
+        stage.write_text('#!/bin/bash\necho "lineage=${TAKX_CLIENT_LOCK_LINEAGE-unset}" >> "$TAKX_PROTO_ROOT/stage-calls"\n')
+        for source, expected in (('ci-reused', 'ci'), ('ci-built', 'ci'), ('reference', ''), ('', '')):
+            with self.subTest(source=source):
+                shutil.rmtree(self.root, ignore_errors=True)
+                with mock.patch.dict(os.environ):
+                    os.environ.pop('TAKX_CLIENT_LOCK_LINEAGE', None)
+                    code, record = self.run_group('first', 'amd64', TAKX_CI_IMAGE_SOURCE=source)
+                self.assertEqual((code, record['client_lock_lineage']), (0, expected))
+                self.assertEqual(self.lines('stage-calls'), ['lineage=%s' % (expected or 'unset')])
+
     def test_arm64_runs_everything_from_the_patched_tree(self):
         code, record = self.run_group('first', 'arm64')
         proto = self.tree / 'takx/desktop-prototype'
@@ -859,6 +900,59 @@ class InputsStore(unittest.TestCase):
         enter = (HERE / 'ci/enter.sh').read_text()
         self.assertLess(enter.index('inputs.sh" seed '), enter.index('"${proto}/fetch.sh"'))
         self.assertLess(enter.index('"${proto}/fetch.sh"'), enter.index('inputs.sh" save '))
+
+
+class StockLoaderDirectory(unittest.TestCase):
+    """The Kernel controls must name the extraction directory as the stock loader does.
+
+    Found on amd64 in the workflow: the composed Kernel JAR had the MD5
+    04d88bf9..., the loader extracted into .../engine/4d88bf9.../lib/linux64 and
+    the controls put .../engine/04d88bf9.../lib/linux64 on java.library.path, so
+    gdalJNI.isAvailable() was false in six controls.
+    """
+
+    @staticmethod
+    def module(name):
+        spec = importlib.util.spec_from_file_location('takx_proto_kernel_' + name, HERE / 'kernel' / (name + '.py'))
+        loaded = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(loaded)
+        return loaded
+
+    def test_one_leading_zero_of_the_md5_is_dropped_as_hashing_utils_does(self):
+        samples, number = {}, 0
+        while len(samples) < 3:
+            data = b'kernel jar %d' % number
+            value = hashlib.md5(data).hexdigest()
+            kind = 'two' if value.startswith('00') else 'one' if value.startswith('0') else 'none'
+            samples.setdefault(kind, (data, value))
+            number += 1
+        with tempfile.TemporaryDirectory() as directory:
+            for name in ('controls', 'compose'):
+                function = self.module(name).stock_loader_directory_name
+                for kind, (data, value) in samples.items():
+                    with self.subTest(module=name, md5=kind):
+                        jar = Path(directory) / 'kernel.jar'
+                        jar.write_bytes(data)
+                        # Only the first zero goes: a digest that starts with 00 keeps one.
+                        expected = value if kind == 'none' else value[1:]
+                        self.assertEqual(function(jar), expected)
+                        self.assertEqual(len(function(jar)), 32 if kind == 'none' else 31)
+
+    def test_neither_script_predicts_the_directory_from_the_plain_digest(self):
+        for name in ('controls.py', 'compose.py'):
+            text = (HERE / 'kernel' / name).read_text()
+            self.assertEqual(text.count('hashlib.md5('), 1, name)
+            self.assertIn('stock_loader_directory_name(', text.split('hashlib.md5(')[1], name)
+
+    @unittest.skipUnless((REPO / 'upstream/atak-civ/takkernel/engine/src/main/java/com/atakmap/filesystem/HashingUtils.java')
+                         .is_file(), 'needs the atak-civ submodule')
+    def test_rule_is_the_one_in_the_pinned_kernel_source(self):
+        base = REPO / 'upstream/atak-civ/takkernel/engine/src'
+        hashing = ' '.join((base / 'main/java/com/atakmap/filesystem/HashingUtils.java').read_text().split())
+        self.assertIn('if (checksum.startsWith("0")) checksum = checksum.substring(1);', hashing)
+        loader = ' '.join((base / 'jre/java/com/atakmap/map/EngineLibrary.java').read_text().split())
+        self.assertIn('id = HashingUtils.md5sum(d);', loader)
+        self.assertIn('combine(System.getProperty("java.io.tmpdir"), "takkernel", "engine", id)', loader)
 
 
 class ElfAudit(unittest.TestCase):

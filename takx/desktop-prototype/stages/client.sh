@@ -19,8 +19,8 @@
 #   package       bootstrap, preferences-factory, platform, client and
 #                 processmanager JARs with their resources.
 #   lock          write P/takx57/inputs.lock.json and compare it with the
-#                 tracked client/inputs.lock.json (on arm64:
-#                 client/inputs.lock.arm64.json).
+#                 tracked lock of this architecture and build lineage (below;
+#                 by default client/inputs.lock.json on amd64).
 #   all           everything above, in that order.
 #
 # The work is done by ../client/build.py and ../client/resolve_runtime.py
@@ -57,6 +57,10 @@
 #   TAKX_CLIENT_RECORD_LOCK  1 replaces a tracked lock that differs from this
 #                            run. Without it a difference fails the stage. A
 #                            missing tracked lock is always recorded.
+#   TAKX_CLIENT_LOCK_LINEAGE name of the set of provider builds this run
+#                            consumes, when it is not the hand-built one
+#                            (lowercase letters and digits; the opt-in workflow
+#                            sets "ci"). Selects the tracked lock, see below.
 #
 # A step whose receipt says ok is skipped; a Kernel-dependent step is skipped
 # only if it was built against the Kernel JAR that is current now.
@@ -79,13 +83,25 @@ resolve="${repo}/takx/desktop-prototype/client/resolve_runtime.py"
 # architecture uses client/inputs.lock.<arch>.json of the base repository (the
 # stage itself runs from the patched copy of the tree, see ../arch.sh), so a
 # first run records it where it can be reviewed and committed.
+#
+# It is also per build lineage. The lock pins the digests of JARs the provider
+# stages build (jcommoncommo.jar, the GDAL and jassimp JARs), and those carry
+# the build time: two builds of the same sources never have the same digest.
+# client/inputs.lock.json is the record of the hand-built amd64 providers. A
+# run that consumes another set of provider builds names it in
+# TAKX_CLIENT_LOCK_LINEAGE and is compared with
+# client/inputs.lock.<arch>.<lineage>.json instead; the opt-in workflow, whose
+# providers come from its own cache, uses "ci". No lock is edited to fit a run.
 arch="$(takx_arch)"
+lineage="${TAKX_CLIENT_LOCK_LINEAGE:-}"
+[[ "${lineage}" =~ ^[a-z0-9]*$ ]] || {
+  echo "client.sh: TAKX_CLIENT_LOCK_LINEAGE must be lowercase letters and digits, not '${lineage}'" >&2; exit 2; }
 # shellcheck disable=SC2250 # test_arch.py (StageHandOver) asserts this text unbraced
 tracked_lock="$repo/takx/desktop-prototype/client/inputs.lock.json"
-if [[ "${arch}" != amd64 ]]; then
+if [[ "${arch}" != amd64 || -n "${lineage}" ]]; then
   lock_home="${repo}"
   [[ -f "${repo}/.takx-arch-tree.base" ]] && lock_home="$(<"${repo}/.takx-arch-tree.base")"
-  tracked_lock="${lock_home}/takx/desktop-prototype/client/inputs.lock.${arch}.json"
+  tracked_lock="${lock_home}/takx/desktop-prototype/client/inputs.lock.${arch}${lineage:+.${lineage}}.json"
 fi
 out="${root}/P/takx57"
 cpus="${TAKX_CLIENT_CPUS:-1.5}"

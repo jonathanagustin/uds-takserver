@@ -47,6 +47,22 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def stock_loader_directory_name(jar):
+    """Name of the directory below ${java.io.tmpdir}/takkernel/engine/ that the stock loader extracts into.
+
+    EngineLibrary.getRuntimeDirectory() names it HashingUtils.md5sum(jar), and
+    that method of Kernel 8.30.5 removes one leading zero from the MD5 hex
+    string ("mimic the previous implementation of the md5sum which used
+    BigInteger"). A JAR whose MD5 starts with 0, one in sixteen, is therefore
+    extracted into a 31-character directory. Predicting the full digest instead
+    points java.library.path at a directory that does not exist; the natives
+    still load, by absolute path, but the GDAL binding's own
+    System.loadLibrary("gdalalljni") fails and gdalJNI.isAvailable() is false.
+    """
+    value = hashlib.md5(Path(jar).read_bytes()).hexdigest()
+    return value[1:] if value.startswith('0') else value
+
+
 def mangle(text):
     out = []
     for ch in text:
@@ -159,7 +175,7 @@ def main():
                                  '-cp', os.pathsep.join(map(str, [*cp_sdk, common_jar])), '-d', classes, *control_sources], strict=False)
     if not results['compile-controls']['passed']:
         raise SystemExit(1)
-    library_md5 = hashlib.md5(jar.read_bytes()).hexdigest()
+    library_md5 = stock_loader_directory_name(jar)
 
     def jvm(app, extra_library_path=()):
         for name in ('home', 'data', 'tmp'):

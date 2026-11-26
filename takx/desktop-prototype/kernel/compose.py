@@ -63,6 +63,16 @@ def sha(path):
     return h.hexdigest()
 
 
+def stock_loader_directory_name(jar):
+    """Directory name the stock EngineLibrary loader derives from the Kernel JAR.
+
+    HashingUtils.md5sum of Kernel 8.30.5 removes one leading zero from the MD5
+    hex string; kernel/controls.py has the details and uses the same rule.
+    """
+    value = hashlib.md5(Path(jar).read_bytes()).hexdigest()
+    return value[1:] if value.startswith('0') else value
+
+
 def load(path):
     return json.loads(Path(path).read_text())
 
@@ -531,7 +541,7 @@ def phase_package(args):
                       'native_resource_order': lock['native_order'], 'native_resources': native_manifest,
                       'runtime_resource_entries': len(resources), 'class_count': len(classes),
                       'stock_loader_java_library_path': '${java.io.tmpdir}/takkernel/engine/' +
-                          hashlib.md5(artifact.read_bytes()).hexdigest() + '/lib/linux64'},
+                          stock_loader_directory_name(artifact) + '/lib/linux64'},
         'outputs': {'jar': {'path': str(artifact), 'sha256': sha(artifact), 'bytes': artifact.stat().st_size},
                     'third_party': dependencies, 'libraries': {name: {'path': str(lib_dir / name), 'sha256': digest}
                                                               for name, digest in native_manifest.items()},

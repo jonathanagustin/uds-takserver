@@ -123,12 +123,25 @@ was started on arm64.
 - **JDK identity.** The specification lock pins four files of the x64 Temurin
   17.0.21+9. On arm64 `build.py` checks the same four files of the aarch64
   archive against `../inputs.arm64.lock.json`; the x64 pins are not reused.
-- **Tracked lock.** amd64 compares with `inputs.lock.json`. arm64 compares with
-  `inputs.lock.arm64.json`. That file is the lock the two workflow runs above
-  wrote, byte for byte the same in both (SHA-256 `35cb6fe7...e4b2ac`), although
-  the second run rebuilt the composed Kernel JAR
-  (`kernel-8.30.5-linux-arm64-public-cpu.jar`, SHA-256 `8ee97f9a...fa7c4` in
-  both). It is the record of that arm64 build, not a validation of it.
+- **Tracked lock.** The lock is per architecture and per build lineage,
+  because the JARs the provider stages build carry their build time and never
+  have the same digest twice. `inputs.lock.json` is the record of the
+  hand-built amd64 providers. A run that names another set of provider builds
+  in `TAKX_CLIENT_LOCK_LINEAGE` compares with
+  `inputs.lock.<arch>.<lineage>.json`; the opt-in workflow, whose providers
+  come from its own cache, uses `ci`:
+  - `inputs.lock.arm64.ci.json` is the lock the two workflow runs above wrote,
+    byte for byte the same in both (SHA-256 `35cb6fe7...e4b2ac`), although the
+    second run rebuilt the composed Kernel JAR
+    (`kernel-8.30.5-linux-arm64-public-cpu.jar`, SHA-256 `8ee97f9a...fa7c4` in
+    both).
+  - `inputs.lock.amd64.ci.json` is the lock the amd64 leg wrote in runs
+    45714468510, 45721036467 and 45726536612 (SHA-256 `adbb4402...96c1` in all
+    three). It differs from `inputs.lock.json` in four entries only: the three
+    provider-built JARs and the composed Kernel classes JAR.
+
+  Each is the record of that build, not a validation of it, and neither
+  replaces `inputs.lock.json`.
 - **Native classifier JARs.** The official `gradle/binCreator.gradle` declares
   only `natives-linux-amd64` (JOGL, GlueGen, JOCL) and `linux-x86_64`
   (FFmpeg). On arm64 `resolve_runtime.py` requests `natives-linux-aarch64` and
