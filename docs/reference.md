@@ -12,9 +12,10 @@ Operational reference moved out of the top-level README: supported platforms, au
 | `amd64` (x86_64) | yes | yes | install and upgrade |
 | `arm64` (aarch64) | yes | yes | install and upgrade |
 
-The images are multi-arch: one tag serves both. Zarf packages are per architecture, and `uds run create-dev-package` builds for the machine you run it on. To build for the other one:
+The images are multi-arch: one tag serves both. Zarf packages are per architecture, and `uds run create-dev-package` builds for the machine you run it on. For a cross-architecture build, generate the Pepr admission chart before calling Zarf so package creation can include it.
 
 ```bash
+bash pepr/build.sh
 uds zarf package create . --flavor upstream --architecture arm64 --confirm
 ```
 

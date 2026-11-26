@@ -34,8 +34,8 @@ components:
             targetPath: .
       # Admission module. Installed before the upstream chart so that every
       # TAK pod is created with the init container that renders the OIDC client
-      # secret into CoreConfig.xml. The chart is built by pepr/build.sh when the
-      # package is created. Zarf waits for its Deployment to be ready.
+      # secret into CoreConfig.xml. The chart is built by pepr/build.sh before
+      # Zarf creates the package. Zarf waits for its Deployment to be ready.
       - name: takserver-oidc
         namespace: pepr-system
         version: 0.1.0

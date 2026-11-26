@@ -99,12 +99,6 @@ components:
         kind: Package
         name: takserver
         namespace: takserver
-    actions:
-      onCreate:
-        before:
-          - description: Build the OIDC render admission module
-            dir: pepr
-            cmd: ./build.sh
 
     # TAK images are built from the upstream source and published under this
     # repository. The tag is literal. Zarf 0.87 parses image refs before it

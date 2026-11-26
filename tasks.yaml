@@ -67,6 +67,8 @@ tasks:
           if [ -n "${RESOLVED_CREATE_OPTIONS:-}" ]; then echo false; else ./.github/scripts/dev-package.sh prebuilt; fi
         setVariables:
           - name: DEV_PACKAGE_PREBUILT
+      - cmd: bash pepr/build.sh
+        if: ${{ ne .variables.DEV_PACKAGE_PREBUILT "true" }}
       - task: create:package
         if: ${{ ne .variables.DEV_PACKAGE_PREBUILT "true" }}
         with:
@@ -239,6 +241,7 @@ tasks:
   - name: publish-package
     description: Create the package with its Zarf Syft SBOM, test it, and publish it
     actions:
+      - cmd: bash pepr/build.sh
       - description: Create the package and the Syft SBOM Zarf writes under zarf-sbom
         task: create:package
         with:

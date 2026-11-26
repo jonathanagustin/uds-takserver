@@ -37,6 +37,7 @@ run uds zarf package deploy "oci://ghcr.io/defenseunicorns/dev/uds/checkpoints/k
   --architecture "${arch}" --confirm --features values=true
 ./.github/scripts/fit-runner.sh >> "${log}" 2>&1
 
+run bash pepr/build.sh
 run uds zarf package create . --confirm --architecture "${arch}" --flavor "${flavor}" --features values=true \
   --skip-sbom --set DOMAIN="${domain}" --set TAK_IMAGE_TAG="${tak_tag}" "${create_options[@]}"
 

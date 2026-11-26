@@ -168,6 +168,7 @@ jobs:
         run: |
           set -euo pipefail
           uds zarf tools yq -i '.metadata.version = strenv(RELEASE_VERSION)' zarf.yaml
+          bash pepr/build.sh
           uds zarf package create . --flavor upstream --architecture "${ARCH}" \
             --confirm --features values=true \
             --set DOMAIN=uds.dev --set TAK_IMAGE_TAG=5.7-RELEASE-14

@@ -186,7 +186,7 @@ class BetaStagingTransformTests(unittest.TestCase):
             self.assertNotIn("healthChecks", by_name["cloudtak"])
             self.assertEqual(len(by_name["takserver"]["actions"]["onDeploy"]["onSuccess"]), 2)
             self.assertEqual(len(by_name["cloudtak"]["actions"]["onDeploy"]["onSuccess"]), 2)
-            self.assertEqual(len(by_name["takserver"]["actions"]["onCreate"]["before"]), 1)
+            self.assertNotIn("onCreate", by_name["takserver"]["actions"])
 
 
 @unittest.skipUnless(shutil.which("uds") or os.environ.get("CI"), "uds CLI is not installed")
