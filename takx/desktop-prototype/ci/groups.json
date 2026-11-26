@@ -12,7 +12,10 @@
   "'runtime' pulls the runtime image as well. 'audit' names further directories",
   "below P/ whose ELF objects are counted by machine type after the run (the",
   "group's own providers always are). pipeline.py check verifies all of this",
-  "against ../providers.json."
+  "against ../providers.json.",
+  "The boot group waits between 'start' and 'check': boot.sh check says ok only",
+  "for a JVM that has been up for more than 120 seconds with a mapped window, so",
+  "'wait 300' gives the client five minutes (it returns at once if the JVM ends)."
  ],
  "schema": 1,
  "waves": ["a", "b", "c", "d"],
@@ -68,7 +71,7 @@
    "restore": "all",
    "runtime": true,
    "after": "client",
-   "run": [["assemble.sh"], ["boot.sh", "start"], ["boot.sh", "check"], ["boot.sh", "stop"]]
+   "run": [["assemble.sh"], ["boot.sh", "start"], ["boot.sh", "wait", "300"], ["boot.sh", "check"], ["boot.sh", "stop"]]
   }
  }
 }

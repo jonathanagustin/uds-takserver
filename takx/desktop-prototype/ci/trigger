@@ -32,5 +32,9 @@
 #        kernel/controls.py did not (fixed). The client lock is now compared
 #        per build lineage (client/inputs.lock.<arch>.ci.json), so the amd64
 #        leg can go on to assembly and boot.
+# run 8: the same, with the boot group waiting before 'boot.sh check' (it says
+#        ok only for a JVM that has been up for more than 120 seconds) and the
+#        frame of the attempt kept as an artifact. Replaces run 7 while that
+#        was still queued.
 arches=amd64,arm64
 providers=cached

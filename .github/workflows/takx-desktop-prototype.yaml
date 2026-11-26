@@ -417,6 +417,18 @@ jobs:
           sudo find "${TAKX_PROTO_ROOT}/P/kernel-composed/controls" "${TAKX_PROTO_ROOT}/P/kernel-composed" -maxdepth 2 \
             -type f \( -name '*.log' -o -name 'hs_err*' \) -size -8M \
             -exec cp -t "${TAKX_PROTO_ROOT}/ci-receipts/kernel-controls" {} + 2>/dev/null || true
+          # What the boot attempt left: the frame boot.sh check grabbed from
+          # the X display and the GL facts of the attempt. A record of that
+          # one attempt under Xvfb and Mesa llvmpipe, not an acceptance.
+          sudo mkdir -p "${TAKX_PROTO_ROOT}/ci-receipts/boot"
+          sudo find "${TAKX_CI_REPO:-/nonexistent}/demo/out/takx" "${TAKX_PROTO_ROOT}"/overrides/*/tree/demo/out/takx \
+            -maxdepth 1 -type f -name 'boot-*-check.png' -size -16M \
+            -exec cp -t "${TAKX_PROTO_ROOT}/ci-receipts/boot" {} + 2>/dev/null || true
+          for attempt in "${TAKX_PROTO_ROOT}"/runs/boot-*; do
+            if sudo test -f "${attempt}/glxinfo.txt"; then
+              sudo cp "${attempt}/glxinfo.txt" "${TAKX_PROTO_ROOT}/ci-receipts/boot/$(basename "${attempt}")-glxinfo.txt" || true
+            fi
+          done
           # When a Kernel control did not pass: which gdalJNI class the JVM
           # loads, what the extracted natives lack in the runtime image, and a
           # probe JVM with the flags of the control (ci/diagnose-controls.sh).
