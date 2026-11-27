@@ -440,3 +440,23 @@ Six points of the deploy and of its review were taken up in the image and the ch
 - Installing and removing it interrupts every Authservice session in the cluster.
 - The image and the package are local. Publishing either needs issue #934 closed first: the licence gate must be clean, and it is not.
 - The whole-bundle path and the empty-cluster path were written from the repository's bundles and the sandbox recipe in `server/`; they have not run.
+
+## Re-check of 2026-11-27: the bridge's token check on a live deploy
+
+Image `takx-desktop:5.7-proto-b5385e92ddf1` (tree rebuilt with `TAKX_ASSEMBLE_FORCE=1`, so the denied font atlases are gone: licence gate 0 deny, 0 unknown, 44 review), package from `stages/package.sh create`, deployed with `--components takx-desktop-takclient,takx-desktop-identity` and removed again. The cluster had been restarted shortly before.
+
+| Check | Result |
+| --- | --- |
+| Pod IP port 6080 from the node's host namespace, no token | 401 |
+| Same, `Authorization: Bearer abc.def.ghi`, `Basic ...`, an `alg: none` token claiming the Admin group | 401 each |
+| WebSocket upgrade on `/websockify` without a token | 401 |
+| `/healthz` without a token | 200 |
+| Pod IP ports 4242 and 8087 from the host namespace | connection refused |
+| `selftest auth` (image, no cluster): quiet WebSocket 65 s, token expiry closing the socket, keys unreachable | pass |
+| Browser, `doug` (/UDS Core/Admin) | noVNC page, 1920x1080 canvas, WebSocket with 218 frames |
+| Browser, `mapuser` (CloudTAK users only) | Keycloak 403 "You do not have access to this application"; `/vnc.html` redirects to sign-in |
+| Session volume | `emptyDir` with `medium: Memory`; `/run/takx/session` is tmpfs |
+
+Not covered: a validly signed token with a wrong audience or the wrong group sent straight to the bridge (only the unit tests and the selftest cover those), HTTP/1.1 to the waypoint, renewal of a live TakClient.
+
+Platform finding from this run: after a VM restart the `Package` of this, `cloudtak` and `takserver` stayed `Failed` ("Keycloak request ... 503"). The waypoint's HBONE connection to Keycloak's port 15008 was refused until `istio-cni-node` and `ztunnel` were restarted; the operator then needed its watcher restarted to retry. A deploy started before that waits in its health check and times out; this is not a fault of the package.
