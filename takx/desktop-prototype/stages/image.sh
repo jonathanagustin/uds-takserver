@@ -27,8 +27,8 @@
 #                 layer for a proxy CA, private keys, key stores and build
 #                 paths (verify/scan_image.py) -> pkg/evidence/<run>/
 #   selftest STEP image/verify/selftest.sh STEP: start | wait | check | auth |
-#                 browser | stats | supervision | audit | linker | identity |
-#                 logs | stop
+#                 browser | reconnect | stats | supervision | audit | linker |
+#                 identity | logs | stop
 #   all           context, notices, test, build, inspect, then the self-test
 #                 steps in order with a five-minute soak before 'stats'
 #                 (about 12 minutes; run the steps one by one under a time limit)
@@ -45,7 +45,7 @@
 # The self-test runs containers of the one image: takx-img-desktop
 # (uid 10001), takx-img-web (uid 10002, token check on) and takx-img-jwks (a
 # stand-in for the realm's key endpoint), with a read-only root, all
-# capabilities dropped, --network none and at most 2.2 CPUs together.
+# capabilities dropped, --network none and at most 2 CPUs together.
 # Writable are tmpfs mounts for /tmp, /run/takx/session, /run/takx/identity
 # and /run/takx/web and a tmpfs volume for the RFB socket. X display :1.
 #
@@ -180,7 +180,8 @@ do_all() {
   "${selftest}" check
   "${selftest}" auth
   "${selftest}" browser || echo "image: browser step did not pass or was not run"
-  sleep 170
+  "${selftest}" reconnect || echo "image: reconnect step did not pass or was not run"
+  sleep 60
   "${selftest}" stats
   "${selftest}" supervision
   "${selftest}" linker

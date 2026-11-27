@@ -61,6 +61,13 @@ def serve(connection, container, port):
         except OSError:
             pass
         finally:
+            # shutdown, not only close: the other thread is blocked in recv on
+            # this socket, and the browser has to see that the bridge ended
+            # the connection.
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             connection.close()
 
     threading.Thread(target=down, daemon=True).start()

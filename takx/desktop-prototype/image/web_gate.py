@@ -27,9 +27,10 @@ way to it. What it does with a connection, in this order:
      field of the client stay behind.
   6. A page or script: pass websockify's answer on and close. A WebSocket:
      pass bytes both ways until one side closes or the session limit is
-     reached, then close both. The limit is TAKX_AUTH_WS_MAX_SECONDS after
-     the upgrade, or the token's own expiry when that is 0. The browser has
-     to come back through the sign-in gate for a new WebSocket.
+     reached, then cut both (a reset: nothing that is still queued is
+     delivered). The limit is TAKX_AUTH_WS_MAX_SECONDS after the upgrade, or
+     the token's own expiry when that is 0. The browser has to come back
+     through the sign-in gate for a new WebSocket.
 
 One request per connection: every answer says `Connection: close`. A second
 request needs a second connection and is authenticated on its own.
@@ -48,6 +49,8 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import socket
+import struct
 import sys
 import time
 
@@ -60,12 +63,15 @@ MAX_HEADERS = 100
 HEAD_TIMEOUT = 10.0
 UPSTREAM_TIMEOUT = 10.0
 PAGE_TIMEOUT = 60.0
+CLOSE_TIMEOUT = 5.0
 MAX_CONNECTIONS = 256
 WEBSOCKET_PATH = "/websockify"
 
 _REQUEST = re.compile(rb"\A([A-Z]{1,16}) (\S{1,2048}) HTTP/1\.[01]\Z")
 _TARGET = re.compile(rb"\A/[\x21-\x7e]*\Z")
-_FIELD = re.compile(rb"\A([!#$%&'*+\-.^_`|~0-9A-Za-z]{1,64}):[ \t]*([\t\x20-\x7e\x80-\xff]*?)[ \t]*\Z")
+# One quantifier per stretch of the line: these run before any token is
+# checked, on whatever a client sends, and must not backtrack.
+_FIELD = re.compile(rb"\A([!#$%&'*+\-.^_`|~0-9A-Za-z]{1,64}):([\t\x20-\x7e\x80-\xff]*)\Z")
 # Values that are written into the request for websockify.
 _KEY = re.compile(r"\A[A-Za-z0-9+/]{22}==\Z")
 _VERSION = re.compile(r"\A[0-9]{1,3}\Z")
@@ -123,7 +129,8 @@ def parse_head(head):
         field = _FIELD.match(line)
         if not field:
             raise BadRequest("malformed header field")
-        fields.setdefault(field.group(1).decode("ascii").lower(), []).append(field.group(2).decode("latin-1"))
+        fields.setdefault(field.group(1).decode("ascii").lower(), []).append(
+            field.group(2).strip(b" \t").decode("latin-1"))
     request = Request(match.group(1).decode("ascii"), match.group(2).decode("ascii"), fields)
     # No request this bridge serves has a body; refusing one keeps a second,
     # unauthenticated request from hiding behind the first.
@@ -178,10 +185,22 @@ async def _copy(reader, writer):
         await writer.drain()
 
 
-async def _close(writer):
+async def _close(writer, cut=False):
+    """Close a connection. cut=True drops what is still queued for the peer
+    and resets the connection: for a session that has reached its limit, so
+    that a client that reads slowly gets nothing more. A peer that does not
+    take the rest of an ordinary answer within five seconds is cut as well."""
     try:
-        writer.close()
-        await writer.wait_closed()
+        if cut:
+            sock = writer.get_extra_info("socket")
+            if sock is not None:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            writer.transport.abort()
+        else:
+            writer.close()
+        await asyncio.wait_for(writer.wait_closed(), CLOSE_TIMEOUT)
+    except asyncio.TimeoutError:
+        writer.transport.abort()
     except (OSError, asyncio.CancelledError):
         pass
 
@@ -301,6 +320,8 @@ class Gate:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
         if not done:
+            await _close(writer, cut=True)
+            await _close(up_writer, cut=True)
             return "session limit reached, the browser must come back through the sign-in"
         return tasks[next(iter(done))]
 

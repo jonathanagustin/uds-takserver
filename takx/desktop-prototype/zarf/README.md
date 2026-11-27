@@ -5,7 +5,9 @@
 
 The TAKX 5.7 desktop prototype as a Zarf package (`takx-desktop`) and a UDS bundle (`takx-desktop-proto`): the client runs in one pod and is used from a browser at `https://takx.<domain>/`, behind the UDS tenant gateway and Keycloak.
 
-**Deployed once, on one sandbox cluster, on 2026-11-26, and removed again.** [What the deploy showed](#what-the-deploy-showed) has the results, among them two things to know before using it: a process on the node itself reaches the desktop without signing in, and deploying or removing the package restarts Authservice for every application behind it. The bundle has still not been deployed. [Still not shown](#still-not-shown) lists what is open.
+**Deployed once, on one sandbox cluster, on 2026-11-26, and removed again.** [What the deploy showed](#what-the-deploy-showed) has the results, among them two things to know before using it: a process on the node itself reached the desktop without signing in, and deploying or removing the package restarts Authservice for every application behind it. The bundle has still not been deployed. [Still not shown](#still-not-shown) lists what is open.
+
+**Changed since that deploy, and not deployed yet:** the bridge in the pod now verifies the signed-in user's token itself, TAKX starts with its default network inputs off, and the session directory, where TAKX keeps its own copy of the client key, is in memory. [What changed after the deploy](#what-changed-after-the-deploy) says what that is, what was tested without a cluster and what the next deploy has to show.
 
 What the package carries is TAKX 5.7 (`0b59a9bb`) built from public sources on Kernel 8.30.5 + project patches, CommonCommo 1.17.2 patched and the NASA WorldWind interop build. It is not the official TAKX 5.7 distribution. The image is local only and is **not cleared for distribution**: its `SOURCES.json` says `"publishable": false` and lists why, and the licence gate still flags 44 items for review (issue #934; the `LICENCE-GATE` attachment lists them). This directory is opt-in; the TAK Server package, its bundles and CI do not use it.
 
@@ -21,7 +23,7 @@ What the package carries is TAKX 5.7 (`0b59a9bb`) built from public sources on K
 | `values.yaml`, `values.schema.json` | package values |
 | `create-package.sh` | builds the package from a staged copy |
 | `test_package.py` | checks without a cluster; helper modes for `../stages/package.sh` |
-| `../chart` | Helm chart `takx-desktop`: Deployment, Service, ServiceAccount, optional PersistentVolumeClaim, UDS `Package`, the ingress isolation (a NetworkPolicy and an Istio AuthorizationPolicy) and a DestinationRule for the bridge |
+| `../chart` | Helm chart `takx-desktop`: Deployment (with the settings of the bridge's token check), Service, ServiceAccount, optional PersistentVolumeClaim, UDS `Package`, the ingress isolation (a NetworkPolicy and an Istio AuthorizationPolicy) and a DestinationRule for the bridge |
 | `../bundle` | `uds-bundle.yaml`, `uds-config.yaml`, `create-bundle.sh` |
 | `../stages/package.sh` | every build and check command of this page, step by step |
 | `../stages/deploy.sh` | the deploy and its checks: baseline, deploy, admission, identity, a frame of the pod's display, the sign-in gate, isolation, pod replacement, removal |
@@ -45,16 +47,18 @@ One Deployment, one replica, one image, three containers. The image's own [READM
 | Container | User | Does | Sees |
 | --- | --- | --- | --- |
 | `identity` (init) | 10001 | validates the copied Secret, stages `client.p12`, `truststore.p12`, `truststore-java.p12`, `password.txt`, `package.zip` and `takx-package.zip` | the Secret (read-only), the identity volume |
-| `desktop` | 10001 | Xtigervnc on a Unix socket, openbox, the TAKX JVM. The display has no TCP listener; the JVM itself listens on TCP 4242, 8087 and one ephemeral port (CommonCommo). [Which ports can be reached](#which-ports-can-be-reached) says what keeps them closed | `/tmp`, the session volume, the socket volume, the identity volume (read-only) |
-| `web` | 10002 | websockify: noVNC on TCP 6080, bridged to the socket | the socket volume (read-only), nothing else |
+| `desktop` | 10001 | Xtigervnc on a Unix socket, openbox, the TAKX JVM. The display has no TCP listener. The JVM would listen on TCP 4242 and 8087 (CommonCommo's default inputs); a new session starts with those switched off (`takx.localInputs`). One ephemeral HTTPS port of CommonCommo stays. [Which ports can be reached](#which-ports-can-be-reached) says what keeps it closed | `/tmp`, the session volume (memory), the socket volume, the identity volume (read-only) |
+| `web` | 10002 | the gate on TCP 6080, which verifies the token of every request; behind it, on a Unix socket, websockify: noVNC, bridged to the RFB socket | the socket volume (read-only), a volume of its own for websockify's socket, nothing else |
 
-Every container has a read-only root filesystem, drops all capabilities and cannot gain privileges. The service account has no token and no RoleBinding. There is no login in the pod: **whoever reaches port 6080 controls the desktop**. For pods and for users the only way in is the tenant gateway with Authservice, and the chart has no switch for that. A process on the node is not held back by any of it ([below](#which-ports-can-be-reached)).
+Every container has a read-only root filesystem, drops all capabilities and cannot gain privileges. The service account has no token and no RoleBinding.
 
-The bridge serves each TCP connection from a process of its own. The chart's DestinationRule `takx-desktop-bridge` makes the waypoint use a connection for one request and close idle ones; without it the processes of past page loads pile up ([Findings](#findings)).
+**Reaching port 6080 is no longer enough.** The gate answers 401 or 403 unless the request carries the token Authservice adds after a sign-in: signed by the realm, issued for this package's client, not expired, and naming one of `sso.groups` ([The bridge's own check](#the-bridges-own-check)). The chart has no switch for that either. For pods and for users the way in is still the tenant gateway with Authservice; a process on the node gets as far as the gate.
+
+The gate serves one request per connection and closes it. The chart's DestinationRule `takx-desktop-bridge` tells the waypoint the same ([The DestinationRule](#the-destinationrule)).
 
 ### Which ports can be reached
 
-The pod listens on four TCP ports on every address. The image self-test of 2026-11-26 read them from `/proc/net/tcp` and `tcp6` of the running containers: 6080 (the web bridge), and from the TAKX JVM 4242, 8087 and one ephemeral port. A fifth listener of the JVM is on loopback only. Only 6080 is meant to be reached, and only along tenant gateway → Authservice → pod. The chart says so in three places, and each has its own enforcer:
+With the image of the deploy the pod listened on four TCP ports on every address: 6080 (the web bridge), and from the TAKX JVM 4242, 8087 and one ephemeral port; a fifth listener of the JVM is on loopback only. With the image of today the JVM's default inputs are off, and the self-test read two from `/proc/net/tcp`: 6080 (the gate) and the ephemeral port. Only 6080 is meant to be reached, and only along tenant gateway → Authservice → pod. The chart says so in three places, and each has its own enforcer:
 
 | Object | What it says | Enforced by |
 | --- | --- | --- |
@@ -64,7 +68,7 @@ The pod listens on four TCP ports on every address. The image self-test of 2026-
 
 Kubelet probes are exec probes and need no ingress.
 
-What the deploy of 2026-11-26 showed, port by port (`deploy.sh isolation`; "refused" means no byte came back):
+What the deploy of 2026-11-26 showed, port by port, with the image of that day, which had no check of its own and listened on 4242 and 8087 (`deploy.sh isolation`; "refused" means no byte came back):
 
 | From | 6080 | 4242, 8087, the ephemeral port | Stopped by |
 | --- | --- | --- | --- |
@@ -74,21 +78,67 @@ What the deploy of 2026-11-26 showed, port by port (`deploy.sh isolation`; "refu
 | the same pods, with a temporary NetworkPolicy that let them in | Authservice answers at the waypoint (no session: no desktop); straight to the pod IP, ztunnel closes it: "explicitly denied by: takx-desktop/deny-all-except-waypoint-uds-takx-desktop-waypoint" | ztunnel closes it: "explicitly denied by: takx-desktop/takx-desktop-deny-other-ports" | the mesh layer alone |
 | **the node** (a process in the host network namespace) | **reached: HTTP 200, the noVNC page, no sign-in** | **reached: the JVM accepts the connection** | nothing |
 
-The last row is a limit of the platform, not a setting of this chart. kube-router adds, for every pod, "rule to permit the traffic to pods when source is the pod's local node", and Istio ambient rewrites the source of host traffic to `169.254.7.127` and keeps it away from ztunnel so that kubelet probes work. A user with a shell on the node, or a pod with `hostNetwork` (which UDS Core refuses without an exemption), controls the desktop without Keycloak. The same holds for `kubectl port-forward` and `kubectl exec`, which need cluster rights. Closing it would take a check in the bridge itself, for example of the token Authservice forwards; the image has none.
+The last row is a limit of the platform, not a setting of this chart. kube-router adds, for every pod, "rule to permit the traffic to pods when source is the pod's local node", and Istio ambient rewrites the source of host traffic to `169.254.7.127` and keeps it away from ztunnel so that kubelet probes work. With that image a user with a shell on the node, or a pod with `hostNetwork` (which UDS Core refuses without an exemption), controlled the desktop without Keycloak.
+
+No policy can close that row, so the image does: the bridge checks the token itself and TAKX's default inputs are off. In the image self-test, which reaches the container's address from the host's network namespace as a node reaches a pod, port 6080 answered 401 without a token and 4242 and 8087 were closed. **That row has not been repeated in a cluster.** What stays: the JVM's ephemeral HTTPS port is reachable from the node; `kubectl exec` is inside the pod; and root on the node can enter the pod's namespaces whatever the pod does.
 
 The sign-in path through the gateway worked with the DENY policy in place, so `network.denyOtherPorts=false` was not needed.
 
 ### What the UDS `Package` declares
 
-- **Sign-in:** Keycloak client `uds-takx-desktop`, Authservice in front of the pod, group `/UDS Core/Admin` (`sso.groups`). Everyone admitted shares the one session and the one TAK identity.
+- **Sign-in:** Keycloak client `uds-takx-desktop`, Authservice in front of the pod, group `/UDS Core/Admin` (`sso.groups`). Everyone admitted shares the one session and the one TAK identity. Keycloak enforces the group when it issues the token; the bridge enforces it again when it reads the token.
 - **Exposed:** Service `takx-desktop` port 6080 on the tenant gateway, host `takx`.
-- **Egress, default:** TCP 8089 to the passthrough gateway pods. Nothing else. DNS comes from the operator.
+- **Egress, default:** TCP 8089 to the passthrough gateway pods, and TCP 8080 to the Keycloak pods, where the bridge fetches the realm's signing keys. Nothing else. DNS comes from the operator. A NetworkPolicy selects pods, not containers, so the desktop container can reach Keycloak's port as well.
 - **Egress, opt-in:** TCP 443 to the same gateway (`tak.egress.api`) and TLS 443 to named hosts (`egress.hosts`, for example a tile server).
 - **Never:** `Anywhere`, `KubeAPI` or `IntraNamespace` rules, policy exemptions.
 
-In the deploy the operator made of this: Keycloak client `uds-takx-desktop`, a waypoint (`uds-takx-desktop-waypoint`, one more pod in the namespace) that carries the Authservice check, eleven NetworkPolicies and four AuthorizationPolicies. From the desktop container, a TLS handshake to `takserver:8089` verified the server certificate against the staged CA. Nothing else answered: the Kubernetes API (ClusterIP, name and node address), the kubelet, `1.1.1.1:443`, `example.com:443`, `tak.gov:443`, the metadata address, the same gateway on 443 and 8446, the TAK Server Services directly, Keycloak, CloudTAK, the tenant gateway, the Zarf registry and Authservice. DNS resolves, external names included. For each of these the pod's ztunnel accepts the TCP connection and resets it, so a client sees "connection reset", not a timeout.
+In the deploy (before the Keycloak rule existed) the operator made of this: Keycloak client `uds-takx-desktop`, a waypoint (`uds-takx-desktop-waypoint`, one more pod in the namespace) that carries the Authservice check, eleven NetworkPolicies and four AuthorizationPolicies. From the desktop container, a TLS handshake to `takserver:8089` verified the server certificate against the staged CA. Nothing else answered: the Kubernetes API (ClusterIP, name and node address), the kubelet, `1.1.1.1:443`, `example.com:443`, `tak.gov:443`, the metadata address, the same gateway on 443 and 8446, the TAK Server Services directly, Keycloak, CloudTAK, the tenant gateway, the Zarf registry and Authservice. DNS resolves, external names included. For each of these the pod's ztunnel accepts the TCP connection and resets it, so a client sees "connection reset", not a timeout.
 
 `tak.egress.api` is off because it would not help: TAKX 5.7 asks `https://<address>:8443` for missions and contacts, the gateway does not serve 8443, and on 443 it routes by an SNI name TAKX does not send ([STATUS.md](../STATUS.md), "HTTPS API from TAKX"). Without `egress.hosts` there are no online map tiles, only the built-in base map.
+
+### The bridge's own check
+
+[`../image/README.md`](../image/README.md), "The bridge's own sign-in check", has the rules, the settings and the tests. In the chart:
+
+| Setting of the gate | Comes from | Default |
+| --- | --- | --- |
+| issuer | `auth.issuer`, or `https://sso.<domain>/realms/uds` | `https://sso.uds.dev/realms/uds` |
+| audience | `sso.clientId` | `uds-takx-desktop` |
+| required groups | `sso.groups`, the list the UDS `Package` gives Keycloak | `/UDS Core/Admin` |
+| groups claim | `auth.groupsClaim` | `groups` |
+| key set | `auth.jwksUrl` | `http://keycloak-http.keycloak.svc.cluster.local:8080/realms/uds/protocol/openid-connect/certs` |
+| algorithms | `auth.algorithms` | `RS256` |
+| allowed WebSocket origin | `https://<host>.<domain>` | `https://takx.uds.dev` |
+| WebSocket lifetime | `auth.websocketMaxSeconds` | 300 |
+
+**Why this header.** UDS Core 1.16.0 configures Authservice with `id_token: {preamble: "Bearer", header: "Authorization"}`, and the RequestAuthentication the operator generates for the waypoint has `forwardOriginalToken: true` (seen in the deploy: `uds-takx-desktop-jwt-authn`, issuer `https://sso.uds.dev/realms/uds`, audience `uds-takx-desktop`). So what reaches the pod is `Authorization: Bearer <ID token>`. The realm of identity-config 0.32.4 writes `groups` with full paths into the ID token (scope `profile`) and signs with RS256.
+
+**Why the keys come from the Service.** The bridge asks Keycloak inside the cluster, over the mesh, not `https://sso.<domain>` through the gateway: no certificate of the gateway has to be trusted in the pod, and the answer cannot depend on what a public name resolves to. The realm publishes the same keys at both. Keycloak's own `Package` lets every namespace reach its port 8080 ("Keycloak backchannel access"), and the UDS operator talks to the same Service. Not tried in a cluster yet: if the fetch fails, the web container's log says `jwks: fetch failed` every ten seconds and every request with a token gets 503.
+
+**Where the group is enforced now.** In the deploy the group lived only in Keycloak, and three ways around Authservice had not been tried: a request with an `Authorization` header that is not `Bearer` (such requests skip Authservice by rule and are judged by the waypoint's JWT policy alone), a token of the realm for another client, and HTTP/1.1 from a workload in the mesh to the waypoint. Whatever the waypoint does with them, the bridge refuses all three: it takes one `Bearer` token and nothing else, wants this client's audience, and reads the group itself. Tried against the image; in a cluster they are still to be tried.
+
+**A token for a test.** Without a cluster, `../image/verify/token_tool.py` makes a key, a JWKS document and signed tokens with OpenSSL, and `../image/verify/auth_probe.py` sends them (`selftest.sh auth`). In a cluster the token has to come from the realm: run the authorization-code flow for the client `uds-takx-desktop` (redirect URI `https://takx.<domain>/login`, the client secret is in the Secret the operator writes for the client in namespace `takx-desktop`) with a user in the group, and use the `id_token` of the answer within its 60 seconds. `auth_probe.py` takes header lines, a `--connect` address and `--tls`, so the same variants can be sent to the pod address from the node and to the gateway.
+
+### Sessions: how they end
+
+As designed and as read from the sources; **not observed in a cluster**.
+
+- **The token.** The realm issues ID tokens for 60 seconds (`accessTokenLifespan`); the Keycloak session lasts 10 minutes without use and 10 hours at most (`ssoSessionIdleTimeout`, `ssoSessionMaxLifespan`). Authservice keeps the session, with no time limits of its own (`idle_session_timeout` and `absolute_session_timeout` are "0" in UDS Core 1.16.0), and has to get a fresh token from Keycloak when the one it holds has expired.
+- **A page load** after the session has ended at Keycloak gets a redirect to the sign-in from Authservice, and from the bridge nothing: it wants a token that is valid now.
+- **An open WebSocket** is closed by the bridge `auth.websocketMaxSeconds` after it was opened, 300 by default. noVNC shows "Reconnecting" and tries again after a second. If the session is alive, Authservice adds a fresh token and the desktop is back; seen with a browser against the image with a 20-second limit, about 1.3 seconds each time. If the session has ended, the upgrade is redirected to the sign-in, which a WebSocket cannot follow: the page keeps trying until it is reloaded, and the reload leads to the sign-in.
+- **So a logout or a disabled user loses an open desktop after at most five minutes**, and everything else when the token Authservice still holds has run out, 60 seconds at the most. With `auth.websocketMaxSeconds: 0` the open desktop goes with that token too, at the price of a reconnect every minute.
+- **Logout.** `https://takx.<domain>/logout` is Authservice's logout path for the client; it ends the Authservice session and sends the browser to Keycloak's logout. The TAKX session in the pod is not touched: it is one desktop for everyone in the group.
+- **An open desktop keeps the session alive.** Every reconnect makes Authservice refresh the token, which counts as use at Keycloak, up to the 10 hours.
+- **Open question for the deploy.** Whether Authservice has a valid token ready on the reconnect, a request that cannot follow a redirect. If the web container logs `denied: expired` for requests of a signed-in browser, raise `auth.leewaySeconds` (the waypoint's own JWT filter tolerates 60 seconds) and note it.
+
+### The DestinationRule
+
+`templates/bridge-connections.yaml` has two settings and the reasons in full.
+
+- `maxRequestsPerConnection: 1`: the gate closes every connection after one request, and Envoy is told so. It was added when websockify faced the waypoint and kept a process per pooled connection ([Findings](#findings)); the gate has removed that cause.
+- `idleTimeout: 30s` closes connections without an active request. It is not a limit for a WebSocket, which for Envoy is one active request however quiet it is.
+- So that a quiet session does not depend on that reading, websockify pings the browser every 25 seconds (`web.heartbeatSeconds`; the schema keeps it below 30). Against the image, with no Envoy on the path, a WebSocket that asked for no screen at all stayed open for the whole 300 seconds, 11 pings answered, until the bridge ended it at its limit (`auth_probe.py --hold`).
+- Seen in a cluster so far: page loads of a few seconds with the rule; 14 and 43 minutes without it. Long and quiet sessions with the rule are for the next deploy.
 
 ### How the TAK identity reaches the pod
 
@@ -151,7 +201,7 @@ The cluster needs:
 
 - UDS Core with the tenant gateway, Keycloak and Authservice, and the passthrough gateway with TCP 8089 in its Service ports (`bundle/uds-bundle.yaml` of this repository sets that);
 - the TAK Server package 1.4.0 or later, for the two identity components;
-- an amd64 node with room for the requests (550m CPU, about 2.1 GiB) and the desktop's 5 GiB memory limit (it used 2.0 GiB, peak 2.1 GiB, in the deploy), and about 4 GiB of free disk for the image in the registry and on the node;
+- an amd64 node with room for the requests (550m CPU, about 2.6 GiB) and the desktop's 5 GiB memory limit, and about 4 GiB of free disk for the image in the registry and on the node. The limit now covers the session files as well: the processes used 2.0 GiB, peak 2.1 GiB, in the deploy, a fresh session is 0.23 to 0.27 GiB of files, and the volume may grow to 1 GiB (`session.sizeLimit`), 3.2 GiB together at the most. In the image self-test, where the session has always been in memory, the container peaked at 1.8 and 2.0 GiB in two runs with both;
 - `takx.<domain>` resolving to the tenant gateway;
 - a Keycloak user in `/UDS Core/Admin`.
 
@@ -218,13 +268,23 @@ Done in the pod on 2026-11-26, twice (first pod, and its replacement after a del
       tr -d "\r\n" </run/takx/identity/password.txt | xdotool type --delay 25 --file -'
    ```
 
-4. The connection is saved in the project. With `persistence.enabled: false` (the default) the project is lost with the pod: the replacement pod started with a new project, a new callsign and no connection, and the connection had to be added again. With persistence on, the volume holds TAKX's own copies of the PKCS#12 files and their passwords; that mode was not deployed.
+4. The connection is saved in the project. With `persistence.enabled: false` (the default) the project is lost with the pod: the replacement pod started with a new project, a new callsign and no connection, and the connection had to be added again.
+
+**Where the client key is afterwards.** TAKX copies both PKCS#12 files into its project (`ProjectData/ProjectData/Globals/Files/SslCerts/`, mode 0644) and keeps their passwords in a credential database next to them. The project is in the session volume:
+
+| Values | Session volume | The key and its password |
+| --- | --- | --- |
+| default (`session.memory: true`) | `emptyDir`, memory, 1Gi | in memory only; gone with the pod |
+| `session.memory: false` | `emptyDir` on the node's disk | on the node's disk until the pod is deleted. This is what the deploy of 2026-11-26 ran with |
+| `persistence.enabled: true` | PersistentVolumeClaim | on the volume, at rest, for as long as the claim exists. Not deployed |
+
+The staged files in `/run/takx/identity` are in memory in every case. The memory volume counts against the desktop container's limit; see [the requirements](#onto-a-cluster-that-already-runs-uds-core-and-tak-server).
 
 Expect the toast "Failed to query Contact List" every 30 seconds while connected: TAKX asks `https://takserver:8443`, and neither the gateway nor the pod's egress rule offers that port.
 
 ## Checked without a cluster
 
-`../stages/package.sh` ran these on 2026-11-26 with uds 0.42.0 (Zarf 1.0.1, Helm 4.3.2), on the image built from the tree `takx57-head`, last after the DestinationRule was added to the chart. Transcripts are under `/var/lib/takx-proto/pkg/package/evidence/`.
+`../stages/package.sh` ran these on 2026-11-26 with uds 0.42.0 (Zarf 1.0.1, Helm 4.3.2), on the image built from the tree `takx57-head`, last after the bridge's token check was added to the image and the chart. Transcripts are under `/var/lib/takx-proto/pkg/package/evidence/`. On that last run no cluster was up: `crds` used the CRDs it had read from the sandbox cluster earlier that day, and `lookup` was not run again; its row is the result of the earlier run.
 
 | Step | What ran | Result |
 | --- | --- | --- |
@@ -233,7 +293,7 @@ Expect the toast "Failed to query Contact List" every 30 seconds while connected
 | `helm` | `helm lint --strict` and `helm template`, default values and every optional branch; two values outside the schema | 0 failed; both bad values refused |
 | `render` | `uds zarf dev inspect manifests`, default and with package values set | 9 objects; the mappings are as intended; all three containers name the image by tag and digest; `desktop.image` is ignored |
 | `crds`, `validate` | kubeconform 0.7.0 `-strict` against the Kubernetes 1.36.3 schemas and against the `Package`, `TakClient`, `AuthorizationPolicy` and `DestinationRule` CRDs read from the sandbox cluster (`kubectl get crd`) | every object valid, the NetworkPolicy, the AuthorizationPolicy and the DestinationRule included; a misspelt field is rejected |
-| `test` | `test_package.py`, 56 tests | pass |
+| `test` | `test_package.py`, 57 tests | pass |
 | lookup | `helm template --dry-run=server` (reads one Service, applies nothing) | hosts entry `takserver` with the gateway's ClusterIP |
 | `create` | `uds zarf package create`, image from the Docker daemon, no network, 2 CPUs | package of about 0.7 GB in about a minute |
 | `inspect` | `uds zarf package inspect`, then the decompressed archive | four components, one image, an SBOM that lists 315 Debian packages and more than 150 Java archives, seven attachments; the stored `zarf.yaml` holds the two documents described above; the OCI layout holds one manifest, whose digest is the image ID of the build |
@@ -329,16 +389,41 @@ The `TakClient` passed the `takserver-oidc` webhook and carries its `succeeded` 
 
 ### Findings
 
-1. **The node reaches the desktop without signing in.** See [Which ports can be reached](#which-ports-can-be-reached). Not fixable in the chart.
+1. **The node reached the desktop without signing in.** See [Which ports can be reached](#which-ports-can-be-reached). Not fixable in the chart; since then the image checks the token itself, which has not been deployed.
 2. **Deploying and removing the package each restart Authservice.** The UDS operator rewrites the Authservice configuration when a protected application appears or goes, and rolls the `authservice` Deployment (new pods at 19:27:37 and 20:12:35). Authservice keeps sessions in memory here, so everyone signed in to any application behind it has to sign in again. TAK Server, CloudTAK and Keycloak pods were untouched.
-3. **The bridge kept a process for every connection the waypoint pooled.** After four page loads the web container held 44 `websockify` processes and 173 MiB of its 256 MiB limit, with every browser gone. Fixed in the chart with the DestinationRule `takx-desktop-bridge`: after it, three page loads left 1 process and 35 MiB, and the desktop still loaded through the gateway.
+3. **The bridge kept a process for every connection the waypoint pooled.** After four page loads the web container held 44 `websockify` processes and 173 MiB of its 256 MiB limit, with every browser gone. Fixed in the chart with the DestinationRule `takx-desktop-bridge`: after it, three page loads left 1 process and 35 MiB, and the desktop still loaded through the gateway. The gate that now stands in front of websockify ends its connection with every request.
 4. **The sign-in check of this page first broke the sign-in.** A second request with the cookie of a pending sign-in replaces its state at Authservice, and the sign-in then ends in "Oops, your session has expired". A user who opens the desktop in two tabs before signing in will meet it. `deploy_browser.cjs` probes with a separate profile now.
 5. **Point Dropper needs an icon selected before a typed location is accepted.** OK with a typed location and no icon selected does nothing but log `[GLMapView]: Invalid lookAt`; with the icon selected the point is placed. Not seen in the earlier standalone runs, whose script selected the icon first.
+
+## What changed after the deploy
+
+Six points of the deploy and of its review were taken up in the image and the chart on 2026-11-26. **None of it has run in a cluster.**
+
+| Finding | Change | Shown without a cluster |
+| --- | --- | --- |
+| The node reaches port 6080 without signing in; the desktop has no authentication of its own | the gate in front of websockify verifies the forwarded token on every request and on the WebSocket upgrade ([The bridge's own check](#the-bridges-own-check)) | 20 request variants from the host's network namespace to the container's address: only the correct token got the page and the RFB handshake |
+| The node reaches the JVM's ports 4242 and 8087 | TAKX's default inputs are switched off in the program properties of a new session (`takx.localInputs`) | both ports closed from the host; no UDP socket on the default ports; the globe renders |
+| The group is enforced only by Keycloak | the bridge reads the groups claim itself | a token without the group: 403 |
+| The client key reaches the node's disk once a connection is added | the session volume is memory by default (`session.memory`) | the rendered volume; the self-test has always run with the session in memory |
+| The DestinationRule is untested for long and quiet WebSockets | a ping every 25 seconds, below its 30-second idle timeout ([The DestinationRule](#the-destinationrule)) | a WebSocket that asked for nothing stayed open for 300 seconds and was pinged 11 times; no Envoy was on that path |
+| What ends a session is unknown | the bridge ends a WebSocket after 300 seconds and noVNC reconnects through the sign-in ([Sessions](#sessions-how-they-end)) | cut at the limit and at token expiry; Chromium reconnected by itself |
+
+**For the next deploy to show**, in this order:
+
+1. The web container's log says `jwks: 1 signing key(s) loaded` (or more) and `ready: signing keys loaded`. If it says `fetch failed`, the egress rule to Keycloak or its waypoint is the place to look, and nobody gets in.
+2. A user in the group reaches the desktop through the gateway as before, and the log has `200 GET /vnc.html sub=...` and `101 GET /websockify ... websocket open` for it.
+3. From the node: `http://<pod-ip>:6080/` answers 401, `/healthz` answers `ok`, 4242 and 8087 are closed. With a real ID token of the client the same address answers 200: the token is what counts, not the path.
+4. The three shapes around Authservice, at the gateway: an `Authorization: Basic ...` header, a token of the realm for another client, and HTTP/1.1 from a mesh workload to the waypoint. None may reach the desktop; note who refused each, the waypoint or the bridge.
+5. A desktop left open for more than ten minutes: the bridge logs `session limit reached` every 300 seconds and the browser is back within seconds each time, without anyone touching it. Then the same with a still screen.
+6. Sign out at Keycloak (or disable the user) with a desktop open: it is gone after at most 300 seconds and a reload leads to the sign-in. Also `https://takx.<domain>/logout`.
+7. Memory of the desktop container with the session in memory, against the 2560Mi request and the 5Gi limit; `df /run/takx/session` in the pod after a connection was added, and that the mount is `tmpfs`.
+8. Admission: the pod has one more `emptyDir` and the web container more environment; no exemption should be needed.
 
 ## Still not shown
 
 - **The whole bundle.** `uds create` with the four upstream packages, and any `uds deploy`. Whether a bundle variable (`DOMAIN`) wins over the package value mapping (`global.domain`); they agree at the default.
-- **Sessions.** Expiry, logout, and what happens to an open WebSocket when the session ends.
+- **Everything under [What changed after the deploy](#what-changed-after-the-deploy)** in a cluster, the token check with a real realm first of all.
+- **Sessions.** Expiry and logout as they happen with Keycloak and Authservice. The design is written down; nothing of it was observed.
 - **Renewal.** A reissued certificate, the redeploy of `takx-desktop-identity`, the pod-reload restart. A certificate revoked by the removal was not tried against the server.
 - **Persistence.** `persistence.enabled: true`, and a start on an existing project.
 - **Values.** Only the defaults were deployed: no `egress.hosts`, no `tak.egress.api`, `network.denyOtherPorts` on, no other host name or domain.
@@ -349,7 +434,9 @@ The `TakClient` passed the `takserver-oidc` webhook and carries its `succeeded` 
 
 - One session, one identity, shared by everyone the SSO group admits. No per-user sessions.
 - amd64 only, software rendering.
-- Whoever has a shell on the node, or cluster rights for `kubectl exec` and `port-forward`, is past the sign-in.
+- Root on the node, and cluster rights for `kubectl exec`, are past the sign-in. A process on the node without a token, and `kubectl port-forward` to port 6080, meet the bridge's check (not yet shown in a cluster).
+- A logout takes up to five minutes to close an open desktop.
+- The session directory is memory: what TAKX writes there (logs, caches, 1 GiB at the most) is taken from the desktop's memory limit, and a session that outgrows the volume loses its pod. Not soaked.
 - Installing and removing it interrupts every Authservice session in the cluster.
 - The image and the package are local. Publishing either needs issue #934 closed first: the licence gate must be clean, and it is not.
 - The whole-bundle path and the empty-cluster path were written from the repository's bundles and the sandbox recipe in `server/`; they have not run.

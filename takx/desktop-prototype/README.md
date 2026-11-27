@@ -122,6 +122,8 @@ Network behaviour to know about:
 
 `stages/image.sh` puts the assembled tree into one self-contained image ([image/README.md](image/README.md)), and `stages/package.sh` turns that image into a Zarf v1beta1 package, `takx-desktop`, and a UDS bundle, `takx-desktop-proto`. The image build fails when the licence gate finds a denied or unknown JAR, native library or asset; the package pins the image by digest. The gate is not clean: it flags 44 items for review, so the image is labelled `publishable: false` and nothing is pushed ([STATUS.md](STATUS.md), "Image, package and licences"). The package runs the client in one pod and serves it to a browser at `https://takx.<domain>/` behind the UDS tenant gateway and Keycloak; a `TakClient` supplies its TAK identity. Both are opt-in and separate from the TAK Server package.
 
+The bridge in the pod does not rely on the gateway alone: a small gate in front of noVNC verifies the signed-in user's token on every request (signature against the realm's keys, issuer, audience, expiry, group) and answers 401 or 403 otherwise, so reaching its port is not enough. TAKX starts with its default network inputs off, and the session directory, where TAKX keeps its own copy of the client key once a connection is added, is in memory. [image/README.md](image/README.md), "The bridge's own sign-in check", has the rules and the tests.
+
 ```bash
 TAKX_ASSEMBLE_NAME=takx57-head takx/desktop-prototype/stages/assemble.sh   # a tree from the current sources
 TAKX_ASSEMBLE_NAME=takx57-head takx/desktop-prototype/stages/image.sh all  # notices, licence gate, image, self-test
@@ -130,7 +132,7 @@ uds zarf package deploy /var/lib/takx-proto/pkg/out/zarf-package-takx-desktop-am
   --components takx-desktop-takclient,takx-desktop-identity --confirm
 ```
 
-The package and a bundle with only this package were built and checked without a cluster, last on 2026-11-26 from the tree `takx57-head`. The package was then deployed once to the sandbox cluster of `server/`, used through the gateway from a browser, connected to the TAK Server from the pod, and removed again ([STATUS.md](STATUS.md), "Deployed in a pod"; `stages/deploy.sh`). The bundle has not been deployed, and the bundle with Zarf init, UDS Core and TAK Server was written and checked against its upstream packages but not created. [zarf/README.md](zarf/README.md) has the components, the values, the deploy commands, what was checked, what the deploy showed and what is still open.
+The package and a bundle with only this package were built and checked without a cluster, last on 2026-11-26 from the tree `takx57-head`. An earlier build of the package was deployed once to the sandbox cluster of `server/`, used through the gateway from a browser, connected to the TAK Server from the pod, and removed again ([STATUS.md](STATUS.md), "Deployed in a pod"; `stages/deploy.sh`). The token check, the switched-off inputs and the session in memory came after that deploy and were tested against the image only ([STATUS.md](STATUS.md), "The bridge checks the token itself"): **the package as it is now has not been deployed.** The bundle has not been deployed, and the bundle with Zarf init, UDS Core and TAK Server was written and checked against its upstream packages but not created. [zarf/README.md](zarf/README.md) has the components, the values, the deploy commands, what was checked, what the deploy showed, what changed after it and what is still open.
 
 ## Files in this stage
 
@@ -140,5 +142,7 @@ The package and a bundle with only this package were built and checked without a
 | `assemble/assemble.py` | tree assembler and manifest |
 | `assemble/derive_jar.py`, `assemble/test_derive_jar.py` | derived Kernel JAR of the tree and its tests |
 | `image/licence_gate.py`, `image/licence-policy.json`, `image/test_licence_gate.py` | licence gate, its policy and its tests |
+| `image/web_gate.py`, `image/web_auth.py`, `image/test_web_gate.py`, `image/test_web_auth.py` | the bridge's gate, its token check and their tests |
+| `image/verify/token_tool.py`, `image/verify/auth_probe.py`, `image/verify/browser_reconnect.js` | test keys and tokens, the probe that tries them against a running bridge, and the browser check of the reconnect |
 | `assemble/kernel_overlay.py`, `assemble/kernel-overlay/*.patch` | Kernel Java overlay |
 | `assemble/launch.sh`, `assemble/session.sh` | launcher and X session |

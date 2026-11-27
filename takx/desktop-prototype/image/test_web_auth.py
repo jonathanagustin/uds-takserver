@@ -177,6 +177,12 @@ class Rejected(unittest.TestCase):
         self.denied(bearer(RSA_KEY.token(claims(exp=None))), "claim exp is missing")
         self.denied(bearer(RSA_KEY.token(claims(exp="never"))), "claim exp is missing")
         self.denied(bearer(RSA_KEY.token(claims(exp=True))), "claim exp is missing")
+        # Numbers no clock reaches: an expiry that would never come.
+        head = RSA_KEY.token(claims()).split(".")[0]
+        for text in (b"1e400", b"1" + b"0" * 400, b"-1e400", b"1e13"):
+            signed = f"{head}.{b64(json.dumps(claims()).encode().replace(b'%r' % (NOW + 55), text))}"
+            self.assertIn(text, base64.urlsafe_b64decode(signed.split(".")[1] + "=="))
+            self.denied(bearer(f"{signed}.{b64(RSA_KEY.sign(signed.encode(), 'RS256'))}"), "claim exp is missing")
 
     def test_not_yet_valid(self):
         self.denied(bearer(RSA_KEY.token(claims(nbf=NOW + 30))), "not valid yet")
@@ -411,6 +417,19 @@ class Primitives(unittest.TestCase):
         for forged in ((value + modulus).to_bytes(size + 1, "big"), b"\0" + signature, signature[1:], signature + b"\0",
                        bytes(size), (1).to_bytes(size, "big"), (modulus - 1).to_bytes(size, "big"), b""):
             self.assertFalse(web_auth.rsa_verify(modulus, exponent, forged, message, "sha256"))
+        # A signature plus the modulus is the same number modulo the modulus.
+        # It must not count as a second signature of the message, also when
+        # it still fits into as many bytes (about one message in four here).
+        for attempt in range(400):
+            again = RSA_KEY.sign(b"%d" % attempt, "RS256")
+            shifted = int.from_bytes(again, "big") + modulus
+            if shifted < 1 << (8 * size):
+                self.assertTrue(web_auth.rsa_verify(modulus, exponent, again, b"%d" % attempt, "sha256"))
+                self.assertFalse(web_auth.rsa_verify(modulus, exponent, shifted.to_bytes(size, "big"), b"%d" % attempt,
+                                                     "sha256"))
+                break
+        else:
+            self.fail("no signature small enough to add the modulus to")
         for at in (0, 1, 100, size - 1):
             flipped = bytearray(signature)
             flipped[at] ^= 1
@@ -463,6 +482,38 @@ class Primitives(unittest.TestCase):
             self.assertFalse(web_auth.ec_verify(curve, *generator, signature, message, digest))
         self.assertFalse(web_auth.ec_verify("P-384", number(EC384_KEY.jwk["x"]), number(EC384_KEY.jwk["y"]),
                                             EC_KEY.sign(message, "ES256"), message, "sha256"))
+
+    def test_ecdsa_key_that_is_not_on_the_curve(self):
+        # A "public key" (x, 0) has order two under the addition formulas,
+        # whatever curve it would be on. With it a signature can be made up
+        # without any private key: take R = k*G, r = R.x, s = hash/k, and k
+        # such that r/s is even, so that the key's share of the sum vanishes.
+        # Only the check that the key is a point of the curve stops this.
+        message = b"forged"
+        for name, digest in (("P-256", "sha256"), ("P-384", "sha384")):
+            curve = web_auth.CURVES[name]
+            order = curve[4]
+            size = (order.bit_length() + 7) // 8
+            hashed = int.from_bytes(hashlib.new(digest, message).digest(), "big")
+            k = 2
+            while True:
+                r = web_auth._ec_multiply(curve, k, (curve[2], curve[3]))[0] % order
+                s = hashed * pow(k, -1, order) % order
+                if r and s and (r * pow(s, -1, order) % order) % 2 == 0:
+                    break
+                k += 1
+            forged = r.to_bytes(size, "big") + s.to_bytes(size, "big")
+            key = (5, 0)
+            self.assertFalse(web_auth.ec_on_curve(name, *key))
+            # The arithmetic alone would accept it...
+            inverse = pow(s, -1, order)
+            point = web_auth._ec_add(curve, web_auth._ec_multiply(curve, hashed * inverse % order, (curve[2], curve[3])),
+                                     web_auth._ec_multiply(curve, r * inverse % order, key))
+            self.assertEqual(point[0] % order, r)
+            # ...the verification does not, and such a key never leaves the JWKS parser.
+            self.assertFalse(web_auth.ec_verify(name, *key, forged, message, digest))
+            jwk = {"kty": "EC", "kid": "bad", "crv": name, "x": token_tool.uint(5, size), "y": token_tool.uint(0, size)}
+            self.assertEqual(web_auth.parse_jwks(json.dumps({"keys": [jwk]}).encode(), ("ES256", "ES384")), {})
 
     def test_curve_constants(self):
         for name, (prime, _, gx, gy, order) in web_auth.CURVES.items():

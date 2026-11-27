@@ -9,6 +9,9 @@
 # the recipe's own check where providers.json names one, and writes its status
 # file. An existing provider directory is never overwritten;
 # a provider with nothing cached under its key is left for the lanes to build.
+# The key names the Debian packages of the toolchain image as well; with
+# TAKX_PROTO_CACHE_PACKAGES=report it does not, and a bundle built with other
+# packages is used and reported (enforce: not used). See provider_cache.py.
 # The lanes do the same on their own before building; this script is for
 # restoring ahead of time. No index file is needed (cache-index.tsv is a
 # generated listing); a first argument naming one is accepted and ignored.

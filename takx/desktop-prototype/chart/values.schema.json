@@ -4,7 +4,7 @@
   "title": "takx-desktop chart values",
   "type": "object",
   "additionalProperties": false,
-  "required": ["domain", "host", "image", "imagePullPolicy", "sso", "display", "jvm", "takx", "identity", "tak", "egress", "network", "persistence", "resources"],
+  "required": ["domain", "host", "image", "imagePullPolicy", "sso", "auth", "display", "jvm", "takx", "web", "identity", "tak", "egress", "network", "session", "persistence", "resources"],
   "definitions": {
     "dnsLabel": {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"},
     "dnsName": {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$", "maxLength": 253},
@@ -47,6 +47,35 @@
         }
       }
     },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issuer", "jwksUrl", "algorithms", "groupsClaim", "leewaySeconds", "websocketMaxSeconds", "keycloak"],
+      "properties": {
+        "issuer": {"type": "string", "pattern": "^(https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?)?$", "description": "Expected iss of the token. Empty: https://sso.<domain>/realms/uds."},
+        "jwksUrl": {"type": "string", "pattern": "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._~/-]*$", "description": "URL of the realm's JSON Web Key Set."},
+        "algorithms": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["RS256", "RS384", "RS512", "ES256", "ES384"]},
+          "description": "Accepted signature algorithms. Asymmetric only: 'none' and the HMAC algorithms cannot be allowed."
+        },
+        "groupsClaim": {"type": "string", "pattern": "^[A-Za-z0-9_.:/-]{1,64}$"},
+        "leewaySeconds": {"type": "integer", "minimum": 0, "maximum": 300},
+        "websocketMaxSeconds": {"type": "integer", "minimum": 0, "maximum": 86400, "description": "Lifetime of a WebSocket after its upgrade. 0: the expiry of its token."},
+        "keycloak": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["namespace", "selector", "port"],
+          "properties": {
+            "namespace": {"$ref": "#/definitions/dnsLabel"},
+            "selector": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string"}},
+            "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+          }
+        }
+      }
+    },
     "display": {
       "type": "object",
       "additionalProperties": false,
@@ -65,8 +94,14 @@
     "takx": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["args"],
-      "properties": {"args": {"type": "string"}}
+      "required": ["args", "localInputs"],
+      "properties": {"args": {"type": "string"}, "localInputs": {"type": "boolean"}}
+    },
+    "web": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["heartbeatSeconds"],
+      "properties": {"heartbeatSeconds": {"type": "integer", "minimum": 5, "maximum": 29, "description": "Below the idleTimeout of the DestinationRule (30s)."}}
     },
     "identity": {
       "type": "object",
@@ -135,6 +170,12 @@
       "properties": {
         "denyOtherPorts": {"type": "boolean"}
       }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["memory", "sizeLimit"],
+      "properties": {"memory": {"type": "boolean"}, "sizeLimit": {"$ref": "#/definitions/quantity"}}
     },
     "persistence": {
       "type": "object",

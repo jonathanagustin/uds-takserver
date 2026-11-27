@@ -231,7 +231,8 @@ def _number(claims, name, required):
     if value is None and not required:
         return None
     # bool is an int in Python; a token saying "exp": true is not a time.
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    # Neither is a number no clock can reach (1e400 reads as infinity).
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not -1e12 < value < 1e12:
         raise Denied(f"claim {name} is missing or not a number")
     return float(value)
 
@@ -256,6 +257,8 @@ def parse_jwks(data, algorithms):
         if not isinstance(kid, str) or not kid or len(kid) > 256:
             continue
         if alg is not None and (alg not in algorithms or ALGORITHMS[alg][0] != kty):
+            continue
+        if not any(ALGORITHMS[name][:2] == (kty, entry.get("crv") if kty == "EC" else None) for name in algorithms):
             continue
         try:
             if kty == "RSA":

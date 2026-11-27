@@ -84,7 +84,7 @@ class GateCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix="takx-web-gate-")
         self.socket = os.path.join(self.directory.name, "websockify.sock")
-        self.heads, self.lines, self.jwks_fail = [], [], False
+        self.heads, self.lines, self.jwks_fail, self.flood = [], [], False, 0
         self.upstream = await asyncio.start_unix_server(self.websockify, self.socket)
 
         def fetch():
@@ -115,6 +115,11 @@ class GateCase(unittest.IsolatedAsyncioTestCase):
             if b"Upgrade: websocket" in head:
                 writer.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                              b"Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n" + RFB)
+                if self.flood:
+                    # A screen that never stops changing: more than any buffer holds.
+                    for _ in range(self.flood):
+                        writer.write(bytes(65536))
+                        await writer.drain()
                 while data := await reader.read(4096):
                     writer.write(b"echo:" + data)
                     await writer.drain()
@@ -198,6 +203,21 @@ class Unauthenticated(GateCase):
                     get("/vnc\x00.html", good), get("/vnc.html", "Bad Name: x", good), b"\r\n\r\n"):
             self.refused(await self.ask(raw), 400)
 
+    async def test_no_request_head_takes_long_to_refuse(self):
+        """Lines made to make a pattern backtrack: each must be answered at once."""
+        filler = web_gate.MAX_HEAD - 200
+        for raw in (get("/vnc.html", "X:" + " " * filler + "\x01"), get("/vnc.html", "X:" + "\t " * (filler // 2) + "\x7f"),
+                    get("/vnc.html", "X: " + "a " * (filler // 2) + "\x00"), get("/" + "a" * 2100),
+                    get("/vnc.html", "Authorization: Bearer " + "a." * (filler // 2)),
+                    get("/vnc.html", "Authorization: Bearer " + "a" * (filler // 2) + "." + "b" * (filler // 2 - 30)),
+                    upgrade("Sec-WebSocket-Protocol: " + "a, " * 3000, auth(token())),
+                    b"G" * filler + b"\r\n\r\n", b"GET " + b"/" * filler + b" HTTP/1.1\r\n\r\n"):
+            started = time.monotonic()
+            reply = await self.ask(raw)
+            self.assertLess(time.monotonic() - started, 1.0, raw[:40])
+            self.assertIn(reply[:12], (b"HTTP/1.1 400", b"HTTP/1.1 401"))
+        self.assertEqual(self.heads, [])
+
     async def test_incomplete_head_is_dropped_without_an_answer(self):
         original, web_gate.HEAD_TIMEOUT = web_gate.HEAD_TIMEOUT, 0.3
         try:
@@ -221,11 +241,13 @@ class Unauthenticated(GateCase):
             self.refused(reply, 200)
         self.jwks_fail = True
         self.assertTrue((await self.ask(get("/healthz"))).startswith(b"HTTP/1.1 200 "))
-        for raw in (get("/healthz/"), get("/healthz/../vnc.html"), get("/healthz", method="POST"), get("/HEALTHZ"),
-                    get("/healthz?x=/vnc.html", "Upgrade: websocket", "Connection: Upgrade")):
-            reply = await self.ask(raw)
-            self.assertFalse(reply.startswith(b"HTTP/1.1 200 ") and b"ok\n" not in reply)
-            self.assertNotIn(b"noVNC", reply)
+        # Exactly that path, with GET or HEAD; nothing near it gets past the token check.
+        for raw, status in ((get("/healthz/"), 401), (get("/healthzz"), 401), (get("/healthz.html"), 401),
+                            (get("/HEALTHZ"), 401), (get("/healthz", method="POST"), 401),
+                            (get("/healthz/../vnc.html"), 400), (get("/vnc.html?/healthz"), 401)):
+            self.refused(await self.ask(raw), status)
+        reply = await self.ask(get("/healthz?x=/vnc.html", "Upgrade: websocket", "Connection: Upgrade"))
+        self.assertEqual(reply.split(b"\r\n\r\n", 1)[1], b"ok\n")
         self.assertEqual(self.heads, [])
 
 
@@ -318,6 +340,11 @@ class SessionLimit(GateCase):
         self.assertEqual(await reader.readexactly(len(RFB)), RFB)
         return reader, writer
 
+    async def cut(self, reader):
+        """Wait until the gate ends the connection; it does so with a reset."""
+        with self.assertRaises(ConnectionResetError):
+            await asyncio.wait_for(reader.read(-1), 5)
+
     async def test_websocket_ends_when_the_token_expires(self):
         value = token(lifetime=1.2)
         started = time.monotonic()
@@ -325,7 +352,7 @@ class SessionLimit(GateCase):
         # Traffic does not extend it.
         writer.write(b"ping")
         self.assertEqual(await reader.readexactly(9), b"echo:ping")
-        self.assertEqual(await asyncio.wait_for(reader.read(-1), 5), b"")
+        await self.cut(reader)
         lasted = time.monotonic() - started
         self.assertGreater(lasted, 0.9)
         self.assertLess(lasted, 2.5)
@@ -335,11 +362,32 @@ class SessionLimit(GateCase):
         self.heads.clear()
         self.refused(await self.ask(upgrade(auth(value))), 401)
 
+    async def test_a_client_that_reads_slowly_is_cut_at_the_limit_too(self):
+        self.flood = 512  # 32 MiB of screen
+        self.gate.ws_max_seconds = 0.8
+        reader, writer = await asyncio.open_connection("127.0.0.1", self.port, limit=4096)
+        writer.write(upgrade(auth(token(lifetime=3600))))
+        head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+        self.assertTrue(head.startswith(b"HTTP/1.1 101 "))
+        # Read nothing for longer than the limit: the gate must not wait for us.
+        await asyncio.sleep(1.6)
+        self.assertEqual(self.gate.connections, 0)
+        self.assertTrue(any("session limit reached" in line for line in self.lines))
+        received = 0
+        try:
+            while data := await asyncio.wait_for(reader.read(65536), 5):
+                received += len(data)
+        except ConnectionResetError:
+            pass
+        # Only what was already on its way arrives, not the 32 MiB behind it.
+        self.assertLess(received, 16 * 1024 * 1024)
+        writer.close()
+
     async def test_fixed_limit_is_counted_from_the_upgrade(self):
         self.gate.ws_max_seconds = 0.6
         started = time.monotonic()
         reader, writer = await self.open(token(lifetime=3600))
-        self.assertEqual(await asyncio.wait_for(reader.read(-1), 5), b"")
+        await self.cut(reader)
         self.assertLess(time.monotonic() - started, 2.0)
         self.assertGreater(time.monotonic() - started, 0.5)
         writer.close()

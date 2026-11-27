@@ -19,15 +19,56 @@ host: takx
 image: ghcr.io/jonathanagustin/uds-takserver/takx-desktop:takx-build-tag
 imagePullPolicy: IfNotPresent
 
-# The bridge in the pod has no login of its own: whoever reaches port 6080
-# controls the desktop. Authservice at the tenant gateway is the only access
-# control, and it cannot be switched off in this chart.
+# Who may open the desktop. Two things check it, and the chart has no switch
+# for either: Authservice at the tenant gateway (sign-in at Keycloak, which
+# issues a token for this client only to members of `groups`), and the bridge
+# in the pod itself, which verifies that token on every request (`auth`).
 sso:
   clientId: uds-takx-desktop
   # Keycloak group paths that may open the desktop. Everyone in these groups
-  # shares the one session and the one TAK identity.
+  # shares the one session and the one TAK identity. The same list is what
+  # the bridge looks for in the token's groups claim.
   groups:
     - /UDS Core/Admin
+
+# The bridge's own check (../image/web_gate.py, web_auth.py). Authservice
+# adds the ID token of the session to every request as
+# `Authorization: Bearer <JWT>`. The bridge verifies its signature against
+# the realm's keys, the issuer, the audience (sso.clientId), the expiry and
+# the groups claim (sso.groups) before it sends one byte of noVNC or of the
+# desktop. A request without such a token is answered 401 or 403, also when
+# it comes from the node itself, where no NetworkPolicy and no mesh policy
+# applies.
+auth:
+  # `iss` of the token. Empty: https://sso.<domain>/realms/uds.
+  issuer: ""
+  # Where the bridge fetches the realm's signing keys: Keycloak's Service in
+  # the cluster, over the mesh. The UDS Package gets an egress rule for it
+  # (`keycloak` below). When this is unreachable the bridge lets nobody in.
+  jwksUrl: http://keycloak-http.keycloak.svc.cluster.local:8080/realms/uds/protocol/openid-connect/certs
+  # Signature algorithms accepted. The UDS realm signs with RS256. Others
+  # the bridge can verify: RS384, RS512, ES256, ES384.
+  algorithms:
+    - RS256
+  # Claim that lists the user's group paths. The UDS realm writes `groups`
+  # into the ID token (client scope `profile`, full paths).
+  groupsClaim: groups
+  # Seconds of clock difference tolerated for exp, nbf and iat.
+  leewaySeconds: 10
+  # How long a WebSocket may stay open after its upgrade. Then the bridge
+  # closes it, noVNC reconnects by itself and has to pass Authservice and
+  # the bridge again with a fresh token: a session that has ended at
+  # Keycloak loses the desktop after at most this long. 0: until the expiry
+  # of the token the WebSocket was opened with (60 seconds in the UDS realm
+  # by default, so the screen reconnects every minute).
+  websocketMaxSeconds: 300
+  # Pods of Keycloak (its waypoint carries the same label), for the egress
+  # rule of the key fetch.
+  keycloak:
+    namespace: keycloak
+    selector:
+      app.kubernetes.io/name: keycloak
+    port: 8080
 
 display:
   # WIDTHxHEIGHT of the X desktop. 1920x1080 is the only size that was run.
@@ -43,9 +84,23 @@ jvm:
   extraOpts: "-Xmx2g"
 
 takx:
-  # TAKX program arguments, space separated. Empty: `-create` when
-  # ProjectData is empty, otherwise none.
+  # TAKX program arguments, space separated. Empty: `-create` when no
+  # project exists, otherwise none.
   args: ""
+  # false: a new session starts with every default network input of TAKX
+  # switched off in its program properties (CommonCommo/DefaultInputs: TCP
+  # and UDP 4242 and 8087, UDP 10011, six multicast groups), so the JVM does
+  # not listen on them. Nothing in a pod can use them; the TAK Server
+  # connection is outbound. true: the client's defaults. Either way the JVM
+  # keeps one ephemeral HTTPS port for peer-to-peer mission packages, for
+  # which TAKX has no setting.
+  localInputs: false
+
+web:
+  # Seconds between WebSocket pings from the bridge to the browser, so that
+  # a session with a still screen never looks idle to a proxy on the path.
+  # Keep it below the idleTimeout of templates/bridge-connections.yaml.
+  heartbeatSeconds: 25
 
 identity:
   # Secret in this namespace with the keys package.zip and password: the
@@ -98,22 +153,38 @@ egress:
 
 network:
   # true: an Istio AuthorizationPolicy with action DENY for every port of the
-  # pod other than 6080 (templates/ingress-isolation.yaml). The TAKX JVM
-  # listens on TCP 4242, 8087 and one ephemeral port; ztunnel then refuses
-  # them from any pod. The NetworkPolicy that isolates the pod for ingress
-  # is always rendered. In the first deploy the sign-in path through the
-  # gateway worked with this policy in place, and ztunnel's log named it when
-  # a test pod was let through the NetworkPolicy. Neither layer covers a
-  # process on the node itself (../zarf/README.md).
+  # pod other than 6080 (templates/ingress-isolation.yaml). With
+  # takx.localInputs off the TAKX JVM still listens on one ephemeral port;
+  # ztunnel then refuses it from any pod. The NetworkPolicy that isolates the
+  # pod for ingress is always rendered. In the first deploy the sign-in path
+  # through the gateway worked with this policy in place, and ztunnel's log
+  # named it when a test pod was let through the NetworkPolicy. Neither
+  # layer covers a process on the node itself; there the bridge's own token
+  # check is what stands (../zarf/README.md).
   denyOtherPorts: true
 
+session:
+  # true: the session directory (ProjectData, home, the JVM's temporary
+  # directory, the run tree) is a memory-backed emptyDir. Once a TAK Server
+  # connection is added, TAKX copies the PKCS#12 files into its project
+  # (ProjectData/Globals/Files/SslCerts, mode 0644) and keeps their passwords
+  # in a credential database there; in memory they never reach a disk of the
+  # node and are gone with the pod. The files count against the memory limit
+  # of the desktop container (resources.desktop). false: an emptyDir on the
+  # node's disk, which then holds that key material until the pod is deleted.
+  # Ignored when persistence.enabled is true.
+  memory: true
+  # Size limit of the emptyDir. A fresh session is about 270 MB, most of it
+  # the Kernel's native libraries, which are extracted at every start.
+  sizeLimit: 1Gi
+
 persistence:
-  # false: the session directory (ProjectData, home, the JVM's temporary
-  # directory) is an emptyDir of `size` and is lost with the pod, including a
-  # TAK Server connection saved in the project. true: a PersistentVolumeClaim
-  # of `size` keeps it. TAKX stores its own copies of the PKCS#12 files and
-  # their passwords in the project, so the volume then holds key material.
-  # A start on an existing project has not been run with this image.
+  # false: the session directory is the emptyDir above and is lost with the
+  # pod, including a TAK Server connection saved in the project. true: a
+  # PersistentVolumeClaim of `size` keeps it, and the volume then holds
+  # TAKX's own copies of the PKCS#12 files and their passwords at rest: key
+  # material on disk, by choice. A start on an existing project has not been
+  # run with this image.
   enabled: false
   size: 2Gi
   # Empty: the cluster default StorageClass.
@@ -123,11 +194,17 @@ resources:
   identity:
     requests: {cpu: 50m, memory: 128Mi}
     limits: {cpu: 500m, memory: 512Mi}
+  # The memory limit covers the JVM and, with session.memory, the files of
+  # the session directory: about 2.1 GiB at the peak for the processes
+  # (-Xmx2g) plus up to session.sizeLimit (1Gi), 3.2 GiB together, inside the
+  # 5Gi limit. The request is what a fresh session uses: about 2.0 GiB of
+  # processes and 0.27 GiB of files.
   desktop:
-    requests: {cpu: 500m, memory: 2Gi}
+    requests: {cpu: 500m, memory: 2560Mi}
     limits: {cpu: "2", memory: 5Gi}
-  # The bridge idles at about 35 MiB. It forks one process per connection:
-  # templates/bridge-connections.yaml keeps the waypoint from pooling them.
+  # The bridge: the gate (one Python process, about 25 MiB) and websockify,
+  # which forks one process per connection. The gate closes every connection
+  # after one request, so those processes do not pile up.
   web:
     requests: {cpu: 50m, memory: 64Mi}
     limits: {cpu: 500m, memory: 256Mi}

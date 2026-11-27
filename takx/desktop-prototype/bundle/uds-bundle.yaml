@@ -162,7 +162,7 @@ packages:
               description: Extra JVM options of the TAKX client, for example -Xmx2g
               path: jvm.extraOpts
             - name: TAKX_DESKTOP_MEMORY_LIMIT
-              description: Memory limit of the desktop container
+              description: Memory limit of the desktop container; it covers the session files, which are kept in memory
               path: resources.desktop.limits.memory
             - name: TAKX_GATEWAY_IP
               description: Address of the passthrough gateway for the pod's hosts entry; unset looks up the Service ClusterIP

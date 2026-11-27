@@ -2,11 +2,12 @@
 # Copyright 2026 uds-takserver authors
 # SPDX-License-Identifier: GPL-3.0-only
 
-# The pod listens on more than the web bridge. In the desktop container the
-# TAKX JVM (CommonCommo) binds TCP 4242 and 8087 on every address, one
-# ephemeral port for its HTTPS proxy, and a web server on loopback; the web
-# container binds 6080. Only 6080 is meant to be reached, and only along the
-# path tenant gateway -> Authservice -> pod. Three things say so explicitly:
+# The pod listens on more than the web bridge. The web container binds 6080.
+# In the desktop container the TAKX JVM (CommonCommo) keeps one ephemeral
+# HTTPS port for peer-to-peer mission packages and a web server on loopback;
+# with takx.localInputs on it also binds TCP 4242 and 8087 on every address.
+# Only 6080 is meant to be reached, and only along the path tenant gateway
+# -> Authservice -> pod. Three things say so explicitly:
 #
 # 1. The NetworkPolicy below selects the pod and allows no ingress at all, so
 #    the pod is isolated for ingress whatever else exists in the namespace.
@@ -23,6 +24,11 @@
 #    from `expose` that names the gateway path; with it in place ztunnel
 #    refuses every other source.
 #
+# None of the three covers a process in the node's host network namespace
+# (below). For port 6080 that is what the bridge's own token check is for:
+# the gate there answers 401 to anything without a valid token of this
+# client and a required group, whoever connects (deployment.yaml).
+#
 # What the first deploy showed (2026-11-26, k3s with kube-router, Istio
 # ambient; ../../zarf/README.md, "Which ports can be reached"):
 #
@@ -35,12 +41,17 @@
 #   policy (deny-all-except-waypoint) closed 6080 for everything but the
 #   waypoint, where Authservice answered. The sign-in path worked with the
 #   DENY policy in place.
-# - NOT closed: the node itself. A process in the node's host network
-#   namespace reaches pod-IP:6080 (HTTP 200, no sign-in) and the JVM's ports.
-#   kube-router accepts traffic "to pods when source is the pod's local
-#   node", and Istio ambient exempts host traffic from ztunnel so that
-#   kubelet probes work. Nothing in a chart can change that: whoever has a
-#   shell on the node is inside the trust boundary of this pod.
+# - NOT closed by any policy: the node itself. A process in the node's host
+#   network namespace reached pod-IP:6080 (HTTP 200, no sign-in, with the
+#   image of that day) and the JVM's ports. kube-router accepts traffic "to
+#   pods when source is the pod's local node", and Istio ambient exempts host
+#   traffic from ztunnel so that kubelet probes work. No policy in a chart
+#   can change that. Since then the image checks the token itself and starts
+#   TAKX with its default inputs off: in the image self-test a client on the
+#   host got 401 from port 6080 without a token and found 4242 and 8087
+#   closed. In a cluster that is still to be shown. The ephemeral HTTPS port
+#   stays reachable from the node, and root on the node can enter the pod's
+#   namespaces whatever the pod does.
 #
 # Kubelet probes are exec probes and need no ingress.
 apiVersion: networking.k8s.io/v1

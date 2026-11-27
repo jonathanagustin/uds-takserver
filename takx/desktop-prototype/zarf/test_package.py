@@ -60,12 +60,24 @@ PINNED_UDS = "/var/lib/takx-proto/server/tools/uds-0.42.0/uds"
 IMAGE = "ghcr.io/jonathanagustin/uds-takserver/takx-desktop"
 SELECTOR = {"app.kubernetes.io/name": "takx-desktop"}
 GATEWAY = {"remoteNamespace": "istio-passthrough-gateway", "remoteSelector": {"app": "passthrough-ingressgateway"}}
+# The bridge's key fetch: the one egress rule that is always there.
+KEYS = {"direction": "Egress", "selector": SELECTOR, "remoteNamespace": "keycloak",
+        "remoteSelector": {"app.kubernetes.io/name": "keycloak"}, "port": 8080,
+        "description": "Bridge to Keycloak for the signing keys"}
+JWKS_URL = "http://keycloak-http.keycloak.svc.cluster.local:8080/realms/uds/protocol/openid-connect/certs"
 
 # Every optional branch of the chart at once.
 ALL_VALUES = {
     "host": "takx-two",
     "domain": "example.test",
-    "takx": {"args": "-create"},
+    "takx": {"args": "-create", "localInputs": True},
+    "sso": {"clientId": "takx-two", "groups": ["/Ops/TAKX Users", "/UDS Core/Admin"]},
+    "auth": {"issuer": "https://login.example.test/realms/other", "jwksUrl": "https://login.example.test/keys",
+             "algorithms": ["RS256", "ES256"], "groupsClaim": "member_of", "leewaySeconds": 30, "websocketMaxSeconds": 0,
+             # Helm merges maps: a null takes the default label out.
+             "keycloak": {"namespace": "idp", "selector": {"app.kubernetes.io/name": None, "app": "idp"}, "port": 8443}},
+    "web": {"heartbeatSeconds": 20},
+    "session": {"memory": False, "sizeLimit": "3Gi"},
     "identity": {"expectHost": "takserver-stream.example.test", "connectHost": "tak.example.test"},
     "tak": {
         "gateway": {"ip": "10.43.0.99"},
@@ -1012,7 +1024,7 @@ class Chart(unittest.TestCase):
         self.assertEqual(one(without, "NetworkPolicy")["spec"]["policyTypes"], ["Ingress"])
 
     def test_bridge_connections_are_not_pooled(self):
-        """websockify keeps one process per connection: the waypoint must not pool them."""
+        """The bridge serves one request per connection: the waypoint must not pool them."""
         for documents in (self.default, self.full):
             rule = one(documents, "DestinationRule")
             self.assertEqual(rule["apiVersion"], "networking.istio.io/v1")
@@ -1021,6 +1033,12 @@ class Chart(unittest.TestCase):
                              f"{service['metadata']['name']}.{service['metadata']['namespace']}.svc.cluster.local")
             self.assertEqual(rule["spec"]["trafficPolicy"],
                              {"connectionPool": {"http": {"maxRequestsPerConnection": 1, "idleTimeout": "30s"}}})
+            # A quiet WebSocket is pinged more often than any idle timer of the rule counts.
+            web = {c["name"]: c for c in all_containers(one(documents, "Deployment")["spec"]["template"]["spec"])}["web"]
+            heartbeat = int({v["name"]: v["value"] for v in web["env"]}["TAKX_WEB_HEARTBEAT"])
+            self.assertLess(heartbeat, 30)
+        with open(os.path.join(CHART, "values.schema.json"), encoding="utf-8") as stream:
+            self.assertLess(json.load(stream)["properties"]["web"]["properties"]["heartbeatSeconds"]["maximum"], 30)
 
     def test_texts_do_not_claim_that_the_desktop_has_no_tcp_port(self):
         for path in (os.path.join(CHART, "templates", "deployment.yaml"), os.path.join(CHART, "templates", "service.yaml"),
@@ -1039,7 +1057,16 @@ class Chart(unittest.TestCase):
         self.assertEqual(sorted(schema["required"]), sorted(values))
         for path, bad in (("sso", {"groups": []}), ("display", {"depth": 8}), ("display", {"geometry": "big"}),
                           ("egress", {"hosts": ["*.example.com"]}), ("tak", {"certName": "bad name"}),
-                          ("sso", {"clientId": "a:b"}), ("identity", {"secretName": "Bad_Name"})):
+                          ("sso", {"clientId": "a:b"}), ("identity", {"secretName": "Bad_Name"}),
+                          # The token check cannot be weakened into nothing.
+                          ("auth", {"algorithms": []}), ("auth", {"algorithms": ["none"]}),
+                          ("auth", {"algorithms": ["HS256"]}), ("auth", {"algorithms": ["RS256", "HS256"]}),
+                          ("auth", {"jwksUrl": ""}), ("auth", {"jwksUrl": "file:///keys.json"}),
+                          ("auth", {"issuer": "http://sso.example.test/realms/uds"}), ("auth", {"groupsClaim": ""}),
+                          ("auth", {"leewaySeconds": 301}), ("auth", {"websocketMaxSeconds": -1}),
+                          ("auth", {"websocketMaxSeconds": 86401}), ("auth", {"enabled": False}), ("auth", {"mode": "none"}),
+                          ("web", {"heartbeatSeconds": 30}), ("web", {"heartbeatSeconds": 0}),
+                          ("session", {"memory": "yes"}), ("session", {"sizeLimit": "lots"})):
             changed = copy.deepcopy(values)
             changed[path].update(bad)
             self.assertTrue(schema_errors(changed, schema), (path, bad))
@@ -1088,8 +1115,21 @@ class Chart(unittest.TestCase):
         self.assertEqual(containers["web"]["ports"], [{"name": "http", "containerPort": 6080, "protocol": "TCP"}])
         env = {name: {v["name"]: v["value"] for v in c.get("env", [])} for name, c in containers.items()}
         self.assertEqual(env["identity"], {"TAKX_IDENTITY_CONNECT_HOST": "takserver"})
-        self.assertEqual(env["desktop"], {"EXTRA_JVM_OPTS": "-Xmx2g", "TAKX_GEOMETRY": "1920x1080", "TAKX_DEPTH": "24"})
-        self.assertEqual(env["web"], {})
+        self.assertEqual(env["desktop"], {"EXTRA_JVM_OPTS": "-Xmx2g", "TAKX_GEOMETRY": "1920x1080", "TAKX_DEPTH": "24",
+                                          "TAKX_LOCAL_INPUTS": "off"})
+        # The bridge checks the forwarded token itself: the realm of the
+        # domain, this package's client, the groups of the Package.
+        self.assertEqual(env["web"], {
+            "TAKX_AUTH_MODE": "oidc", "TAKX_AUTH_ISSUER": "https://sso.uds.dev/realms/uds",
+            "TAKX_AUTH_AUDIENCE": "uds-takx-desktop", "TAKX_AUTH_GROUPS": '["/UDS Core/Admin"]',
+            "TAKX_AUTH_GROUPS_CLAIM": "groups", "TAKX_AUTH_JWKS_URL": JWKS_URL, "TAKX_AUTH_ALGORITHMS": "RS256",
+            "TAKX_AUTH_LEEWAY_SECONDS": "10", "TAKX_AUTH_WS_MAX_SECONDS": "300", "TAKX_AUTH_ORIGIN": "https://takx.uds.dev",
+            "TAKX_WEB_HEARTBEAT": "25"})
+        package = one(self.default, "Package")
+        (client,) = package["spec"]["sso"]
+        self.assertEqual(env["web"]["TAKX_AUTH_AUDIENCE"], client["clientId"])
+        self.assertEqual(json.loads(env["web"]["TAKX_AUTH_GROUPS"]), client["groups"]["anyOf"])
+        self.assertEqual(env["web"]["TAKX_AUTH_ORIGIN"] + "/login", client["redirectUris"][0])
         probes = containers["desktop"]
         self.assertEqual(probes["startupProbe"]["exec"]["command"], ["/opt/takx-desktop/healthcheck.sh", "started"])
         self.assertEqual(probes["startupProbe"]["periodSeconds"] * probes["startupProbe"]["failureThreshold"], 600)
@@ -1102,14 +1142,23 @@ class Chart(unittest.TestCase):
         pod_spec = one(self.default, "Deployment")["spec"]["template"]["spec"]
         volumes = {volume["name"]: volume for volume in pod_spec["volumes"]}
         self.assertEqual(volumes["tmp"], {"name": "tmp", "emptyDir": {"sizeLimit": "1Gi"}})
-        self.assertEqual(volumes["session"], {"name": "session", "emptyDir": {"sizeLimit": "2Gi"}})
+        # In memory by default: TAKX copies the client key store into its
+        # project, and that copy must not reach the node's disk.
+        self.assertEqual(volumes["session"], {"name": "session", "emptyDir": {"medium": "Memory", "sizeLimit": "1Gi"}})
         self.assertEqual(volumes["vnc"], {"name": "vnc", "emptyDir": {"medium": "Memory", "sizeLimit": "1Mi"}})
+        self.assertEqual(volumes["web"], {"name": "web", "emptyDir": {"medium": "Memory", "sizeLimit": "1Mi"}})
         self.assertEqual(volumes["identity"], {"name": "identity", "emptyDir": {"medium": "Memory", "sizeLimit": "8Mi"}})
+        # Every volume that can hold key material is memory; the only disk
+        # volume left is /tmp, the X socket and its lock file.
+        self.assertEqual([name for name, volume in volumes.items()
+                          if "emptyDir" in volume and volume["emptyDir"].get("medium") != "Memory"], ["tmp"])
+        on_disk = one(helm_template({"session": {"memory": False}}), "Deployment")["spec"]["template"]["spec"]["volumes"]
+        self.assertEqual({v["name"]: v for v in on_disk}["session"], {"name": "session", "emptyDir": {"sizeLimit": "1Gi"}})
         self.assertEqual(volumes["identity-secret"], {"name": "identity-secret", "secret": {
             "secretName": "takx-desktop-identity", "optional": True, "defaultMode": 0o440}})
         # Written in decimal: not every YAML reader takes 0440 as octal.
         self.assertEqual(0o440, 288)
-        self.assertEqual(len(volumes), 5)
+        self.assertEqual(len(volumes), 6)
         mounts = {c["name"]: {m["name"]: m for m in c["volumeMounts"]} for c in all_containers(pod_spec)}
         self.assertEqual(mounts["identity"], {
             "identity-secret": {"name": "identity-secret", "mountPath": "/run/takx/secret", "readOnly": True},
@@ -1119,8 +1168,15 @@ class Chart(unittest.TestCase):
             "session": {"name": "session", "mountPath": "/run/takx/session"},
             "vnc": {"name": "vnc", "mountPath": "/run/takx/vnc"},
             "identity": {"name": "identity", "mountPath": "/run/takx/identity", "readOnly": True}})
-        # The container that faces the gateway sees the socket directory only.
-        self.assertEqual(mounts["web"], {"vnc": {"name": "vnc", "mountPath": "/run/takx/vnc", "readOnly": True}})
+        # The container that faces the gateway sees the RFB socket directory
+        # and its own: websockify listens there, behind the gate, and no
+        # other container mounts it.
+        self.assertEqual(mounts["web"], {"vnc": {"name": "vnc", "mountPath": "/run/takx/vnc", "readOnly": True},
+                                         "web": {"name": "web", "mountPath": "/run/takx/web"}})
+        self.assertEqual([name for name, mounted in mounts.items() if "web" in mounted], ["web"])
+        # The memory the session files take is inside the desktop's limit.
+        desktop = {c["name"]: c for c in all_containers(pod_spec)}["desktop"]["resources"]
+        self.assertEqual(desktop, {"requests": {"cpu": "500m", "memory": "2560Mi"}, "limits": {"cpu": "2", "memory": "5Gi"}})
         users = [name for name, mounted in mounts.items() if "identity-secret" in mounted]
         self.assertEqual(users, ["identity"])
 
@@ -1151,9 +1207,14 @@ class Chart(unittest.TestCase):
         (expose,) = network["expose"]
         self.assertEqual({key: expose[key] for key in ("service", "selector", "gateway", "host", "port")},
                          {"service": "takx-desktop", "selector": SELECTOR, "gateway": "tenant", "host": "takx", "port": 6080})
-        # Exactly one way out: TAK streaming through the passthrough gateway.
+        # Two ways out: the realm's signing keys for the bridge, and TAK
+        # streaming through the passthrough gateway.
         self.assertEqual(network["allow"], [
+            KEYS,
             {"direction": "Egress", "selector": SELECTOR, **GATEWAY, "port": 8089, "description": "TAKX to TAK streaming"}])
+        # The key URL of the default values is what that rule opens.
+        self.assertEqual(JWKS_URL.split("/")[2],
+                         f"keycloak-http.{KEYS['remoteNamespace']}.svc.cluster.local:{KEYS['port']}")
 
     def test_uds_package_never_opens_wide(self):
         for documents in (self.default, self.full):
@@ -1169,6 +1230,7 @@ class Chart(unittest.TestCase):
         self.assertEqual(package["spec"]["sso"][0]["redirectUris"], ["https://takx-two.example.test/login"])
         self.assertEqual(package["spec"]["network"]["expose"][0]["host"], "takx-two")
         self.assertEqual(package["spec"]["network"]["allow"], [
+            {**KEYS, "remoteNamespace": "idp", "remoteSelector": {"app": "idp"}, "port": 8443},
             {"direction": "Egress", "selector": SELECTOR, **GATEWAY, "port": 8089, "description": "TAKX to TAK streaming"},
             {"direction": "Egress", "selector": SELECTOR, **GATEWAY, "port": 443, "description": "TAKX to TAK API by SNI"},
             {"direction": "Egress", "selector": SELECTOR, "serviceAccount": "takx-desktop",
@@ -1187,13 +1249,49 @@ class Chart(unittest.TestCase):
         self.assertEqual(env["identity"], {"TAKX_IDENTITY_EXPECT_HOST": "takserver-stream.example.test",
                                            "TAKX_IDENTITY_CONNECT_HOST": "tak.example.test"})
         self.assertEqual(env["desktop"]["TAKX_ARGS"], "-create")
+        self.assertEqual(env["desktop"]["TAKX_LOCAL_INPUTS"], "default")
+        # Whatever the values, the bridge follows the Package: same client, same groups.
+        (client,) = package["spec"]["sso"]
+        self.assertEqual(env["web"], {
+            "TAKX_AUTH_MODE": "oidc", "TAKX_AUTH_ISSUER": "https://login.example.test/realms/other",
+            "TAKX_AUTH_AUDIENCE": "takx-two", "TAKX_AUTH_GROUPS": '["/Ops/TAKX Users","/UDS Core/Admin"]',
+            "TAKX_AUTH_GROUPS_CLAIM": "member_of", "TAKX_AUTH_JWKS_URL": "https://login.example.test/keys",
+            "TAKX_AUTH_ALGORITHMS": "RS256,ES256", "TAKX_AUTH_LEEWAY_SECONDS": "30", "TAKX_AUTH_WS_MAX_SECONDS": "0",
+            "TAKX_AUTH_ORIGIN": "https://takx-two.example.test", "TAKX_WEB_HEARTBEAT": "20"})
+        self.assertEqual((client["clientId"], client["groups"]["anyOf"]),
+                         ("takx-two", json.loads(env["web"]["TAKX_AUTH_GROUPS"])))
+        # Another domain alone moves the issuer with it.
+        moved = one(helm_template({"domain": "example.test"}), "Deployment")["spec"]["template"]["spec"]
+        web = {c["name"]: c for c in all_containers(moved)}["web"]
+        self.assertEqual({v["name"]: v["value"] for v in web["env"]}["TAKX_AUTH_ISSUER"],
+                         "https://sso.example.test/realms/uds")
 
-    def test_no_egress_at_all(self):
+    def test_least_egress(self):
+        """Without TAK streaming the key fetch of the bridge is all that is left."""
         documents = helm_template({"tak": {"egress": {"streaming": False}}})
-        self.assertNotIn("allow", one(documents, "Package")["spec"]["network"])
+        self.assertEqual(one(documents, "Package")["spec"]["network"]["allow"], [KEYS])
+
+    def test_the_token_check_has_no_off_switch(self):
+        """No value reaches TAKX_AUTH_MODE, and the web container always gets the whole configuration."""
+        with open(os.path.join(CHART, "templates", "deployment.yaml"), encoding="utf-8") as stream:
+            template = stream.read()
+        self.assertEqual(re.findall(r"name: TAKX_AUTH_MODE\n\s+value: (.*)", template), ['"oidc"'])
+        for documents in (self.default, self.full, helm_template({"auth": {"websocketMaxSeconds": 86400}})):
+            pod = one(documents, "Deployment")["spec"]["template"]["spec"]
+            web = {c["name"]: c for c in all_containers(pod)}["web"]
+            env = {v["name"]: v["value"] for v in web["env"]}
+            self.assertEqual(env["TAKX_AUTH_MODE"], "oidc")
+            for name in ("TAKX_AUTH_ISSUER", "TAKX_AUTH_AUDIENCE", "TAKX_AUTH_GROUPS", "TAKX_AUTH_JWKS_URL"):
+                self.assertTrue(env[name], name)
+            self.assertTrue(json.loads(env["TAKX_AUTH_GROUPS"]))
+            # The other containers get none of it and cannot be the bridge.
+            for other in all_containers(pod):
+                if other["name"] != "web":
+                    self.assertFalse([v for v in other.get("env", []) if v["name"].startswith("TAKX_AUTH")])
 
     def test_schema_refuses_bad_values(self):
-        for bad in ({"sso": {"groups": []}}, {"nope": 1}, {"display": {"depth": 8}}, {"egress": {"hosts": ["*.x.test"]}}):
+        for bad in ({"sso": {"groups": []}}, {"nope": 1}, {"display": {"depth": 8}}, {"egress": {"hosts": ["*.x.test"]}},
+                    {"auth": {"algorithms": ["none"]}}, {"auth": {"mode": "none"}}, {"web": {"heartbeatSeconds": 60}}):
             done = subprocess.run((UDS, "zarf", "tools", "helm", "template", "takx-desktop", CHART, "-f", "-"),
                                   input=json.dumps(bad).encode(), capture_output=True, check=False, cwd="/")
             self.assertNotEqual(done.returncode, 0, bad)

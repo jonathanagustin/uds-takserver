@@ -6,12 +6,17 @@
 # provider_cache.py: each provider whose status file says "ok" becomes one
 # single-layer image <registry>/<provider>:<key>, where the key is derived from
 # the provider's inputs (providers.json), so a changed recipe gets a new tag and
-# an unchanged one is recognised as already saved. An entry is only ever
-# overwritten when restore refused exactly that entry in this work root (see
-# provider_cache.py, "Replacing an entry"). Requires a prior `docker login`;
-# without it, or with TAKX_PROTO_CACHE=off, nothing is pushed.
+# an unchanged one is recognised as already saved. The key also names the
+# Debian packages of the toolchain image (TAKX_PROTO_CACHE_PACKAGES, default
+# 'key'). An entry is only ever overwritten when restore refused exactly that
+# entry in this work root for what it is, or a check rejected it and accepts
+# the rebuilt output (see provider_cache.py, "Replacing an entry"). Requires a
+# prior `docker login`; without it, or with TAKX_PROTO_CACHE=off, nothing is
+# pushed.
 #
 # Usage: push-cache.sh [provider ...]     (default: every provider of the lanes)
+#        push-cache.sh provider --verify-with COMMAND [ARG...]
+#                                        (the check a lane gave restore)
 # Restore: restore-cache.sh; listing: provider_cache.py status --write-index
 set -euo pipefail
 

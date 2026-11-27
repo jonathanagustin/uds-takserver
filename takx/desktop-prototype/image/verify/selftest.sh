@@ -25,14 +25,20 @@
 #                                 cases' against port 6080, from inside the
 #                                 containers and, when the containers are on
 #                                 a Docker network, from the host as well;
-#                                 a WebSocket that ends when its token
-#                                 expires; a bridge that cannot fetch keys.
+#                                 a WebSocket with a still screen, kept
+#                                 open by the bridge's pings; a WebSocket
+#                                 that ends when its token expires; a bridge
+#                                 that cannot fetch keys.
 #                                 Only a correct token may reach the RFB
 #                                 handshake
 #   selftest.sh browser           Playwright Chromium on the host loads noVNC
 #                                 through exec_relay.py, which adds the token
 #                                 as Authservice would, and saves a screenshot
 #                                 (needs node with the playwright module)
+#   selftest.sh reconnect         a second bridge that ends every WebSocket
+#                                 after 20 seconds; Chromium stays on the page
+#                                 for 65 (browser_reconnect.js): noVNC has to
+#                                 come back by itself each time
 #   selftest.sh stats             memory and CPU of both containers now, and the
 #                                 peak the kernel recorded
 #   selftest.sh supervision       kill websockify, then the JVM; probes and exit
@@ -51,8 +57,8 @@
 #
 # Containers: takx-img-desktop (uid 10001, --network none, read-only root,
 # all capabilities dropped, 1.5 CPU, 5 GiB), takx-img-web (uid 10002 with
-# supplementary group 10001, same network namespace, 0.5 CPU) and
-# takx-img-jwks (same image and namespace, uid 10002): a stand-in for the
+# supplementary group 10001, same network namespace, 0.4 CPU) and
+# takx-img-jwks (same image and namespace, uid 10002, 0.1 CPU): a stand-in for the
 # realm's key endpoint on 127.0.0.1:8081 that serves the public half of a
 # key made for the run. The web container runs with TAKX_AUTH_MODE=oidc, as
 # in the chart; the probes sign their tokens with that key
@@ -125,7 +131,7 @@ print(next(case for case in json.load(open(sys.argv[1])) if case["name"] == "goo
 run_web() { # name [docker run option...]
   local name="$1"; shift
   docker run -d --name "${name}" --network "container:${desktop}" \
-    "${hardening[@]}" --user 10002:10002 --group-add 10001 --cpus 0.5 --memory 256m \
+    "${hardening[@]}" --user 10002:10002 --group-add 10001 --cpus 0.4 --memory 256m \
     --tmpfs /run/takx/web:rw,noexec,nosuid,nodev,size=1m,uid=10002,gid=10002,mode=0700 \
     --mount "type=volume,src=${volume},dst=/run/takx/vnc,readonly" \
     -e TAKX_AUTH_MODE=oidc -e "TAKX_AUTH_ISSUER=${auth_issuer}" -e "TAKX_AUTH_AUDIENCE=${auth_audience}" \
@@ -152,7 +158,7 @@ do_start() {
   # run's key, handed over in the environment and served on loopback.
   auth_cases
   # shellcheck disable=SC2016 # expanded by Python in the container
-  docker run -d --name "${jwks}" --network "container:${desktop}" "${hardening[@]}" --user 10002:10002 --cpus 0.2 \
+  docker run -d --name "${jwks}" --network "container:${desktop}" "${hardening[@]}" --user 10002:10002 --cpus 0.1 \
     --memory 64m -e "TAKX_SELFTEST_JWKS=$(cat "${auth_dir}/jwks.json")" --entrypoint python3 "${image}" -I -c '
 import http.server, os
 DOCUMENT = os.environ["TAKX_SELFTEST_JWKS"].encode()
@@ -226,7 +232,8 @@ def listeners():
             cells = row.split()
             if cells[3] == "0A":
                 address, port = cells[1].rsplit(":", 1)
-                loopback = address in ("0100007F", "00000000000000000000000001000000")
+                # 127.0.0.0/8 (Docker's resolver sits on 127.0.0.11) and ::1.
+                loopback = (len(address) == 8 and address.endswith("7F")) or address == "00000000000000000000000001000000"
                 found.append({"family": family, "port": int(port, 16), "loopback_only": loopback,
                               "every_address": set(address) == {"0"}})
     return sorted(found, key=lambda item: (item["port"], item["family"]))
@@ -643,8 +650,8 @@ auth_probe() { # container target label output [probe option...]
   fi
   python3 -I -c 'import json, sys
 report = json.load(open(sys.argv[1]))
-print(f"selftest auth: {report[\"label\"]}: {report[\"status\"]}; reached the desktop: "
-      f"{report[\"variants_that_reached_the_desktop\"]}")' "${out}" || rc=1
+print("selftest auth: %s: %s; reached the desktop: %s"
+      % (report["label"], report["status"], report["variants_that_reached_the_desktop"]))' "${out}" || rc=1
   return "${rc}"
 }
 
@@ -677,10 +684,19 @@ do_auth() {
   else
     echo "selftest auth: the containers have no address the host can reach (--network none); host part not run" | tee -a "${out}"
   fi
-  # 3. A second bridge on the same desktop that ends a WebSocket when its
+  # 3. A WebSocket with a still screen: after the RFB handshake the client
+  #    asks for nothing for 65 seconds. It must stay open, kept busy by the
+  #    bridge's pings alone (TAKX_WEB_HEARTBEAT, 25 seconds).
+  auth_probe "${web}" 127.0.0.1:6080 "a quiet WebSocket for 65 seconds" "${evidence}/auth-quiet.json" --hold 65 |
+    tee -a "${out}" || rc=1
+  echo "pings on the quiet WebSocket: $(python3 -I -c 'import json, sys
+print(json.load(open(sys.argv[1]))["quiet_websocket"]["pings_received_and_answered"])' "${evidence}/auth-quiet.json")" |
+    tee -a "${out}"
+  grep -q '^pings on the quiet WebSocket: [2-9]' "${out}" || rc=1
+  # 4. A second bridge on the same desktop that ends a WebSocket when its
   #    token expires (TAKX_AUTH_WS_MAX_SECONDS=0), on port 6090.
   run_web "${strict}" -e TAKX_WEB_LISTEN=0.0.0.0:6090 -e TAKX_AUTH_WS_MAX_SECONDS=0 -e TAKX_AUTH_LEEWAY_SECONDS=0
-  # 4. A third one whose key endpoint does not answer, on port 6091.
+  # 5. A third one whose key endpoint does not answer, on port 6091.
   run_web "${nokeys}" -e TAKX_WEB_LISTEN=0.0.0.0:6091 -e TAKX_AUTH_JWKS_URL=http://127.0.0.1:9/certs
   sleep 3
   auth_cases 20
@@ -725,6 +741,32 @@ PY
   return "${rc}"
 }
 
+do_reconnect() {
+  local relay rc=0 port="${TAKX_SELFTEST_RELAY_PORT:-16080}" short=takx-img-web-short
+  if ! node -e "require('playwright')" >/dev/null 2>&1; then
+    echo "selftest: node with the playwright module is not available on this host; reconnect step not run"
+    return 3
+  fi
+  docker rm -f "${short}" >/dev/null 2>&1 || true
+  run_web "${short}" -e TAKX_WEB_LISTEN=0.0.0.0:6092 -e TAKX_AUTH_WS_MAX_SECONDS=20
+  sleep 3
+  auth_cases
+  TAKX_RELAY_BEARER="$(good_token)" python3 -I "${here}/exec_relay.py" "${short}" 6092 "${port}" \
+    >"${evidence}/exec-relay-reconnect.log" 2>&1 &
+  relay=$!
+  sleep 1
+  NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost timeout 150 \
+    node "${here}/browser_reconnect.js" "http://127.0.0.1:${port}/" "${evidence}/browser-reconnect.png" 65 \
+    >"${evidence}/browser-reconnect.json" 2>"${evidence}/browser-reconnect.err" || rc=$?
+  kill "${relay}" 2>/dev/null || true
+  wait "${relay}" 2>/dev/null || true
+  docker logs "${short}" >"${evidence}/web-short.log" 2>&1 || true
+  docker rm -f "${short}" >/dev/null 2>&1 || true
+  cat "${evidence}/browser-reconnect.json"
+  echo "websockets the bridge ended at the limit: $(grep -c 'session limit reached' "${evidence}/web-short.log" || true)"
+  return "${rc}"
+}
+
 do_logs() {
   docker logs "${desktop}" >"${evidence}/desktop.log" 2>&1 || true
   docker logs "${web}" >"${evidence}/web.log" 2>&1 || true
@@ -741,9 +783,10 @@ case "${1:-}" in
   identity) do_identity;;
   auth) do_auth;;
   browser) do_browser;;
+  reconnect) do_reconnect;;
   linker) do_linker;;
   logs) do_logs;;
   stop) do_stop;;
-  -h|--help|"") sed -n '5,75p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
+  -h|--help|"") sed -n '5,81p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
   *) echo "selftest.sh: unknown step '$1'" >&2; exit 2;;
 esac

@@ -35,9 +35,10 @@ Outside the key, deliberately or because nothing here can see it:
     and archives below the work root are named by what the locks and
     status/fetch.json pin (the recipes compare them with their locks), they
     are not read again here;
-  * Debian package revisions below the gated versions, unless
-    TAKX_PROTO_CACHE_PACKAGES=key puts them in (see 'Toolchain packages');
-    in every mode they are recorded with each bundle and compared on restore;
+  * with TAKX_PROTO_CACHE_PACKAGES=report or enforce, the Debian package
+    revisions below the gated versions (by default the build packages are in
+    the key, see 'Toolchain packages'); in every mode they are recorded with
+    each bundle and compared on restore;
   * the host kernel, CPU model and docker version;
   * a non-default lane invocation (TAKX_LANE*_FETCH=0, another gis-java
     directory): the lanes switch the cache off for it instead.
@@ -69,25 +70,42 @@ Toolchain packages. The base image is pinned, but the Dockerfile installs
 with apt, so two builds of the same Dockerfile can differ in Debian revisions
 that no gate sees (libc6-dev and linux-libc-dev between two builds six days
 apart). The probe therefore lists every installed package. Two digests are
-recorded in status/toolchain.json: packages_sha256 over the whole list, and
-build_packages_sha256 over the packages that can change compiled output,
-selected by 'toolchain.build_packages' in providers.json (sections devel and
-libdevel, and name patterns for the compiler's and the link editor's
-libraries, further -dev packages, and the interpreters and generators the
-recipes run). That list, its digest and the image id go into the meta.json of
-every bundle pushed ('toolchain'), and restore compares them with the local
-toolchain. TAKX_PROTO_CACHE_PACKAGES says what follows from a difference:
+recorded in status/toolchain.json: packages_sha256 as the image computes it
+over everything dpkg lists, and build_packages_sha256 over the 'name version
+architecture' lines of the installed packages that 'toolchain.build_packages'
+in providers.json selects, which is all of them (providers.json says why a
+list of compilers, headers and -dev packages is not enough). That list, its
+digest and the image id go into the meta.json of every bundle pushed
+('toolchain'), and restore compares them with the local toolchain.
+TAKX_PROTO_CACHE_PACKAGES says what follows from a difference:
 
-  report   (default) the bundle is used; the log line and the status file of
-           the restored provider name the packages that differ. Keys do not
-           change when the image is rebuilt on another day.
-  enforce  a bundle built with other build packages, or one that records
-           none, is not used; the lane builds. The refusal is no judgement of
-           the entry: nothing is noted and nothing is replaced.
-  key      the build packages digest is part of the toolchain identity in
-           every key, so another package list is another set of keys and a
-           routine Debian update of the image rebuilds every provider. A
-           changed list is then a refusal until `toolchain --record`.
+  key      (default) the build packages digest is part of the toolchain
+           identity in every key, so another package list is another set of
+           keys: a toolchain image rebuilt after a Debian update of any of
+           its packages builds every provider once and caches them under
+           its own keys, beside the earlier ones. A changed list is a refusal
+           until `toolchain --record`, like any other toolchain change.
+  report   the keys do not name the packages; a bundle of other build
+           packages is used, and the log line and the status file of the
+           restored provider name the packages that differ. The recipes'
+           own checks may still reject it (their receipts pin the C library
+           they were linked against); such a rejection is not noted, the
+           entry stays, and this machine builds that provider every time.
+  enforce  as report, but a bundle built with other build packages, or one
+           that records none, is not used; the lane builds. The refusal is no
+           judgement of the entry: nothing is noted and nothing is replaced.
+
+Why the key by default: measured on two images built from the same
+Dockerfile six days apart (15 of 293 packages differ), every installed
+artefact of five providers (proj, geos, draco, gles, mdb: 688 files) was
+byte-identical between the two, but their receipts record the
+identity of the C library, the dynamic loader, ldd and patch, and the
+recipes' own check rejects a restored tree whose receipt names another C
+library than the image has. With the packages outside the key such a machine
+would pull, reject and rebuild on every fresh work root and could never
+cache its own outputs under the shared key, or, if a rejection counted as a
+judgement of the entry, two machines would replace each other's entry for
+ever.
 
 A bundle saved before package lists were recorded counts as built with the
 local packages only when its provenance names the toolchain image that is
@@ -117,7 +135,7 @@ Environment:
   TAKX_PROTO_CACHE_TIMEOUT seconds allowed for one docker command (3600)
   TAKX_PROTO_CACHE_VERIFY  'off' skips the post-restore checks of a provider
   TAKX_PROTO_CACHE_VERIFY_TIMEOUT  seconds allowed for each such check (900)
-  TAKX_PROTO_CACHE_PACKAGES  report (default), enforce or key: what a
+  TAKX_PROTO_CACHE_PACKAGES  key (default), report or enforce: what a
                            difference in the toolchain's build packages means
   TAKX_PROTO_TOOLCHAIN_ID  only for migrate: the toolchain image id that keys
                            of schema 1 were derived from; default: the id
@@ -158,7 +176,10 @@ that digest and
     root last pushed there) and are still the ones restore saw. Otherwise the
     entry may be healthy for everyone else and stays; or
   * kind 'check': a post-restore check (the recipe's or the lane's) exited 1
-    on the restored tree. That may be the entry or this machine, so the note
+    on the restored tree. That may be the entry or this machine. It is only
+    noted when the entry was built with the build packages of the toolchain
+    here (another C library alone makes the recipes' receipt checks fail),
+    and it only counts while the toolchain here still has them. The note
     also keeps the digest of the entry's file manifest and names the check,
     and push decides on the rebuilt output: when it is file for file the
     cached entry, the entry stays and the note is dropped (the check judged
@@ -179,9 +200,9 @@ under the current key without uploading their archive again: it derives the
 old key from the same local inputs, pulls and fully verifies the old bundle,
 and pushes an image that reuses its layers and adds one small layer with the
 new meta.json and labels. Earlier keys are the schema-1 key (toolchain image
-id in the key) and, with TAKX_PROTO_CACHE_PACKAGES=key, the key of the other
-modes; a key that names the build packages only takes a bundle known to be
-built with the local ones.
+id in the key) and, in mode 'key', the key of the other modes (what schema 2
+derived before the packages were in it); a key that names the build packages
+only takes a bundle known to be built with the local ones.
 
 Layout (light hexagonal): the functions up to 'Adapters' are the pure core
 (no I/O); WorkTree, DockerRegistry and ToolchainRunner are the adapters behind
@@ -221,6 +242,7 @@ FILES_SCHEMA = 1    # files.json, unchanged since schema 1
 TOOLCHAIN_SCHEMA = 1
 ARCHES = ('amd64', 'arm64')
 PACKAGE_MODES = ('report', 'enforce', 'key')
+PACKAGES_DEFAULT = 'key'
 DONE, FAILED, SKIPPED = 0, 1, 3
 HEX = re.compile(r'\b(?:[0-9a-f]{128}|[0-9a-f]{64}|[0-9a-f]{40})\b')
 NAME = re.compile(r'^[a-z0-9][a-z0-9-]*\Z')
@@ -883,7 +905,8 @@ def decide_push(enabled, status, marker_present, remote):
     return 'refuse', 'the registry could not be queried'
 
 
-def decide_replace(refusal, key, remote_digest, markers, prerequisites_cached, rebuilt_files=None, recheck=None):
+def decide_replace(refusal, key, remote_digest, markers, prerequisites_cached, rebuilt_files=None, recheck=None,
+                   packages=None):
     """('replace'|'keep'|'forget'|'compare'|'recheck', reason) for an entry
     already cached under `key`.
 
@@ -900,7 +923,8 @@ def decide_replace(refusal, key, remote_digest, markers, prerequisites_cached, r
     output ('compare', then rebuilt_files) and, when that differs from the
     entry's, for the outcome of the same check on the rebuilt output
     ('recheck', then recheck: 'passed', 'rejected' or why it could not run).
-    Only 'passed' replaces.
+    Only 'passed' replaces. packages: the build packages digest of the
+    toolchain here; the note of a check counts only while it names that one.
     """
     present = 'already cached under this key'
     if not isinstance(refusal, dict) or refusal.get('key') != key \
@@ -924,6 +948,9 @@ def decide_replace(refusal, key, remote_digest, markers, prerequisites_cached, r
         if not isinstance(recorded, str) or not KEY.match(recorded) or not isinstance(check, str) \
                 or not KEY.match(check):
             return 'keep', present + '; the note of its rejection names no check and no file manifest'
+        if not isinstance(packages, str) or refusal.get('packages') != packages:
+            return 'forget', present + '; a check rejected it under other toolchain packages than the ones here ' \
+                                       'now, which judges nothing'
         if rebuilt_files is None:
             return 'compare', present + '; a check rejected it here'
         if rebuilt_files == recorded:
@@ -1556,7 +1583,7 @@ class LaneCheck:
 # ---------------------------------------------------------------------------
 class ProviderCache:
     def __init__(self, manifest, tree, registry, registry_prefix, legacy_toolchain='', log=None, runner=None,
-                 verify=True, packages='report'):
+                 verify=True, packages=PACKAGES_DEFAULT):
         self.manifest = validate_manifest(manifest)
         self.tree, self.registry, self.runner = tree, registry, runner
         self.prefix = registry_prefix or DEFAULT_REGISTRY
@@ -1825,12 +1852,13 @@ class ProviderCache:
             if refusal is not None:
                 judge = (refusal, key, self.registry.digest(ref), self._markers(name),
                          self._prerequisites_cached(name))
-                action, reason = decide_replace(*judge)
+                here = self._local[0]['build_packages_sha256']
+                action, reason = decide_replace(*judge, packages=here)
                 if action == 'compare':
                     compared = self._files_digest(name)
-                    action, reason = decide_replace(*judge, compared)
+                    action, reason = decide_replace(*judge, compared, packages=here)
                 if action == 'recheck':
-                    action, reason = decide_replace(*judge, compared, self._recheck(name, refusal['check']))
+                    action, reason = decide_replace(*judge, compared, self._recheck(name, refusal['check']), here)
                 if action == 'forget':
                     self.tree.note_refusal(ref, None)
             if action != 'replace':
@@ -2015,8 +2043,13 @@ class ProviderCache:
             except FileExistsError:
                 raise CacheError('%s: the provider directory appeared meanwhile; not overwritten' % name)
             except Rejected as error:
-                self._refused(name, key, ref, digest, 'check', markers, error, check=error.check,
-                              files_sha256=meta.get('files_sha256'))
+                if verdict == 'same':
+                    self._refused(name, key, ref, digest, 'check', markers, error, check=error.check,
+                                  files_sha256=meta.get('files_sha256'),
+                                  packages=self._local[0]['build_packages_sha256'])
+                else:  # the check may be judging the other toolchain, as the recipes' receipt checks do
+                    self.log('provider-cache: %s: the rejection is not noted and a later push will not replace '
+                             'the entry: it %s' % (name, packages))
                 raise
         finally:
             shutil.rmtree(work, ignore_errors=True)
@@ -2039,9 +2072,8 @@ class ProviderCache:
         """Make a bundle saved under an earlier key of `name` addressable
         under its current key, without uploading its archive again.
 
-        Earlier keys, in this order: with TAKX_PROTO_CACHE_PACKAGES=key the
-        key without the build packages (what every other mode derives), then
-        the schema-1 key. A key that names the build packages only takes a
+        Earlier keys, in this order: in mode 'key' the key without the build
+        packages (what the other modes derive), then the schema-1 key. A key that names the build packages only takes a
         bundle that is known to be built with the local ones.
         """
         entry = self.manifest['providers'].get(name)
@@ -2064,11 +2096,11 @@ class ProviderCache:
             raise Skip('docker is not logged in to the cache registry')
         if state != 'absent':
             raise CacheError('%s: the registry could not be queried' % name)
-        sources = []
+        sources = [('the schema-1 key', LEGACY_SCHEMA, self.legacy_keys)]
         if self.packages == 'key':
-            sources.append(('the key without the build packages', SCHEMA) + self.plain_keys([name])[name])
-        sources.append(('the schema-1 key', LEGACY_SCHEMA) + self.legacy_keys([name])[name])
-        for what, schema, old_key, old_document in sources:
+            sources.insert(0, ('the key without the build packages', SCHEMA, self.plain_keys))
+        for what, schema, derive in sources:  # the next key is only derived when the one before holds nothing
+            old_key, old_document = derive([name])[name]
             old_ref = image_ref(self.prefix, name, old_key)
             state = self.registry.probe(old_ref)
             if state == 'present':
@@ -2151,7 +2183,7 @@ def build_service(environ=None):
                          DockerRegistry(timeout), environ.get('TAKX_PROTO_CACHE') or DEFAULT_REGISTRY,
                          environ.get('TAKX_PROTO_TOOLCHAIN_ID') or '', runner=runner,
                          verify=environ.get('TAKX_PROTO_CACHE_VERIFY') != 'off',
-                         packages=environ.get('TAKX_PROTO_CACHE_PACKAGES') or 'report')
+                         packages=environ.get('TAKX_PROTO_CACHE_PACKAGES') or PACKAGES_DEFAULT)
 
 
 def main(argv=None, service=None, out=None):

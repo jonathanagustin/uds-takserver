@@ -9,15 +9,23 @@
 #                               stages it under /run/takx/identity. The only
 #                               container that sees the Secret volume.
 #   desktop          uid 10001  Xtigervnc on a Unix socket, openbox, the TAKX
-#                               JVM. The X server has no TCP port, but the JVM
-#                               listens: CommonCommo binds TCP 4242 and 8087
-#                               on every address and one ephemeral port for
-#                               its HTTPS proxy. Nothing may reach them:
+#                               JVM. The X server has no TCP port. The JVM
+#                               would listen: by default CommonCommo binds TCP
+#                               4242 and 8087 on every address. A new session
+#                               starts with those inputs switched off in the
+#                               client's own program properties
+#                               (takx.localInputs); one ephemeral HTTPS port
+#                               of CommonCommo stays. Nothing may reach it:
 #                               ingress-isolation.yaml.
-#   web              uid 10002  websockify: noVNC on TCP 6080, bridged to the
-#                               RFB socket. It reads the socket directory and
-#                               nothing else, so the HTTP parser that faces
-#                               the gateway cannot read the identity files.
+#   web              uid 10002  The gate on TCP 6080 and, behind it on a Unix
+#                               socket, websockify: noVNC, bridged to the RFB
+#                               socket. The gate verifies the token Authservice
+#                               forwards on every request (auth in values.yaml)
+#                               and answers 401 or 403 otherwise, whoever asks
+#                               and from wherever. The container reads the
+#                               socket directory and nothing else, so the HTTP
+#                               parser that faces the gateway cannot read the
+#                               identity files.
 #
 # The root filesystem of every container is read-only. One replica: the
 # session is one X display and one TAK identity, so a second pod would be a
@@ -115,6 +123,8 @@ spec:
               value: {{ .Values.display.geometry | quote }}
             - name: TAKX_DEPTH
               value: {{ .Values.display.depth | quote }}
+            - name: TAKX_LOCAL_INPUTS
+              value: {{ ternary "default" "off" .Values.takx.localInputs | quote }}
           securityContext:
             {{- include "takx-desktop.containerSecurityContext" . | nindent 12 }}
           # started: the JVM runs and the main window with a project is
@@ -154,6 +164,33 @@ spec:
           image: {{ .Values.image | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           args: ["web"]
+          # What the gate checks before a request reaches noVNC or the
+          # desktop. There is no value that switches the check off.
+          env:
+            - name: TAKX_AUTH_MODE
+              value: "oidc"
+            - name: TAKX_AUTH_ISSUER
+              value: {{ include "takx-desktop.issuer" . | quote }}
+            - name: TAKX_AUTH_AUDIENCE
+              value: {{ .Values.sso.clientId | quote }}
+            - name: TAKX_AUTH_GROUPS
+              value: {{ .Values.sso.groups | toJson | quote }}
+            - name: TAKX_AUTH_GROUPS_CLAIM
+              value: {{ .Values.auth.groupsClaim | quote }}
+            - name: TAKX_AUTH_JWKS_URL
+              value: {{ .Values.auth.jwksUrl | quote }}
+            - name: TAKX_AUTH_ALGORITHMS
+              value: {{ join "," .Values.auth.algorithms | quote }}
+            - name: TAKX_AUTH_LEEWAY_SECONDS
+              value: {{ .Values.auth.leewaySeconds | quote }}
+            - name: TAKX_AUTH_WS_MAX_SECONDS
+              value: {{ .Values.auth.websocketMaxSeconds | quote }}
+            # A WebSocket that names an Origin must come from the desktop's
+            # own page.
+            - name: TAKX_AUTH_ORIGIN
+              value: {{ include "takx-desktop.url" . | quote }}
+            - name: TAKX_WEB_HEARTBEAT
+              value: {{ .Values.web.heartbeatSeconds | quote }}
           ports:
             - name: http
               containerPort: 6080
@@ -162,8 +199,9 @@ spec:
             {{- include "takx-desktop.containerSecurityContext" . | nindent 12 }}
             runAsUser: 10002
             runAsGroup: 10002
-          # An exec probe: it asks the bridge on loopback, so it does not
-          # depend on how the mesh treats kubelet traffic.
+          # An exec probe: it asks the gate for /healthz on loopback, so it
+          # does not depend on how the mesh treats kubelet traffic. /healthz
+          # needs no token and answers "ok" and nothing else.
           readinessProbe:
             exec:
               command: ["/opt/takx-desktop/healthcheck.sh", "web"]
@@ -183,23 +221,36 @@ spec:
             - name: vnc
               mountPath: /run/takx/vnc
               readOnly: true
+            - name: web
+              mountPath: /run/takx/web
       volumes:
         # X socket and lock file.
         - name: tmp
           emptyDir:
             sizeLimit: 1Gi
         # ProjectData, home, java.io.tmpdir, the run tree. Must allow exec:
-        # the Kernel loader maps its native libraries from here.
+        # the Kernel loader maps its native libraries from here. In memory by
+        # default: TAKX copies the client key store into its project once a
+        # connection is added, and that copy must not reach the node's disk.
         - name: session
           {{- if .Values.persistence.enabled }}
           persistentVolumeClaim:
             claimName: takx-desktop-session
           {{- else }}
           emptyDir:
-            sizeLimit: {{ .Values.persistence.size | quote }}
+            {{- if .Values.session.memory }}
+            medium: Memory
+            {{- end }}
+            sizeLimit: {{ .Values.session.sizeLimit | quote }}
           {{- end }}
         # rfb.sock, mode 0660, group 10001.
         - name: vnc
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        # websockify's listening socket, behind the gate. Mounted in the web
+        # container only; the entrypoint keeps the socket at mode 0600.
+        - name: web
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi

@@ -20,6 +20,11 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 https://{{ .Values.host }}.{{ .Values.domain }}
 {{- end }}
 
+{{/* `iss` of the tokens the bridge accepts: the UDS realm, unless auth.issuer names another. */}}
+{{- define "takx-desktop.issuer" -}}
+{{- .Values.auth.issuer | default (printf "https://sso.%s/realms/uds" .Values.domain) -}}
+{{- end }}
+
 {{/*
 Address of the passthrough gateway for the hosts entry of tak.certName:
 tak.gateway.ip when set, otherwise the ClusterIP of the gateway Service when

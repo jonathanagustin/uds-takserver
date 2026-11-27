@@ -2,19 +2,40 @@
 # Copyright 2026 uds-takserver authors
 # SPDX-License-Identifier: GPL-3.0-only
 
-# The bridge (websockify) serves every TCP connection from a process of its
-# own, and that process lives as long as the connection. The waypoint in
-# front of the pod is an Envoy, which keeps the HTTP connections it opened in
-# a pool for reuse (an hour, when idle). One load of the noVNC page opens
-# about twenty of them. In the first deploy (2026-11-26) the web container
-# held 44 such processes and 173 MiB of its 256 MiB limit after four page
-# loads, minutes after the last browser had gone: a few more and the kernel
-# would have killed the container.
+# How the waypoint, an Envoy, uses its connections to the bridge.
 #
-# So the waypoint is told to use each connection to the bridge for one
-# request and to close idle ones. With this rule three page loads in a row
-# left one process and 35 MiB. A WebSocket is one request on one connection
-# and stays open as long as the browser keeps it.
+# maxRequestsPerConnection: 1
+#   The bridge serves one request per connection and then closes it (the gate
+#   answers `Connection: close`), so Envoy is told not to try a second one.
+#   The rule was first added on 2026-11-26, when websockify itself faced the
+#   waypoint: it keeps one process per connection, Envoy pooled about twenty
+#   connections per page load for an hour, and after four page loads the web
+#   container held 44 processes and 173 MiB of its 256 MiB limit. With the
+#   rule three page loads left 1 process and 35 MiB. Now the gate ends
+#   websockify's connection with every request, whatever Envoy does; the rule
+#   stays so that Envoy never picks a connection the gate is about to close.
+#
+# idleTimeout: 30s
+#   Closes a connection to the bridge on which no request has been active for
+#   30 seconds. It does not limit a WebSocket: for Envoy an upgraded
+#   connection is one request that stays active until one side closes, and
+#   this timeout is "the period in which there are no active requests". The
+#   timeouts that would count silence on an active request (stream idle
+#   timeout, route timeout) are not set by this chart; Istio is read to leave
+#   them off, which was not measured here.
+#
+# So that a quiet session never depends on that reading, on this hop or any
+# other, the bridge sends a WebSocket ping every web.heartbeatSeconds (25,
+# kept below 30 by the values schema) and the browser answers it: a desktop
+# whose screen does not change still carries traffic both ways.
+#
+# What ends a WebSocket on purpose is the bridge: auth.websocketMaxSeconds
+# after the upgrade, noVNC then reconnects through the sign-in gate.
+#
+# Seen so far: page loads of a few seconds with this rule; a 14-minute and a
+# 43-minute session before the rule existed. A session of many minutes, and
+# one with no screen change, with the rule and the heartbeat, are still to
+# be shown in a cluster.
 apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata:

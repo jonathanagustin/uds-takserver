@@ -11,10 +11,15 @@
 # listens on (4242, 8087, one ephemeral) stay closed; ingress-isolation.yaml
 # states that on its own.
 #
-# The pod may open exactly these connections: the passthrough gateway on the
-# TAK ports that are switched on in values, and the hosts under egress.hosts
+# The pod may open exactly these connections: Keycloak in the cluster, where
+# the bridge fetches the realm's signing keys; the passthrough gateway on the
+# TAK ports that are switched on in values; and the hosts under egress.hosts
 # (none by default). There is no Anywhere, KubeAPI or IntraNamespace rule and
 # no policy exemption.
+#
+# Authservice enforces the sign-in and Keycloak the group at the gateway. The
+# bridge in the pod checks the same token again by itself (deployment.yaml,
+# TAKX_AUTH_*), so the group list below is enforced twice.
 apiVersion: uds.dev/v1alpha1
 kind: Package
 metadata:
@@ -47,8 +52,19 @@ spec:
         gateway: tenant
         host: {{ .Values.host | quote }}
         port: 6080
-    {{- if or .Values.tak.egress.streaming .Values.tak.egress.api .Values.egress.hosts }}
     allow:
+      # The bridge's key fetch (auth.jwksUrl). Keycloak's own Package lets
+      # every namespace reach port 8080 ("Keycloak backchannel access"); its
+      # waypoint keeps the admin paths closed. A NetworkPolicy selects pods,
+      # not containers, so the desktop container can open this connection too.
+      - direction: Egress
+        selector:
+          {{- include "takx-desktop.selectorLabels" . | nindent 10 }}
+        remoteNamespace: {{ .Values.auth.keycloak.namespace | quote }}
+        remoteSelector:
+          {{- toYaml .Values.auth.keycloak.selector | nindent 10 }}
+        port: {{ .Values.auth.keycloak.port }}
+        description: Bridge to Keycloak for the signing keys
       {{- if .Values.tak.egress.streaming }}
       # The same route the ATAK test device uses (atak/deploy/device.yaml).
       - direction: Egress
@@ -82,4 +98,3 @@ spec:
         port: 443
         description: {{ printf "TAKX to %s" . | quote }}
       {{- end }}
-    {{- end }}

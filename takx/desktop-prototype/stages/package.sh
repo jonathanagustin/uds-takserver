@@ -7,7 +7,9 @@
 # without a cluster. The work is done by ../zarf/*, ../chart and ../bundle/*;
 # this script is the record of the exact commands. Nothing is deployed and
 # nothing is pushed. The cluster is only read, in two steps: `crds`
-# (kubectl get crd) and `lookup` (one Service).
+# (kubectl get crd) and `lookup` (one Service). When no cluster answers,
+# `crds` keeps and uses the copies of an earlier run and says so, and
+# `lookup` is not run (exit status 3).
 #
 #   tools         versions of the tools in use
 #   lint          yamllint (repository config), shellcheck (hk.pkl flags),
@@ -60,6 +62,10 @@
 # shares its node with a running cluster. The command inside is the one
 # create-package.sh and create-bundle.sh run themselves; outside a shared
 # machine, call those two scripts directly.
+#
+# `create` refuses to start with less than TAKX_PACKAGE_MIN_FREE_GIB (8) of
+# free disk. Measured on 2026-11-26, sampled every two seconds: the free
+# space fell by 2.4 GiB at the lowest point and by 0.7 GiB at the end.
 #
 # Environment: UDS (default: the pinned copy under server/tools, else `uds`),
 # KUBECONFORM (default `kubeconform`), TAKX_KUBE_VERSION (schema version for
@@ -300,19 +306,36 @@ do_render() {
   [[ "$(tail -1 "${evidence}/render.txt")" == "render exit 0" ]]
 }
 
+cluster_answers() { kubectl version -o json --request-timeout=10s >/dev/null 2>&1; }
+
 do_crds() {
-  local name
+  local name names=(packages.uds.dev takclients.tak.uds.dev authorizationpolicies.security.istio.io
+    destinationrules.networking.istio.io) stored=1 note
   mkdir -p "${work}/crds/schemas"
-  for name in packages.uds.dev takclients.tak.uds.dev authorizationpolicies.security.istio.io \
-    destinationrules.networking.istio.io; do
-    kubectl get crd "${name}" -o json >"${work}/crds/${name}.json"
-  done
+  if cluster_answers; then
+    for name in "${names[@]}"; do
+      kubectl get crd "${name}" -o json >"${work}/crds/${name}.json.tmp"
+      mv "${work}/crds/${name}.json.tmp" "${work}/crds/${name}.json"
+    done
+    note="cluster $(kubectl version -o json | python3 -I -c 'import json, sys
+print(json.load(sys.stdin)["serverVersion"]["gitVersion"])')"
+  else
+    # No cluster to read from: the copies of an earlier run are kept and
+    # used, and the transcript says so. Without them there is nothing to do.
+    for name in "${names[@]}"; do
+      if [[ ! -s "${work}/crds/${name}.json" ]]; then stored=0; fi
+    done
+    if ((stored == 0)); then
+      echo "crds: the cluster does not answer and ${work}/crds holds no earlier copy" | tee "${evidence}/crds.txt" >&2
+      return 1
+    fi
+    note="the cluster does not answer: CRDs as read on $(date -u -r "${work}/crds/packages.uds.dev.json" +%FT%TZ), not read again"
+  fi
   python3 -I "${proto}/zarf/test_package.py" --crd-schemas "${work}/crds/schemas" \
     "${work}/crds/packages.uds.dev.json" "${work}/crds/takclients.tak.uds.dev.json" \
     "${work}/crds/authorizationpolicies.security.istio.io.json" \
     "${work}/crds/destinationrules.networking.istio.io.json" | tee "${evidence}/crds.txt"
-  kubectl version -o json | python3 -I -c 'import json, sys
-print("cluster", json.load(sys.stdin)["serverVersion"]["gitVersion"])' | tee -a "${evidence}/crds.txt"
+  echo "${note}" | tee -a "${evidence}/crds.txt"
 }
 
 do_validate() {
@@ -343,6 +366,11 @@ do_validate() {
 do_lookup() {
   local rc=0 want got
   mkdir -p "${work}/render"
+  if ! cluster_answers; then
+    # Exit status 3: not run. `all` goes on and says so; it is not a pass.
+    echo "lookup: not run, the cluster does not answer" | tee "${evidence}/lookup.txt"
+    return 3
+  fi
   {
     echo "== helm template --dry-run=server (one lookup: Service istio-passthrough-gateway/passthrough-ingressgateway)"
     want="$(kubectl get service passthrough-ingressgateway -n istio-passthrough-gateway -o jsonpath='{.spec.clusterIP}')" || rc=1
@@ -370,8 +398,8 @@ do_create() {
   tag="$(image_tag)"
   archive="${out}/zarf-package-takx-desktop-amd64-${tag}.tar.zst"
   [[ -s "${work}/stage/zarf/zarf.yaml" ]] || do_stage
-  if (($(free_gib) < 8)); then
-    echo "package: $(free_gib) GiB free; the create needs about 6 GiB while it runs" >&2
+  if (($(free_gib) < ${TAKX_PACKAGE_MIN_FREE_GIB:-8})); then
+    echo "package: $(free_gib) GiB free, ${TAKX_PACKAGE_MIN_FREE_GIB:-8} GiB wanted (TAKX_PACKAGE_MIN_FREE_GIB); the create took 2.4 GiB at its peak when that was measured" >&2
     exit 1
   fi
   rm -f "${archive}"
@@ -532,8 +560,11 @@ case "${1:-}" in
   bundle) do_bundle;;
   bundle-full) do_bundle_full;;
   all)
-    do_tools; do_lint; do_stage; do_zarf_lint; do_helm; do_render; do_crds; do_validate; do_lookup; do_test
-    do_create; do_inspect; do_upstream; do_bundle;;
-  -h|--help|"") sed -n '5,67p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
+    do_tools; do_lint; do_stage; do_zarf_lint; do_helm; do_render; do_crds; do_validate
+    lookup=0; do_lookup || lookup=$?
+    if ((lookup != 0 && lookup != 3)); then exit "${lookup}"; fi
+    do_test; do_create; do_inspect; do_upstream; do_bundle
+    if ((lookup == 3)); then echo "package: every step passed except 'lookup', which was not run (no cluster)"; fi;;
+  -h|--help|"") sed -n '5,77p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';;
   *) echo "package.sh: unknown step '$1'" >&2; exit 2;;
 esac

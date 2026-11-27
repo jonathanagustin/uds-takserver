@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 {{- if .Values.persistence.enabled }}
-# The session directory. It holds the TAKX project, which includes TAKX's own
-# copies of the PKCS#12 files and their passwords once a connection is saved.
+# The session directory, kept across pods. It holds the TAKX project, which
+# includes TAKX's own copies of the PKCS#12 files and their passwords once a
+# connection is saved: with persistence on, that key material is on this
+# volume at rest. Without it the session is a memory-backed emptyDir.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

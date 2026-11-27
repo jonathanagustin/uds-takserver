@@ -470,6 +470,90 @@ class ShellTest(unittest.TestCase):
             self.assertIn("is not a running JVM", done.stderr)
             self.assertEqual(self.run_script("healthcheck.sh", "bogus", env=env).returncode, 64)
 
+    def test_web_mode_and_its_probe_need_the_bridge_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"TAKX_RUN_DIR": tmp}
+            os.mkdir(os.path.join(tmp, "vnc"))
+            done = self.run_script("entrypoint.sh", "web", env=env)
+            self.assertEqual(done.returncode, 64)
+            self.assertIn(tmp + "/web is not a writable directory", done.stderr)
+            for name, value in (("TAKX_WEB_LISTEN", "everywhere"), ("TAKX_WEB_HEARTBEAT", "often")):
+                done = self.run_script("entrypoint.sh", "web", env={**env, name: value})
+                self.assertEqual(done.returncode, 64, name)
+                self.assertIn(name, done.stderr)
+            done = self.run_script("healthcheck.sh", "web", env=env)
+            self.assertEqual(done.returncode, 1)
+            self.assertIn("no websockify socket", done.stderr)
+
+    def test_the_bridge_never_starts_websockify_on_a_tcp_port(self):
+        text = (HERE / "entrypoint.sh").read_text()
+        (command,) = [line for line in text.splitlines() if line.lstrip().startswith("websockify ")]
+        self.assertIn('--unix-listen="${socket}" --unix-listen-mode=0600', command)
+        self.assertEqual(text.count('python3 -I "${app}/web_gate.py"'), 1)
+        # The probe asks the gate for the one path that needs no token.
+        self.assertIn("/healthz", (HERE / "healthcheck.sh").read_text())
+        self.assertNotIn("vnc.html", (HERE / "healthcheck.sh").read_text())
+
+    def seed(self, tree, session, mode=None):
+        """Run seed_program_properties of entrypoint.sh on its own."""
+        text = (HERE / "entrypoint.sh").read_text()
+        function = text[text.index("seed_program_properties() {"):text.index("\ndesktop() {")]
+        script = ('set -euo pipefail\nlog() { echo "log: $*" >&2; }\ndie() { echo "die: $*" >&2; exit 64; }\n'
+                  f'tree={tree}\nsession={session}\n{function}\nseed_program_properties\n')
+        env = {"PATH": os.environ["PATH"], **({"TAKX_LOCAL_INPUTS": mode} if mode else {})}
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30, env=env)
+
+    def test_default_inputs_are_switched_off_in_a_new_session_only(self):
+        inputs = "".join(f'<node name="In {n}"><map><entry key="uri" value="{uri}"/>'
+                         f'<entry key="enabled" value="true"/></map></node>\n'
+                         for n, uri in enumerate(("udp://0.0.0.0:4242", "tcp://0.0.0.0:4242", "tcp://0.0.0.0:8087")))
+        defaults = ('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE preferences SYSTEM "x.dtd">\n<preferences><root>\n'
+                    '<node name="Other"><map><entry key="enabled" value="true"/></map></node>\n'
+                    f'<node name="DefaultInputs">\n{inputs}</node>\n<node name="DefaultOutputs">\n'
+                    '<node name="Out"><map><entry key="uri" value="udp://224.10.10.1:17012"/>'
+                    '<entry key="enabled" value="true"/></map></node>\n</node></root></preferences>\n')
+        with tempfile.TemporaryDirectory() as tmp:
+            tree, session = Path(tmp, "tree"), Path(tmp, "session")
+            (tree / "conf").mkdir(parents=True)
+            (tree / "conf/DefaultProgramProperties.xml").write_text(defaults)
+            target = session / "ProjectData/ProjectData/LocalProgramProperties.xml"
+            done = self.seed(tree, session)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertIn("3 default inputs switched off", done.stderr)
+            # The three inputs and nothing else: the outputs and other nodes keep their value.
+            self.assertEqual(target.read_text(), defaults.replace(
+                'value="true"/></map></node>\n<node name="In', 'value="false"/></map></node>\n<node name="In').replace(
+                'value="true"/></map></node>\n</node>\n<node name="DefaultOutputs">',
+                'value="false"/></map></node>\n</node>\n<node name="DefaultOutputs">'))
+            self.assertEqual(target.read_text().count('value="false"'), 3)
+            self.assertTrue(target.read_text().startswith(defaults[:80]))
+            # A second start, or a volume with a project: the file is the user's.
+            target.write_text("edited by the user")
+            done = self.seed(tree, session)
+            self.assertEqual((done.returncode, target.read_text()), (0, "edited by the user"))
+            self.assertIn("left as it is", done.stderr)
+            target.unlink()
+            done = self.seed(tree, session, mode="default")
+            self.assertEqual(done.returncode, 0)
+            self.assertFalse(target.exists())
+            self.assertEqual(self.seed(tree, session, mode="maybe").returncode, 64)
+            # A defaults file of another shape is an error, not a guess.
+            (tree / "conf/DefaultProgramProperties.xml").write_text(defaults.replace("DefaultOutputs", "Outputs"))
+            done = self.seed(tree, session)
+            self.assertEqual(done.returncode, 64)
+            self.assertFalse(target.exists())
+
+    def test_probe_sends_the_token_only_when_one_is_given(self):
+        saved = os.environ.pop("TAKX_PROBE_BEARER", None)
+        try:
+            self.assertEqual(rfb_probe.bearer(), b"")
+            os.environ["TAKX_PROBE_BEARER"] = "a.b.c"
+            self.assertEqual(rfb_probe.bearer(), b"Authorization: Bearer a.b.c\r\n")
+        finally:
+            os.environ.pop("TAKX_PROBE_BEARER", None)
+            if saved is not None:
+                os.environ["TAKX_PROBE_BEARER"] = saved
+
     def test_no_script_disables_tls_verification_or_embeds_key_material(self):
         for path in sorted(HERE.rglob("*")):
             if path.is_file() and path.name != "test_image.py" and "__pycache__" not in path.parts:
